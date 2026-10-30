@@ -1,0 +1,48 @@
+{
+  "about": "Sample about",
+  "window_days": 7,
+  "backlash": {
+    "min_negative": 3,
+    "velocity": {
+      "min_negative": 2,
+      "within_hours": 3
+    },
+    "min_known_dissent": 1,
+    "negative_stances": [
+      "hostile",
+      "troll_or_bad_faith"
+    ],
+    "dissent_stances": [
+      "constructive_dissent",
+      "misread",
+      "hostile",
+      "troll_or_bad_faith"
+    ],
+    "known_levels": [
+      "contact",
+      "icp"
+    ]
+  },
+  "not_landing": {
+    "min_misreads": 2
+  },
+  "healthy_debate": {
+    "min_dissent": 1,
+    "min_dissent_and_questions": 2
+  },
+  "alert": {
+    "flags": [
+      "backlash"
+    ],
+    "cooldown_hours": 24
+  },
+  "actions": {
+    "clarify": "Sample clarify",
+    "follow_up": "Sample follow up",
+    "reply_to_critic": "Sample reply to critic",
+    "leave_it": "Sample leave it",
+    "hide_and_report": "Sample hide and report",
+    "adjust_future_content": "Sample adjust future content",
+    "john_decides": "Sample john decides"
+  }
+}

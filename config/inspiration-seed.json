@@ -1,0 +1,14 @@
+[
+  {
+    "kind": "post",
+    "url": "https://example.test/reference",
+    "title": "Synthetic reference",
+    "platform": "linkedin",
+    "tags": [
+      "example"
+    ],
+    "why_we_like": "An example reference for practicing the review workflow.",
+    "pillar": "build",
+    "added_by": "Sample Author"
+  }
+]

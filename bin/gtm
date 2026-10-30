@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Wrapper so `gtm` works from any directory once linked onto PATH.
+DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+exec "$DIR/node_modules/.bin/tsx" "$DIR/cli/gtm.ts" "$@"

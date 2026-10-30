@@ -1,0 +1,41 @@
+{
+  "slug": "awareness",
+  "name": "Sample name",
+  "label": "Sample label",
+  "starts_on": "2026-01-01",
+  "ends_on": "2026-01-01",
+  "summary": "Sample summary",
+  "success": [
+    {
+      "key": "conversations",
+      "label": "Sample label",
+      "what": "Sample what"
+    },
+    {
+      "key": "saves_sends",
+      "label": "Sample label",
+      "what": "Sample what"
+    },
+    {
+      "key": "net_followers",
+      "label": "Sample label",
+      "what": "Sample what"
+    }
+  ],
+  "tracked_not_judged": [
+    "Sample tracked not judged",
+    "Sample tracked not judged",
+    "Sample tracked not judged"
+  ],
+  "funnel_mix": {
+    "reach": 70,
+    "how_we_think": 20,
+    "conversation": 10
+  },
+  "funnel_note": "Sample funnel note",
+  "rules": [
+    "Sample rules",
+    "Sample rules",
+    "Sample rules"
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "name": "vibrana-gtm",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "gtm": "./bin/gtm"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "gtm": "tsx cli/gtm.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:db": "node scripts/with-local-env.mjs node --import tsx --test --test-concurrency=1 test/db/*.test.ts",
+    "test:db:sql": "node scripts/db-sql-tests.mjs",
+    "test:db:advisors": "node scripts/check-advisors.mjs",
+    "test:e2e": "node scripts/with-local-env.mjs sh -c \"next build && playwright test\"",
+    "test:coverage": "c8 --reporter=text-summary --reporter=text --reporter=json-summary --include='lib/**' --include='cli/**' --exclude='lib/ui/**' node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "check:migrations": "node scripts/check-migrations.mjs",
+    "db:seed": "node scripts/with-local-env.mjs node --import tsx test/support/seed.ts",
+    "db:start": "supabase start -x imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor,realtime",
+    "db:stop": "supabase stop",
+    "guide:check": "node scripts/guide-check.mjs",
+    "guide:media": "node --import tsx scripts/guide-media.mjs",
+    "demo:setup": "node scripts/demo.mjs setup",
+    "demo": "node scripts/demo.mjs dev",
+    "demo:gtm": "node scripts/demo.mjs gtm",
+    "demo:stop": "node scripts/demo.mjs stop",
+    "prebuild": "node scripts/content-check.mjs --prepare",
+    "predev": "node scripts/content-check.mjs --prepare"
+  },
+  "dependencies": {
+    "@radix-ui/react-label": "2.1.15",
+    "@radix-ui/react-slot": "1.3.3",
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.117.2",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "lucide-react": "1.48.0",
+    "next": "16.4.3",
+    "pdf-lib": "^1.17.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-is": "19.3.0",
+    "recharts": "3.10.1",
+    "sharp": "^0.35.5",
+    "tailwind-merge": "3.7.0",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/commonmark": "0.27.10",
+    "@types/node": "26.6.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/react-test-renderer": "19.3.0",
+    "c8": "12.0.0",
+    "commonmark": "0.31.2",
+    "esbuild": "0.28.2",
+    "react-test-renderer": "19.3.0",
+    "tailwindcss": "4.3.3",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "source-map-js": "^1.2.2"
+    }
+  },
+  "license": "FSL-1.1-ALv2"
+}

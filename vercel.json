@@ -1,0 +1,10 @@
+{
+  "crons": [
+    { "path": "/api/cron/sync", "schedule": "0 6 * * *" },
+    { "path": "/api/cron/signals", "schedule": "15 */2 * * *" },
+    { "path": "/api/cron/signals-digest", "schedule": "0 0 * * *" },
+    { "path": "/api/cron/content-report", "schedule": "0 0 * * 0" },
+    { "path": "/api/cron/engage", "schedule": "0 23 * * *" },
+    { "path": "/api/cron/media-audit", "schedule": "30 5 * * *" }
+  ]
+}

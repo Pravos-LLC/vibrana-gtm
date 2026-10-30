@@ -1,0 +1,121 @@
+{
+  "inquiries": [
+    {
+      "question": "Sample question",
+      "answer": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "more": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "question": "Sample question",
+      "answer": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "question": "Sample question",
+      "answer": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "more": {
+        "text": "Sample text",
+        "source": ""
+      }
+    }
+  ],
+  "inquiries_note": {
+    "text": "Sample text",
+    "source": ""
+  },
+  "belief": [
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    }
+  ],
+  "refuse": {
+    "text": "Sample text",
+    "source": ""
+  },
+  "mission": {
+    "text": "Sample text",
+    "source": ""
+  },
+  "how": [
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    }
+  ],
+  "credo": [
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    }
+  ],
+  "wall": [
+    {
+      "media": "",
+      "alt": "Sample alt"
+    },
+    {
+      "media": "",
+      "alt": "Sample alt"
+    },
+    {
+      "media": "",
+      "alt": "Sample alt"
+    },
+    {
+      "media": "",
+      "alt": "Sample alt"
+    },
+    {
+      "media": "",
+      "alt": "Sample alt"
+    },
+    {
+      "media": "",
+      "alt": "Sample alt"
+    },
+    {
+      "media": "",
+      "alt": "Sample alt"
+    }
+  ]
+}

@@ -1,0 +1,197 @@
+{
+  "hypothesis": "Sample hypothesis",
+  "review": {
+    "first_read": "2026-01-01",
+    "full_review": "2026-01-01",
+    "questions": [
+      "Sample questions",
+      "Sample questions",
+      "Sample questions",
+      "Sample questions"
+    ],
+    "where": "Sample where"
+  },
+  "stories": [
+    {
+      "slug": "witnessed-moment",
+      "name": "Sample name",
+      "pillar": "proof",
+      "summary": "Sample summary",
+      "template": [
+        "Sample template",
+        "Sample template",
+        "Sample template",
+        "Sample template",
+        "Sample template"
+      ],
+      "example_hook": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "hook_pattern": "Sample hook pattern",
+      "dos": [
+        "Sample dos",
+        "Sample dos",
+        "Sample dos"
+      ],
+      "donts": [
+        "Sample donts"
+      ],
+      "signal": "Sample signal",
+      "real_example": {
+        "title": "Sample title",
+        "quote": {
+          "text": "Sample text",
+          "source": ""
+        },
+        "media": ""
+      }
+    },
+    {
+      "slug": "honest-failure",
+      "name": "Sample name",
+      "pillar": "proof",
+      "summary": "Sample summary",
+      "template": [
+        "Sample template",
+        "Sample template",
+        "Sample template",
+        "Sample template",
+        "Sample template"
+      ],
+      "example_hook": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "hook_pattern": "Sample hook pattern",
+      "dos": [
+        "Sample dos",
+        "Sample dos",
+        "Sample dos"
+      ],
+      "donts": [
+        "Sample donts",
+        "Sample donts"
+      ],
+      "signal": "Sample signal",
+      "real_example": {
+        "title": "Sample title",
+        "quote": {
+          "text": "Sample text",
+          "source": ""
+        },
+        "media": ""
+      }
+    },
+    {
+      "slug": "build-reveal",
+      "name": "Sample name",
+      "pillar": "build",
+      "summary": "Sample summary",
+      "template": [
+        "Sample template",
+        "Sample template",
+        "Sample template",
+        "Sample template",
+        "Sample template"
+      ],
+      "example_hook": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "hook_pattern": "Sample hook pattern",
+      "dos": [
+        "Sample dos",
+        "Sample dos",
+        "Sample dos"
+      ],
+      "donts": [
+        "Sample donts",
+        "Sample donts",
+        "Sample donts"
+      ],
+      "signal": "Sample signal",
+      "real_example": {
+        "title": "Sample title",
+        "quote": {
+          "text": "Sample text",
+          "source": ""
+        },
+        "media": ""
+      }
+    },
+    {
+      "slug": "industry-thesis",
+      "name": "Sample name",
+      "pillar": "perspective",
+      "summary": "Sample summary",
+      "template": [
+        "Sample template",
+        "Sample template",
+        "Sample template",
+        "Sample template",
+        "Sample template"
+      ],
+      "example_hook": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "hook_pattern": "Sample hook pattern",
+      "dos": [
+        "Sample dos",
+        "Sample dos",
+        "Sample dos"
+      ],
+      "donts": [
+        "Sample donts",
+        "Sample donts",
+        "Sample donts"
+      ],
+      "signal": "Sample signal",
+      "real_example": {
+        "title": "Sample title",
+        "quote": {
+          "text": "Sample text",
+          "source": ""
+        },
+        "media": ""
+      }
+    },
+    {
+      "slug": "regenerative-lens",
+      "name": "Sample name",
+      "pillar": "perspective",
+      "summary": "Sample summary",
+      "template": [
+        "Sample template",
+        "Sample template",
+        "Sample template",
+        "Sample template",
+        "Sample template"
+      ],
+      "example_hook": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "hook_pattern": "Sample hook pattern",
+      "dos": [
+        "Sample dos",
+        "Sample dos",
+        "Sample dos"
+      ],
+      "donts": [
+        "Sample donts",
+        "Sample donts",
+        "Sample donts"
+      ],
+      "signal": "Sample signal",
+      "real_example": {
+        "title": "Sample title",
+        "quote": {
+          "text": "Sample text",
+          "source": ""
+        }
+      }
+    }
+  ]
+}

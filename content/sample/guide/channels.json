@@ -1,0 +1,340 @@
+{
+  "channels": [
+    {
+      "slug": "linkedin",
+      "name": "Sample name",
+      "account": "Sample account",
+      "formats": [
+        {
+          "format": "Sample format",
+          "pillars": "Sample pillars",
+          "note": "Sample note"
+        },
+        {
+          "format": "Sample format",
+          "pillars": "Sample pillars",
+          "note": "Sample note"
+        },
+        {
+          "format": "Sample format",
+          "pillars": "Sample pillars",
+          "note": "Sample note"
+        }
+      ],
+      "link_rule": "Sample link rule",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "timing": "Sample timing",
+      "measure": [
+        "Sample measure",
+        "Sample measure"
+      ]
+    },
+    {
+      "slug": "instagram",
+      "name": "Sample name",
+      "account": "Sample account",
+      "formats": [
+        {
+          "format": "Sample format",
+          "pillars": "Sample pillars",
+          "note": "Sample note"
+        },
+        {
+          "format": "Sample format",
+          "pillars": "Sample pillars",
+          "note": "Sample note"
+        }
+      ],
+      "link_rule": "Sample link rule",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "timing": "Sample timing",
+      "measure": [
+        "Sample measure",
+        "Sample measure",
+        "Sample measure"
+      ]
+    },
+    {
+      "slug": "youtube",
+      "name": "Sample name",
+      "account": "Sample account",
+      "formats": [
+        {
+          "format": "Sample format",
+          "pillars": "Sample pillars",
+          "note": "Sample note"
+        },
+        {
+          "format": "Sample format",
+          "pillars": "Sample pillars",
+          "note": "Sample note"
+        }
+      ],
+      "link_rule": "Sample link rule",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "timing": "Sample timing",
+      "measure": [
+        "Sample measure",
+        "Sample measure"
+      ]
+    },
+    {
+      "slug": "substack-personal",
+      "name": "Sample name",
+      "account": "Sample account",
+      "formats": [
+        {
+          "format": "Sample format",
+          "pillars": "Sample pillars",
+          "note": "Sample note"
+        }
+      ],
+      "link_rule": "Sample link rule",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "timing": "Sample timing",
+      "measure": [
+        "Sample measure",
+        "Sample measure",
+        "Sample measure"
+      ]
+    },
+    {
+      "slug": "substack-regenera",
+      "name": "Sample name",
+      "account": "Sample account",
+      "formats": [
+        {
+          "format": "Sample format",
+          "pillars": "Sample pillars",
+          "note": "Sample note"
+        }
+      ],
+      "link_rule": "Sample link rule",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "timing": "Sample timing",
+      "measure": [
+        "Sample measure",
+        "Sample measure",
+        "Sample measure"
+      ]
+    }
+  ],
+  "cadence": [
+    {
+      "surface": "Sample surface",
+      "rhythm": "Sample rhythm",
+      "slot": "Sample slot"
+    },
+    {
+      "surface": "Sample surface",
+      "rhythm": "Sample rhythm",
+      "slot": "Sample slot"
+    },
+    {
+      "surface": "Sample surface",
+      "rhythm": "Sample rhythm",
+      "slot": "Sample slot"
+    },
+    {
+      "surface": "Sample surface",
+      "rhythm": "Sample rhythm",
+      "slot": "Sample slot"
+    }
+  ],
+  "rhythm": {
+    "summary": "Sample summary",
+    "days": [
+      {
+        "day": "Mon",
+        "primary": "perspective",
+        "fallback": [
+          "lists"
+        ],
+        "channels": [
+          "linkedin",
+          "youtube",
+          "instagram"
+        ],
+        "note": "Sample note"
+      },
+      {
+        "day": "Tue",
+        "primary": "proof",
+        "fallback": [
+          "build"
+        ],
+        "channels": [
+          "linkedin",
+          "youtube",
+          "instagram"
+        ],
+        "note": "Sample note"
+      },
+      {
+        "day": "Wed",
+        "primary": "build",
+        "fallback": [
+          "proof"
+        ],
+        "channels": [
+          "linkedin",
+          "youtube",
+          "instagram"
+        ],
+        "note": "Sample note"
+      },
+      {
+        "day": "Thu",
+        "primary": "voices",
+        "fallback": [
+          "proof"
+        ],
+        "channels": [
+          "linkedin",
+          "youtube",
+          "instagram"
+        ],
+        "note": "Sample note"
+      },
+      {
+        "day": "Fri",
+        "primary": "lists",
+        "fallback": [
+          "build",
+          "proof"
+        ],
+        "channels": [
+          "linkedin",
+          "instagram"
+        ],
+        "note": "Sample note"
+      },
+      {
+        "day": "Sat",
+        "primary": "reels",
+        "fallback": [],
+        "channels": [
+          "youtube",
+          "instagram"
+        ],
+        "note": "Sample note"
+      },
+      {
+        "day": "Sun",
+        "primary": null,
+        "fallback": [],
+        "channels": [],
+        "note": "Sample note"
+      }
+    ],
+    "rules": [
+      "Sample rules",
+      "Sample rules",
+      "Sample rules",
+      "Sample rules",
+      "Sample rules",
+      "Sample rules",
+      "Sample rules"
+    ]
+  },
+  "format_mix": [
+    "Sample format mix",
+    "Sample format mix",
+    "Sample format mix",
+    "Sample format mix",
+    "Sample format mix"
+  ],
+  "publishing_model": [
+    "Sample publishing model",
+    "Sample publishing model",
+    "Sample publishing model",
+    "Sample publishing model",
+    "Sample publishing model"
+  ],
+  "fan_out": [
+    "Sample fan out",
+    "Sample fan out",
+    "Sample fan out",
+    "Sample fan out",
+    "Sample fan out"
+  ],
+  "guardrails": [
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    }
+  ]
+}

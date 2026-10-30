@@ -1,0 +1,167 @@
+{
+  "slug": "personal",
+  "name": "Sample name",
+  "url": "https://example.com/sample",
+  "ordinal": "Sample ordinal",
+  "summary": "Sample summary",
+  "stats": "Sample stats",
+  "research": "",
+  "banner": {
+    "image_url": "https://example.com/sample",
+    "alt": "Sample alt"
+  },
+  "voice_file": "",
+  "arc": [
+    "Sample arc",
+    "Sample arc",
+    "Sample arc",
+    "Sample arc",
+    "Sample arc"
+  ],
+  "rules": [
+    "Sample rules",
+    "Sample rules",
+    "Sample rules",
+    "Sample rules",
+    "Sample rules",
+    "Sample rules",
+    "Sample rules"
+  ],
+  "key_lines": [
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    }
+  ],
+  "differs": {
+    "title": "Sample title",
+    "items": [
+      "Sample items",
+      "Sample items",
+      "Sample items",
+      "Sample items",
+      "Sample items"
+    ]
+  },
+  "what_worked": [
+    "Sample what worked",
+    "Sample what worked",
+    "Sample what worked",
+    "Sample what worked"
+  ],
+  "what_didnt": [
+    "Sample what didnt",
+    "Sample what didnt",
+    "Sample what didnt",
+    "Sample what didnt",
+    "Sample what didnt"
+  ],
+  "visual": {
+    "dos": [
+      "Sample dos",
+      "Sample dos"
+    ],
+    "donts": [
+      "Sample donts",
+      "Sample donts",
+      "Sample donts"
+    ]
+  },
+  "essays": [
+    {
+      "title": "Sample title",
+      "status": "Sample status",
+      "source": "",
+      "url": "https://example.com/sample",
+      "image_urls": [
+        "https://example.com/sample"
+      ]
+    }
+  ],
+  "top_posts": [
+    {
+      "title": "Sample title",
+      "url": "https://example.com/sample",
+      "image_url": "https://example.com/sample",
+      "date": "2026-01-01",
+      "reactions": 0,
+      "comments": 0,
+      "restacks": 0,
+      "note": "Sample note"
+    },
+    {
+      "title": "Sample title",
+      "url": "https://example.com/sample",
+      "image_url": "https://example.com/sample",
+      "date": "2026-01-01",
+      "reactions": 0,
+      "comments": 0,
+      "restacks": 0,
+      "note": "Sample note"
+    },
+    {
+      "title": "Sample title",
+      "url": "https://example.com/sample",
+      "image_url": "https://example.com/sample",
+      "date": "2026-01-01",
+      "reactions": 0,
+      "comments": 0,
+      "restacks": 0,
+      "note": "Sample note"
+    },
+    {
+      "title": "Sample title",
+      "url": "https://example.com/sample",
+      "image_url": "https://example.com/sample",
+      "date": "2026-01-01",
+      "reactions": 0,
+      "comments": 0,
+      "restacks": 0,
+      "note": "Sample note"
+    },
+    {
+      "title": "Sample title",
+      "url": "https://example.com/sample",
+      "image_url": "https://example.com/sample",
+      "date": "2026-01-01",
+      "reactions": 0,
+      "comments": 0,
+      "restacks": 0,
+      "note": "Sample note"
+    },
+    {
+      "title": "Sample title",
+      "url": "https://example.com/sample",
+      "image_url": "https://example.com/sample",
+      "date": "2026-01-01",
+      "reactions": 0,
+      "comments": 0,
+      "restacks": 0,
+      "note": "Sample note"
+    },
+    {
+      "title": "Sample title",
+      "url": "https://example.com/sample",
+      "image_url": "https://example.com/sample",
+      "date": "2026-01-01",
+      "reactions": 0,
+      "comments": 0,
+      "restacks": 0,
+      "note": "Sample note"
+    },
+    {
+      "title": "Sample title",
+      "url": "https://example.com/sample",
+      "image_url": "https://example.com/sample",
+      "date": "2026-01-01",
+      "reactions": 0,
+      "comments": 0,
+      "restacks": 0,
+      "note": "Sample note"
+    }
+  ]
+}

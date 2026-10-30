@@ -1,0 +1,169 @@
+{
+  "$comment": "Sample $comment",
+  "pieces": {
+    "s1-01-sample-piece-01": {
+      "look": "voiceover",
+      "topic": "sample-topic-1"
+    },
+    "s1-01-sample-piece-01-document": {
+      "look": "prism",
+      "topic": "sample-topic-1"
+    },
+    "s1-02-sample-piece-02": {
+      "look": "voiceover",
+      "topic": "sample-topic-2"
+    },
+    "s1-03-sample-piece-03": {
+      "look": "voiceover",
+      "topic": "sample-topic-3"
+    },
+    "s1-04-sample-piece-04": {
+      "topic": "sample-topic-4"
+    },
+    "s1-05-sample-piece-05": {
+      "look": "voiceover",
+      "topic": "sample-topic-5"
+    },
+    "s1-06-sample-piece-06": {
+      "look": "voiceover",
+      "topic": "sample-topic-6"
+    },
+    "s1-07-sample-piece-07": {
+      "topic": "sample-topic-7"
+    },
+    "s1-08-sample-piece-08": {
+      "look": "voiceover",
+      "topic": "sample-topic-8"
+    },
+    "s1-09-sample-piece-09": {
+      "look": "voiceover",
+      "topic": "sample-topic-9"
+    },
+    "s1-10-sample-piece-10": {
+      "look": "voiceover",
+      "topic": "sample-topic-2"
+    },
+    "s1-11-sample-piece-11": {
+      "topic": "sample-topic-10"
+    },
+    "s1-12-sample-piece-12": {
+      "look": "voiceover",
+      "topic": "sample-topic-11"
+    },
+    "sample-extra-113": {
+      "look": "talking-head"
+    },
+    "sample-extra-114": {
+      "look": "talking-head"
+    },
+    "sample-extra-115": {
+      "look": "talking-head"
+    },
+    "sample-extra-116": {
+      "look": "talking-head"
+    },
+    "sample-extra-117": {
+      "look": "talking-head",
+      "topic": "sample-topic-12"
+    },
+    "s1-13-sample-piece-13": {
+      "look": "talking-head",
+      "topic": "sample-topic-13"
+    },
+    "s1-14-sample-piece-14": {
+      "look": "talking-head",
+      "topic": "sample-topic-13"
+    },
+    "s1-15-sample-piece-15": {
+      "look": "talking-head",
+      "topic": "sample-topic-13"
+    },
+    "s1-16-sample-piece-16": {
+      "look": "talking-head",
+      "topic": "sample-topic-13"
+    },
+    "s1-17-sample-piece-17": {
+      "look": "talking-head",
+      "topic": "sample-topic-13"
+    },
+    "s1-18-sample-piece-18": {
+      "look": "talking-head",
+      "topic": "sample-topic-13"
+    },
+    "s1-19-sample-piece-19": {
+      "topic": "sample-topic-14"
+    },
+    "s1-20-sample-piece-20": {
+      "look": "footage",
+      "topic": "sample-topic-14"
+    },
+    "s1-21-sample-piece-21": {
+      "look": "footage",
+      "topic": "sample-topic-14"
+    },
+    "s1-22-sample-piece-22": {
+      "look": "talking-head",
+      "topic": "sample-topic-13"
+    },
+    "sample-extra-128": {
+      "topic": "sample-topic-15"
+    },
+    "sample-extra-129": {
+      "topic": "sample-topic-16"
+    },
+    "sample-extra-130": {
+      "topic": "sample-featured-topic"
+    },
+    "sample-extra-131": {
+      "topic": "sample-topic-7"
+    },
+    "sample-extra-132": {
+      "topic": "sample-topic-7"
+    },
+    "sample-extra-133": {
+      "topic": "sample-topic-18"
+    },
+    "sample-extra-134": {
+      "topic": "sample-featured-topic"
+    },
+    "sample-extra-135": {
+      "topic": "sample-topic-19"
+    },
+    "sample-extra-136": {
+      "look": "footage",
+      "topic": "sample-topic-20"
+    },
+    "sample-extra-38": {
+      "look": "prism",
+      "topic": "sample-featured-topic"
+    },
+    "sample-extra-39": {
+      "look": "talking-head",
+      "topic": "sample-topic-7"
+    },
+    "sample-extra-40": {
+      "look": "talking-head",
+      "topic": "sample-topic-9"
+    },
+    "sample-extra-41": {
+      "look": "talking-head",
+      "topic": "sample-topic-21"
+    },
+    "sample-extra-42": {
+      "look": "talking-head",
+      "topic": "sample-topic-22"
+    },
+    "sample-extra-43": {
+      "look": "talking-head",
+      "topic": "sample-topic-23"
+    },
+    "sample-extra-44": {
+      "look": "talking-head",
+      "topic": "sample-topic-1"
+    },
+    "sample-extra-45": {
+      "look": "text",
+      "topic": "sample-topic-24"
+    }
+  }
+}

@@ -1,0 +1,222 @@
+{
+  "formats": [
+    {
+      "slug": "motion",
+      "name": "Sample name",
+      "skill": "Sample skill",
+      "when": "Sample when",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "rules": [
+        "Sample rules",
+        "Sample rules",
+        "Sample rules",
+        "Sample rules"
+      ],
+      "media": [
+        "",
+        ""
+      ],
+      "taste_notes": [
+        {
+          "text": "Sample text",
+          "source": ""
+        }
+      ],
+      "note": "Sample note"
+    },
+    {
+      "slug": "clips",
+      "name": "Sample name",
+      "skill": "Sample skill",
+      "when": "Sample when",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "rules": [
+        "Sample rules",
+        "Sample rules",
+        "Sample rules",
+        "Sample rules"
+      ],
+      "media": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "taste_notes": [
+        {
+          "text": "Sample text",
+          "source": ""
+        },
+        {
+          "text": "Sample text",
+          "source": ""
+        },
+        {
+          "text": "Sample text",
+          "source": ""
+        },
+        {
+          "text": "Sample text",
+          "source": ""
+        },
+        {
+          "text": "Sample text",
+          "source": ""
+        },
+        {
+          "text": "Sample text",
+          "source": ""
+        },
+        {
+          "text": "Sample text",
+          "source": ""
+        },
+        {
+          "text": "Sample text",
+          "source": ""
+        }
+      ]
+    },
+    {
+      "slug": "carousels",
+      "name": "Sample name",
+      "skill": "Sample skill",
+      "when": "Sample when",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "rules": [
+        "Sample rules",
+        "Sample rules",
+        "Sample rules",
+        "Sample rules",
+        "Sample rules",
+        "Sample rules"
+      ],
+      "media": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ]
+    },
+    {
+      "slug": "substack",
+      "name": "Sample name",
+      "skill": "Sample skill",
+      "when": "Sample when",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "rules": [
+        "Sample rules",
+        "Sample rules",
+        "Sample rules",
+        "Sample rules",
+        "Sample rules"
+      ],
+      "media": [],
+      "image_urls": [
+        "https://example.com/sample",
+        "https://example.com/sample",
+        "https://example.com/sample",
+        "https://example.com/sample"
+      ]
+    },
+    {
+      "slug": "substack-to-social",
+      "name": "Sample name",
+      "skill": "Sample skill",
+      "when": "Sample when",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "rules": [
+        "Sample rules",
+        "Sample rules",
+        "Sample rules",
+        "Sample rules"
+      ],
+      "media": [
+        "",
+        ""
+      ]
+    },
+    {
+      "slug": "stills",
+      "name": "Sample name",
+      "skill": "Sample skill",
+      "when": "Sample when",
+      "specs": [
+        "Sample specs",
+        "Sample specs",
+        "Sample specs"
+      ],
+      "rules": [
+        "Sample rules",
+        "Sample rules",
+        "Sample rules",
+        "Sample rules"
+      ],
+      "media": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ]
+    },
+    {
+      "slug": "labs",
+      "name": "Sample name",
+      "skill": "Sample skill",
+      "when": "Sample when",
+      "specs": [
+        "Sample specs",
+        "Sample specs"
+      ],
+      "rules": [
+        "Sample rules",
+        "Sample rules"
+      ],
+      "media": [
+        ""
+      ],
+      "links": [
+        {
+          "label": "Sample label",
+          "href": "https://example.com/sample"
+        },
+        {
+          "label": "Sample label",
+          "href": "https://example.com/sample"
+        }
+      ],
+      "note": "Sample note"
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "about": "Sample about",
+  "version": 2,
+  "calibrated_on": "2026-01-01",
+  "model": "Sample model",
+  "reader": "Sample reader",
+  "question": "Sample question",
+  "rubric": "Sample rubric",
+  "examples": [
+    {
+      "text": "Sample text",
+      "audience_fit": 0.9,
+      "audience_reason": "Sample audience reason"
+    },
+    {
+      "text": "Sample text",
+      "audience_fit": 0.95,
+      "audience_reason": "Sample audience reason"
+    },
+    {
+      "text": "Sample text",
+      "audience_fit": 0.7,
+      "audience_reason": "Sample audience reason"
+    },
+    {
+      "text": "Sample text",
+      "audience_fit": 0.7,
+      "audience_reason": "Sample audience reason"
+    },
+    {
+      "text": "Sample text",
+      "audience_fit": 0.6,
+      "audience_reason": "Sample audience reason"
+    },
+    {
+      "text": "Sample text",
+      "audience_fit": 0.3,
+      "audience_reason": "Sample audience reason"
+    },
+    {
+      "text": "Sample text",
+      "audience_fit": 0.25,
+      "audience_reason": "Sample audience reason"
+    },
+    {
+      "text": "Sample text",
+      "audience_fit": 0.05,
+      "audience_reason": "Sample audience reason"
+    },
+    {
+      "text": "Sample text",
+      "audience_fit": 0.05,
+      "audience_reason": "Sample audience reason"
+    },
+    {
+      "text": "Sample text",
+      "audience_fit": 0.05,
+      "audience_reason": "Sample audience reason"
+    },
+    {
+      "text": "Sample text",
+      "audience_fit": 0.1,
+      "audience_reason": "Sample audience reason"
+    }
+  ],
+  "min_audience_fit": 0.6
+}

@@ -1,0 +1,54 @@
+# Local Supabase stack for the database, proxy and end-to-end test layers (docs/testing.md).
+# Never linked to the hosted project: CI and local tests only ever talk to this stack.
+# Ports sit in the 563xx range so the stack can run beside other local Supabase projects.
+project_id = "vibrana-gtm"
+
+[api]
+enabled = true
+port = 56321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 56322
+shadow_port = 56320
+major_version = 17
+
+[db.pooler]
+enabled = false
+
+[db.migrations]
+enabled = true
+
+[db.seed]
+# Fixtures are seeded through the API by test/support/seed.ts, not SQL.
+enabled = false
+
+[realtime]
+enabled = false
+
+[studio]
+enabled = false
+
+[storage]
+enabled = true
+file_size_limit = "5GiB"
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3100"
+additional_redirect_urls = ["http://localhost:3100"]
+jwt_expiry = 3600
+enable_signup = false
+minimum_password_length = 6
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
+[edge_runtime]
+enabled = false
+
+[analytics]
+enabled = false

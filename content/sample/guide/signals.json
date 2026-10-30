@@ -1,0 +1,296 @@
+{
+  "version": 1,
+  "about": "Sample about",
+  "lanes": [
+    {
+      "slug": "datacenters",
+      "name": "Sample name",
+      "threshold": 0.6,
+      "question": "Does this sample story change an operating decision?"
+    },
+    {
+      "slug": "power",
+      "name": "Sample name",
+      "threshold": 0.6,
+      "question": "Does this sample story change an operating decision?"
+    },
+    {
+      "slug": "cost",
+      "name": "Sample name",
+      "threshold": 0.6,
+      "question": "Does this sample story change an operating decision?"
+    },
+    {
+      "slug": "governance",
+      "name": "Sample name",
+      "threshold": 0.6,
+      "question": "Does this sample story change an operating decision?"
+    },
+    {
+      "slug": "bias",
+      "name": "Sample name",
+      "threshold": 0.6,
+      "question": "Does this sample story change an operating decision?"
+    },
+    {
+      "slug": "privacy",
+      "name": "Sample name",
+      "threshold": 0.6,
+      "question": "Does this sample story change an operating decision?"
+    },
+    {
+      "slug": "security",
+      "name": "Sample name",
+      "threshold": 0.6,
+      "question": "Does this sample story change an operating decision?"
+    },
+    {
+      "slug": "open_source",
+      "name": "Sample name",
+      "threshold": 0.65,
+      "question": "Does this sample story change an operating decision?"
+    },
+    {
+      "slug": "ethics",
+      "name": "Sample name",
+      "threshold": 0.6,
+      "question": "Does this sample story change an operating decision?"
+    },
+    {
+      "slug": "builder",
+      "name": "Sample name",
+      "threshold": 0.65,
+      "question": "Does this sample story change an operating decision?"
+    }
+  ],
+  "flags": {
+    "substance": "Sample substance",
+    "novel": "Sample novel"
+  },
+  "ranking": {
+    "window_hours": 72,
+    "max_item_age_hours": 96,
+    "cluster_similarity": 0.8,
+    "top_n_briefs": 8,
+    "digest_size": 8
+  },
+  "sources": {
+    "rss": [
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": [
+          "datacenters",
+          "power"
+        ]
+      },
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": [
+          "power"
+        ]
+      },
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": [
+          "governance",
+          "ethics"
+        ]
+      },
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": [
+          "ethics",
+          "privacy",
+          "security"
+        ]
+      },
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": [
+          "ethics",
+          "bias",
+          "datacenters"
+        ]
+      },
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": [
+          "bias",
+          "privacy"
+        ]
+      },
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": [
+          "privacy",
+          "governance"
+        ]
+      },
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": [
+          "security"
+        ]
+      },
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": [
+          "security",
+          "open_source",
+          "builder",
+          "cost"
+        ]
+      },
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": []
+      },
+      {
+        "name": "Sample name",
+        "url": "https://example.com/sample",
+        "lanes": []
+      }
+    ],
+    "arxiv": {
+      "categories": [
+        "Sample categories",
+        "Sample categories"
+      ],
+      "query": "Sample query",
+      "max": 40
+    },
+    "hn": {
+      "min_points": 100,
+      "max": 60
+    },
+    "github": {
+      "created_within_days": 7,
+      "min_stars": 150,
+      "topics": [
+        "Sample topics",
+        "Sample topics",
+        "Sample topics",
+        "Sample topics",
+        "Sample topics"
+      ],
+      "max": 30
+    },
+    "hf_papers": {
+      "max": 30
+    },
+    "google_news": {
+      "max_per_query": 25,
+      "queries": [
+        "Sample queries",
+        "Sample queries",
+        "Sample queries",
+        "Sample queries"
+      ]
+    },
+    "reddit": {
+      "subreddits": [
+        "Sample subreddits",
+        "Sample subreddits"
+      ],
+      "max": 25
+    },
+    "bluesky": {
+      "per_account": 10,
+      "accounts": [
+        {
+          "handle": "Sample handle",
+          "name": "Sample name"
+        },
+        {
+          "handle": "Sample handle",
+          "name": "Sample name"
+        },
+        {
+          "handle": "Sample handle",
+          "name": "Sample name"
+        },
+        {
+          "handle": "Sample handle",
+          "name": "Sample name"
+        },
+        {
+          "handle": "Sample handle",
+          "name": "Sample name"
+        },
+        {
+          "handle": "Sample handle",
+          "name": "Sample name"
+        },
+        {
+          "handle": "Sample handle",
+          "name": "Sample name"
+        },
+        {
+          "handle": "Sample handle",
+          "name": "Sample name"
+        }
+      ]
+    }
+  },
+  "x": {
+    "bookmarks": 40,
+    "likes": 40,
+    "news": {
+      "count": 20,
+      "ai_only": true
+    },
+    "searches": [
+      {
+        "query": "Sample query",
+        "lanes": [
+          "datacenters",
+          "power"
+        ]
+      },
+      {
+        "query": "Sample query",
+        "lanes": [
+          "governance"
+        ]
+      },
+      {
+        "query": "Sample query",
+        "lanes": [
+          "security"
+        ]
+      },
+      {
+        "query": "Sample query",
+        "lanes": [
+          "bias",
+          "privacy"
+        ]
+      },
+      {
+        "query": "Sample query",
+        "lanes": [
+          "open_source"
+        ]
+      }
+    ],
+    "users": [
+      "Sample users",
+      "Sample users",
+      "Sample users",
+      "Sample users",
+      "Sample users",
+      "Sample users",
+      "Sample users"
+    ]
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "reviewed_at": "2026-10-01",
+  "offers": [
+    {
+      "id": "ai-readiness",
+      "name": "AI Readiness assessment",
+      "purpose": "Give an executive one general view of organizational AI readiness.",
+      "scope": "General organizational assessment, usually completed by a CEO, COO or another executive. One assessment produces one organizational result across six areas: leadership and strategy, data, technology, talent, governance and responsible AI, and culture and change.",
+      "deliverables": [
+        "One organizational AI readiness result across six areas",
+        "Supporting research for the two lowest areas"
+      ],
+      "inputs": [
+        "One general assessment, usually completed by the CEO, COO or another executive"
+      ],
+      "fits": [
+        "organization-wide adoption",
+        "enablement",
+        "staff training",
+        "capability gaps"
+      ],
+      "poor_fit": [
+        "Specific EU AI Act obligations",
+        "Already assessed and needs implementation",
+        "Needs individual employee skills measurement or personalized department-specific results, rather than one general organizational view"
+      ],
+      "claims": {
+        "organization-profile": "A general assessment, usually completed by a CEO, COO or another executive, producing one organizational AI readiness result across six areas."
+      },
+      "prohibited": [
+        "EU AI Act obligation mapping",
+        "Compliance certification",
+        "Individual employee assessment",
+        "Peer ranking",
+        "Personalized result for every person",
+        "Department-specific assessment for each employee",
+        "Free assessment delivering a transformation training plan"
+      ],
+      "url": "https://example.test/offers/ai-readiness",
+      "sources": [
+        "https://example.test/offers/ai-readiness"
+      ],
+      "active": true,
+      "price": "Example only; no commercial offer.",
+      "owner": "Example Team",
+      "reviewed_at": "2026-10-01",
+      "commercial_source": "Synthetic example catalog; configure your own reviewed offering.",
+      "not_to_be_confused_with": "During a paid transformation, each person completes an individual personalized AI Readiness assessment tailored to their department. Those department-specific assessments are part of transformation delivery, not this free general executive assessment. Do not transfer their inputs or deliverables to this offer."
+    },
+    {
+      "id": "eu-ai-act-readiness",
+      "name": "EU AI Act Readiness assessment",
+      "purpose": "Understand potential EU AI Act exposure and readiness gaps.",
+      "scope": "Rules-based assessment based on supplied answers, with citations to relevant provisions.",
+      "deliverables": [
+        "Report of likely applicable obligations, dates and gaps based on answers"
+      ],
+      "inputs": [
+        "Answers about AI systems and organizational role"
+      ],
+      "fits": [
+        "Explicit EU AI Act exposure question",
+        "Regulatory readiness gap",
+        "AI literacy training explicitly tied to the Act"
+      ],
+      "poor_fit": [
+        "EU location alone",
+        "Generic governance",
+        "General adoption maturity",
+        "Exposure already assessed and implementation needed"
+      ],
+      "claims": {
+        "act-obligation-report": "Rules-based report of likely applicable EU AI Act obligations, dates and gaps based on answers, with citations."
+      },
+      "prohibited": [
+        "Compliance certification",
+        "Legal advice",
+        "Overall transformation maturity score",
+        "Universal December deadline"
+      ],
+      "url": "https://example.test/offers/eu-ai-act-readiness",
+      "sources": [
+        "https://example.test/offers/eu-ai-act-readiness"
+      ],
+      "active": true,
+      "price": "Example only; no commercial offer.",
+      "owner": "Example Team",
+      "reviewed_at": "2026-10-01",
+      "commercial_source": "Synthetic example catalog; configure your own reviewed offering."
+    },
+    {
+      "id": "simulator",
+      "name": "AI Transformation Simulator",
+      "purpose": "Explore an operational or financial AI business case.",
+      "scope": "Scenario estimates of AI operating cost, time and capacity team by team.",
+      "deliverables": [
+        "Estimated AI cost, time and capacity scenarios"
+      ],
+      "inputs": [
+        "Company website",
+        "Headcount"
+      ],
+      "fits": [
+        "AI spend",
+        "Business case",
+        "Cost and capacity",
+        "Operational economics"
+      ],
+      "poor_fit": [
+        "Legal compliance question",
+        "Guaranteed achieved returns"
+      ],
+      "claims": {
+        "scenario-estimates": "Estimates AI operating cost, time and capacity team by team."
+      },
+      "prohibited": [
+        "Guaranteed savings",
+        "Achieved returns",
+        "Compliance certification"
+      ],
+      "url": "https://example.test/offers/simulator",
+      "sources": [
+        "https://example.test/offers/simulator"
+      ],
+      "active": true,
+      "price": "Example only; no commercial offer.",
+      "owner": "Example Team",
+      "reviewed_at": "2026-10-01",
+      "commercial_source": "Synthetic example catalog; configure your own reviewed offering."
+    }
+  ]
+}

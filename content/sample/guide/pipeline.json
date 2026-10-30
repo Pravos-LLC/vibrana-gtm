@@ -1,0 +1,68 @@
+{
+  "steps": [
+    {
+      "slug": "source",
+      "name": "Sample name",
+      "what": "Sample what",
+      "tool": "Sample tool",
+      "href": "https://example.com/sample",
+      "gate": "Sample gate"
+    },
+    {
+      "slug": "draft",
+      "name": "Sample name",
+      "what": "Sample what",
+      "tool": "Sample tool",
+      "href": null,
+      "gate": "Sample gate"
+    },
+    {
+      "slug": "persona-review",
+      "name": "Sample name",
+      "what": "Sample what",
+      "tool": "Sample tool",
+      "href": null,
+      "gate": "Sample gate"
+    },
+    {
+      "slug": "packaging",
+      "name": "Sample name",
+      "what": "Sample what",
+      "tool": "Sample tool",
+      "href": null,
+      "gate": "Sample gate"
+    },
+    {
+      "slug": "review",
+      "name": "Sample name",
+      "what": "Sample what",
+      "tool": "Sample tool",
+      "href": "https://example.com/sample",
+      "gate": "Sample gate"
+    },
+    {
+      "slug": "approve",
+      "name": "Sample name",
+      "what": "Sample what",
+      "tool": "Sample tool",
+      "href": "https://example.com/sample",
+      "gate": "Sample gate"
+    },
+    {
+      "slug": "schedule",
+      "name": "Sample name",
+      "what": "Sample what",
+      "tool": "Sample tool",
+      "href": "https://example.com/sample",
+      "gate": "Sample gate"
+    },
+    {
+      "slug": "metrics",
+      "name": "Sample name",
+      "what": "Sample what",
+      "tool": "Sample tool",
+      "href": "https://example.com/sample",
+      "gate": "Sample gate"
+    }
+  ]
+}

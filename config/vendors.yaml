@@ -1,0 +1,48 @@
+# Subscription/vendor registry for the Costs page. First match wins (case-insensitive regex on the
+# Wise merchant name), and only for software-like merchant categories (see software_categories). Charges whose merchant category looks like software but match nothing are
+# stored as unclassified so they surface on the page instead of disappearing.
+#
+# category: ai-models | dev-tools | infra | productivity | content-production | gtm-data | gtm-outreach
+# gtm: true = counts toward go-to-market / content spend.
+vendors:
+  - { vendor: Claude (Anthropic), match: "anthropic", category: ai-models, gtm: false }
+  - { vendor: ChatGPT / Codex (OpenAI), match: "openai", category: ai-models, gtm: false }
+  - { vendor: Z.ai, match: "z\\.ai", category: ai-models, gtm: false }
+  - { vendor: OpenRouter, match: "openrouter", category: ai-models, gtm: false }
+  - { vendor: Nous Research, match: "nous research", category: ai-models, gtm: false }
+  - { vendor: Sakana AI, match: "^sakana", category: ai-models, gtm: false }
+  - { vendor: MiniMax, match: "minimax", category: ai-models, gtm: false }
+  - { vendor: Grok (xAI), match: "^grok|\\bx\\.?ai\\b", category: ai-models, gtm: false }
+  - { vendor: Voyage AI, match: "voyage ai", category: ai-models, gtm: false }
+  - { vendor: Cursor, match: "cursor", category: dev-tools, gtm: false }
+  - { vendor: GitHub, match: "github", category: dev-tools, gtm: false }
+  - { vendor: CodeRabbit, match: "coderabbit", category: dev-tools, gtm: false }
+  - { vendor: SonarSource, match: "sonarsource", category: dev-tools, gtm: false }
+  - { vendor: Linear, match: "linear\\.app", category: dev-tools, gtm: false }
+  - { vendor: Opencode, match: "^opencode|^anomaly$", category: dev-tools, gtm: false }
+  - { vendor: Supabase, match: "supabase", category: infra, gtm: false }
+  - { vendor: Vercel, match: "vercel", category: infra, gtm: false }
+  - { vendor: Fly.io, match: "fly\\.io", category: infra, gtm: false }
+  - { vendor: Railway, match: "railway", category: infra, gtm: false }
+  - { vendor: Cloudflare, match: "cloudflare", category: infra, gtm: false }
+  - { vendor: Google Cloud, match: "google cloud", category: infra, gtm: false }
+  - { vendor: Gandi (domains), match: "gandi", category: infra, gtm: false }
+  - { vendor: Google Workspace, match: "google.*workspace", category: productivity, gtm: false }
+  - { vendor: Granola, match: "granola", category: productivity, gtm: false }
+  - { vendor: Supermemory, match: "supermemory", category: productivity, gtm: false }
+  - { vendor: Zernio, match: "zernio|getlate|late\\.dev", category: content-production, gtm: true }
+  - { vendor: Mosaic, match: "^mosaic\\b", category: content-production, gtm: true }
+  - { vendor: Motion, match: "^motion\\b", category: content-production, gtm: true }
+  - { vendor: ElevenLabs, match: "elevenlabs", category: content-production, gtm: true }
+  - { vendor: Suno, match: "suno", category: content-production, gtm: true }
+  - { vendor: fal.ai, match: "^fal ", category: content-production, gtm: true }
+  - { vendor: FullEnrich, match: "fullenrich", category: gtm-data, gtm: true }
+  - { vendor: Treg, match: "^treg\\b", category: gtm-data, gtm: true }
+  - { vendor: Apollo, match: "apollo\\.io|^apollo\\b", category: gtm-data, gtm: true }
+  - { vendor: Firecrawl, match: "firecrawl", category: gtm-data, gtm: true }
+  - { vendor: TinyFish, match: "tinyfish", category: gtm-data, gtm: true }
+  - { vendor: Resend, match: "resend", category: gtm-outreach, gtm: true }
+  - { vendor: Instantly, match: "instantly", category: gtm-outreach, gtm: true }
+
+# Wise merchant categories treated as "software" when nothing above matches.
+software_categories: ["Computer Software", "Computer Programming", "Computer Network", "Business Services"]

@@ -1,0 +1,373 @@
+{
+  "pillars": [
+    {
+      "slug": "proof",
+      "name": "Proof",
+      "share": 30,
+      "role": "Sample role",
+      "funnel_role": "conversation",
+      "awareness_job": "Help a sample reader understand a concrete operating decision.",
+      "leading_metric": {
+        "key": "conversations",
+        "label": "Sample label",
+        "per": "Sample per"
+      },
+      "purpose": "Sample purpose",
+      "dial": {
+        "operator": 80,
+        "soul": 20
+      },
+      "dial_label": "Sample dial label",
+      "speaks_as": "Sample speaks as",
+      "opening": "Sample opening",
+      "dos": [
+        "Sample dos",
+        "Sample dos",
+        "Sample dos"
+      ],
+      "donts": [
+        "Sample donts",
+        "Sample donts",
+        "Sample donts"
+      ],
+      "notes": [],
+      "formats": [
+        "Sample formats",
+        "Sample formats",
+        "Sample formats",
+        "Sample formats",
+        "Sample formats",
+        "Sample formats"
+      ],
+      "hero_media": "",
+      "links": [
+        {
+          "label": "Sample label",
+          "url": "https://example.com/sample"
+        }
+      ],
+      "examples": [
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "excerpt": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "media": "",
+          "why": "Sample why"
+        },
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "excerpt": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "media": "",
+          "why": "Sample why"
+        },
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "excerpt": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "media": "",
+          "why": "Sample why"
+        }
+      ],
+      "contrasts": [
+        {
+          "weak": "Sample weak",
+          "great": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "why": "Sample why"
+        },
+        {
+          "weak": "Sample weak",
+          "great": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "why": "Sample why"
+        }
+      ]
+    },
+    {
+      "slug": "perspective",
+      "name": "Perspective",
+      "share": 25,
+      "role": "Sample role",
+      "funnel_role": "reach",
+      "awareness_job": "Help a sample reader understand a concrete operating decision.",
+      "leading_metric": {
+        "key": "reach",
+        "label": "Sample label",
+        "per": "Sample per"
+      },
+      "purpose": "Sample purpose",
+      "dial": {
+        "operator": 40,
+        "soul": 60
+      },
+      "dial_label": "Sample dial label",
+      "speaks_as": "Sample speaks as",
+      "opening": "Sample opening",
+      "dos": [
+        "Sample dos",
+        "Sample dos",
+        "Sample dos"
+      ],
+      "donts": [
+        "Sample donts",
+        "Sample donts"
+      ],
+      "notes": [
+        "Sample notes",
+        "Sample notes"
+      ],
+      "formats": [
+        "Sample formats",
+        "Sample formats",
+        "Sample formats",
+        "Sample formats",
+        "Sample formats"
+      ],
+      "hero_media": "",
+      "examples": [
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "excerpt": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "media": "",
+          "why": "Sample why"
+        },
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "excerpt": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "why": "Sample why"
+        },
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "media": "",
+          "why": "Sample why"
+        }
+      ],
+      "contrasts": [
+        {
+          "weak": "Sample weak",
+          "great": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "why": "Sample why"
+        }
+      ]
+    },
+    {
+      "slug": "build",
+      "name": "Build",
+      "share": 25,
+      "role": "Sample role",
+      "funnel_role": "how_we_think",
+      "awareness_job": "Help a sample reader understand a concrete operating decision.",
+      "leading_metric": {
+        "key": "comments",
+        "label": "Sample label",
+        "per": "Sample per"
+      },
+      "purpose": "Sample purpose",
+      "dial": {
+        "operator": 85,
+        "soul": 15
+      },
+      "dial_label": "Sample dial label",
+      "speaks_as": "Sample speaks as",
+      "opening": "Sample opening",
+      "dos": [
+        "Sample dos",
+        "Sample dos",
+        "Sample dos"
+      ],
+      "donts": [
+        "Sample donts",
+        "Sample donts",
+        "Sample donts"
+      ],
+      "notes": [],
+      "formats": [
+        "Sample formats",
+        "Sample formats",
+        "Sample formats",
+        "Sample formats",
+        "Sample formats"
+      ],
+      "hero_media": "",
+      "examples": [
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "excerpt": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "media": "",
+          "why": "Sample why"
+        },
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "excerpt": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "media": "",
+          "why": "Sample why"
+        },
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "excerpt": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "media": "",
+          "why": "Sample why"
+        }
+      ],
+      "contrasts": [
+        {
+          "weak": "Sample weak",
+          "great": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "why": "Sample why"
+        }
+      ]
+    },
+    {
+      "slug": "lists",
+      "name": "Lists",
+      "share": 20,
+      "role": "Sample role",
+      "funnel_role": "reach",
+      "awareness_job": "Help a sample reader understand a concrete operating decision.",
+      "leading_metric": {
+        "key": "saves_sends",
+        "label": "Sample label",
+        "per": "Sample per"
+      },
+      "purpose": "Sample purpose",
+      "dial": null,
+      "dial_label": "Sample dial label",
+      "speaks_as": "Sample speaks as",
+      "opening": "Sample opening",
+      "dos": [
+        "Sample dos",
+        "Sample dos",
+        "Sample dos",
+        "Sample dos"
+      ],
+      "donts": [
+        "Sample donts",
+        "Sample donts",
+        "Sample donts"
+      ],
+      "notes": [],
+      "formats": [
+        "Sample formats",
+        "Sample formats",
+        "Sample formats"
+      ],
+      "hero_media": "",
+      "examples": [
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "excerpt": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "media": "",
+          "why": "Sample why"
+        },
+        {
+          "title": "Sample title",
+          "channel": "Sample channel",
+          "hook": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "excerpt": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "why": "Sample why"
+        }
+      ],
+      "contrasts": [
+        {
+          "weak": "Sample weak",
+          "great": {
+            "text": "Sample text",
+            "source": ""
+          },
+          "why": "Sample why"
+        }
+      ]
+    }
+  ]
+}

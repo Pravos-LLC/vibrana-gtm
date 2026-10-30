@@ -1,0 +1,466 @@
+{
+  "version": 1,
+  "about": "Sample about",
+  "hooks": [
+    {
+      "id": "first-person-scene",
+      "name": "First-person scene",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "person-and-number",
+      "name": "One person, one number",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "named-number",
+      "name": "Number lead",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "one-line-thesis",
+      "name": "One-line thesis",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "contrarian-reframe",
+      "name": "Consensus, then dismantle",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "calibrated-claim",
+      "name": "Calibrated claim",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "room-synthesis",
+      "name": "Synthesis of the room",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "question-i-get",
+      "name": "The question I get most",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "category-reframe",
+      "name": "X is the new Y",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "numbered-promise",
+      "name": "Numbered promise",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "conditional-directive",
+      "name": "If you are X, do Y",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "costly-mistake",
+      "name": "The expensive mistake",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "confession",
+      "name": "Small confession",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "news-peg",
+      "name": "News peg",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "tension-math",
+      "name": "True, but the math does not work",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "before-after",
+      "name": "Before and after",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "direct-question",
+      "name": "Direct question",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "how-to-promise",
+      "name": "How-to promise",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "cold-open",
+      "name": "Cold open",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "paradox",
+      "name": "Paradox or koan",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "lived-image",
+      "name": "Lived image",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "harm-named",
+      "name": "Harm named with evidence",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "borrowed-concept",
+      "name": "Borrowed concept",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "artifact-first",
+      "name": "Artifact first",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals"
+      ]
+    },
+    {
+      "id": "humor",
+      "name": "Joke or wry aside",
+      "definition": "Sample definition",
+      "signals": [
+        "Sample signals",
+        "Sample signals",
+        "Sample signals"
+      ]
+    }
+  ],
+  "storylines": [
+    {
+      "id": "scene-to-insight",
+      "name": "Scene to insight",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "problem-mechanism-fix",
+      "name": "Problem, mechanism, fix",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "consensus-dismantle",
+      "name": "Consensus dismantled",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "numbered-list",
+      "name": "Numbered list with a point of view",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "named-framework",
+      "name": "Named framework",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "progression",
+      "name": "Maturity curve",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "before-after-arc",
+      "name": "Before and after",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "news-take",
+      "name": "News plus a take",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "research-readout",
+      "name": "Research readout",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "walkthrough",
+      "name": "Walkthrough",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "build-log",
+      "name": "Build log",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "confession-lesson",
+      "name": "Confession to lesson",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "essay-braid",
+      "name": "Braided essay",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "conversation-clip",
+      "name": "Conversation clip",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "one-liner",
+      "name": "One-liner",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "roundup",
+      "name": "Curated roundup",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "evidence-witness",
+      "name": "Witnessed evidence",
+      "definition": "Sample definition"
+    }
+  ],
+  "ctas": [
+    {
+      "id": "none",
+      "name": "No ask",
+      "definition": "Sample definition",
+      "awareness": "use",
+      "note": "Sample note"
+    },
+    {
+      "id": "open-question",
+      "name": "Open question",
+      "definition": "Sample definition",
+      "awareness": "use",
+      "note": "Sample note"
+    },
+    {
+      "id": "pick-one",
+      "name": "Pick one",
+      "definition": "Sample definition",
+      "awareness": "use",
+      "note": "Sample note"
+    },
+    {
+      "id": "research-ask",
+      "name": "Research ask",
+      "definition": "Sample definition",
+      "awareness": "use",
+      "note": "Sample note"
+    },
+    {
+      "id": "share-forward",
+      "name": "Send to someone",
+      "definition": "Sample definition",
+      "awareness": "limit",
+      "note": "Sample note"
+    },
+    {
+      "id": "follow-subscribe",
+      "name": "Follow or subscribe",
+      "definition": "Sample definition",
+      "awareness": "limit",
+      "note": "Sample note"
+    },
+    {
+      "id": "paid-ask",
+      "name": "Paid subscription or donation",
+      "definition": "Sample definition",
+      "awareness": "limit",
+      "note": "Sample note"
+    },
+    {
+      "id": "soft-link",
+      "name": "Soft link",
+      "definition": "Sample definition",
+      "awareness": "limit",
+      "note": "Sample note"
+    },
+    {
+      "id": "comment-keyword",
+      "name": "Comment a keyword to get it",
+      "definition": "Sample definition",
+      "awareness": "avoid",
+      "note": "Sample note"
+    },
+    {
+      "id": "lead-magnet",
+      "name": "Lead magnet or course",
+      "definition": "Sample definition",
+      "awareness": "avoid",
+      "note": "Sample note"
+    },
+    {
+      "id": "sales-ask",
+      "name": "Sales ask",
+      "definition": "Sample definition",
+      "awareness": "avoid",
+      "note": "Sample note"
+    },
+    {
+      "id": "sponsored",
+      "name": "Sponsored or partner post",
+      "definition": "Sample definition",
+      "awareness": "avoid",
+      "note": "Sample note"
+    },
+    {
+      "id": "tag-someone",
+      "name": "Tag someone",
+      "definition": "Sample definition",
+      "awareness": "avoid",
+      "note": "Sample note"
+    }
+  ],
+  "formats": [
+    {
+      "id": "text",
+      "name": "Text post",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "image",
+      "name": "Single image",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "carousel",
+      "name": "Carousel or document",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "video",
+      "name": "Native video",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "short",
+      "name": "Short-form vertical video",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "long-video",
+      "name": "Long-form video",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "essay",
+      "name": "Essay or newsletter",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "link",
+      "name": "Link post",
+      "definition": "Sample definition"
+    },
+    {
+      "id": "quote-post",
+      "name": "Quote or repost with commentary",
+      "definition": "Sample definition"
+    }
+  ]
+}

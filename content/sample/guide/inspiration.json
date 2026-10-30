@@ -1,0 +1,354 @@
+{
+  "seeds": [
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "video",
+      "platform": "youtube",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "featured": true,
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "video",
+      "platform": "youtube",
+      "pillar": "proof",
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "media": "",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "video",
+      "platform": "instagram",
+      "pillar": "build",
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "media": "",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "post",
+      "platform": "Sample platform",
+      "pillar": null,
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "media": "",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "post",
+      "platform": "Sample platform",
+      "pillar": null,
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "media": "",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "build",
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "post",
+      "platform": "web",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "lists",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "post",
+      "platform": "web",
+      "pillar": "build",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "web",
+      "pillar": "build",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "video",
+      "platform": "youtube",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "video",
+      "platform": "youtube",
+      "pillar": "proof",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "post",
+      "platform": "web",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "post",
+      "platform": "web",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "post",
+      "platform": "web",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "post",
+      "platform": "web",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "perspective",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "video",
+      "platform": "youtube",
+      "pillar": "proof",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    },
+    {
+      "url": "https://example.com/sample",
+      "title": "Sample title",
+      "kind": "newsletter",
+      "platform": "substack",
+      "pillar": "lists",
+      "tags": [
+        "Sample tags",
+        "Sample tags"
+      ],
+      "image_url": "https://example.com/sample",
+      "why_we_like": "Sample why we like"
+    }
+  ]
+}

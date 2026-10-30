@@ -1,0 +1,371 @@
+{
+  "voices": [
+    {
+      "slug": "sample-author",
+      "name": "Sample name",
+      "file": "",
+      "who_speaks": "Sample who speaks",
+      "for": "Sample for",
+      "core": [
+        "Sample core",
+        "Sample core",
+        "Sample core",
+        "Sample core",
+        "Sample core"
+      ],
+      "media": "",
+      "alt": "Sample alt"
+    },
+    {
+      "slug": "sample-site",
+      "name": "Sample name",
+      "file": "",
+      "who_speaks": "Sample who speaks",
+      "for": "Sample for",
+      "core": [
+        "Sample core",
+        "Sample core",
+        "Sample core",
+        "Sample core",
+        "Sample core"
+      ],
+      "media": "",
+      "alt": "Sample alt"
+    },
+    {
+      "slug": "sample-newsletter",
+      "name": "Sample name",
+      "file": "",
+      "who_speaks": "Sample who speaks",
+      "for": "Sample for",
+      "core": [
+        "Sample core",
+        "Sample core",
+        "Sample core",
+        "Sample core",
+        "Sample core"
+      ],
+      "image_url": "https://example.com/sample",
+      "alt": "Sample alt"
+    }
+  ],
+  "core_five": [
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    },
+    {
+      "text": "Sample text",
+      "source": ""
+    }
+  ],
+  "before_after": [
+    {
+      "pillar": "proof",
+      "label": "Sample label",
+      "before": "Sample before",
+      "after": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "why": "Sample why"
+    },
+    {
+      "pillar": "build",
+      "label": "Sample label",
+      "before": "Sample before",
+      "after": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "why": "Sample why"
+    },
+    {
+      "pillar": "perspective",
+      "label": "Sample label",
+      "before": "Sample before",
+      "after": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "why": "Sample why"
+    }
+  ],
+  "soul_meaning": {
+    "text": "Sample text",
+    "source": ""
+  },
+  "banned_words": [
+    "leverage",
+    "unlock",
+    "seamless"
+  ],
+  "preferred_terms": [
+    {
+      "term": "Sample term",
+      "note": "Sample note",
+      "source": ""
+    }
+  ],
+  "banned_phrases": [
+    "harness the power of ai",
+    "going forward"
+  ],
+  "shared_bans": [],
+  "captured_edits": [
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    },
+    {
+      "date": "2026-01-01",
+      "pattern": {
+        "text": "Sample text",
+        "source": ""
+      },
+      "rule": {
+        "text": "Sample text",
+        "source": ""
+      }
+    }
+  ],
+  "editing": {
+    "lead": "Sample lead",
+    "items": [
+      {
+        "do": "Sample do",
+        "dont": "Sample dont",
+        "before": "Sample before",
+        "after": {
+          "text": "Sample text",
+          "source": ""
+        }
+      },
+      {
+        "do": "Sample do",
+        "dont": "Sample dont",
+        "before": "Sample before",
+        "after": {
+          "text": "Sample text",
+          "source": ""
+        }
+      },
+      {
+        "do": "Sample do",
+        "dont": "Sample dont",
+        "before": "Sample before",
+        "after": {
+          "text": "Sample text",
+          "source": ""
+        }
+      },
+      {
+        "do": "Sample do",
+        "dont": "Sample dont",
+        "before": "Sample before",
+        "after": {
+          "text": "Sample text",
+          "source": ""
+        }
+      },
+      {
+        "do": "Sample do",
+        "dont": "Sample dont",
+        "before": "Sample before",
+        "after": {
+          "text": "Sample text",
+          "source": ""
+        }
+      },
+      {
+        "do": "Sample do",
+        "dont": "Sample dont",
+        "before": "Sample before",
+        "after": {
+          "text": "Sample text",
+          "source": ""
+        }
+      },
+      {
+        "do": "Sample do",
+        "dont": "Sample dont",
+        "before": "Sample before",
+        "after": {
+          "text": "Sample text",
+          "source": ""
+        }
+      },
+      {
+        "do": "Sample do",
+        "dont": "Sample dont",
+        "before": "Sample before",
+        "after": {
+          "text": "Sample text",
+          "source": ""
+        }
+      }
+    ]
+  }
+}

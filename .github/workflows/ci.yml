@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Nothing in CI talks to a live service: Zernio, Twenty and Wise are mocked, and the database, proxy
+# and e2e layers run against a local Supabase stack started in the job (docs/testing.md).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Supabase images are deliberately not cached: measured on PR #10, a docker save/load cache hit took
+# 94 s (5 s restore + 62 s load + 27 s start) against 75 s for a plain pull + start.
+env:
+  CONTENT_MODE: sample
+  GTM_SKIP_ENV_FILES: "1"
+  SUPABASE_CLI_VERSION: 2.111.0
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: typecheck, unit + contract tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      # Same install Vercel runs: fails if pnpm-lock.yaml drifts from package.json.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: Install video test dependencies
+        run: |
+          sudo sed -i -e 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu|g' -e 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Unit + CLI contract + API route tests (with coverage)
+        run: pnpm test:coverage
+      - name: Coverage summary
+        if: always()
+        run: |
+          node -e '
+            const s = require("./coverage/coverage-summary.json");
+            const pick = (k) => Object.entries(s).filter(([f]) => f !== "total" && f.includes(`/${k}/`));
+            const pct = (rows, m) => { const t = rows.reduce((a, [, v]) => [a[0] + v[m].covered, a[1] + v[m].total], [0, 0]); return t[1] ? (100 * t[0] / t[1]).toFixed(1) : "n/a"; };
+            const line = (n, rows) => `| ${n} | ${pct(rows, "lines")}% | ${pct(rows, "branches")}% | ${pct(rows, "functions")}% |`;
+            const all = Object.entries(s).filter(([f]) => f !== "total");
+            console.log(["### Coverage (lib/ + cli/, a number, not a gate)", "", "| Scope | Lines | Branches | Functions |", "|---|---|---|---|", line("lib/", pick("lib")), line("cli/", pick("cli")), line("total", all)].join("\n"));
+          ' >> "$GITHUB_STEP_SUMMARY"
+      - run: pnpm build
+        env:
+          # Build-time placeholders only; the build fetches nothing from Supabase (next/font downloads Google Fonts).
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_placeholder
+
+  database:
+    name: database, RLS, storage + advisors (local Supabase)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+      - run: pnpm install --frozen-lockfile
+      - name: Install video test dependencies (B-roll proxies and stills)
+        run: |
+          sudo sed -i -e 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu|g' -e 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Start local Supabase (vendored migrations)
+        run: pnpm db:start
+      - name: Vendored migrations still match brand.example.com
+        run: pnpm check:migrations
+      - name: Upstream SQL behaviour tests (brand.example.com supabase/tests)
+        run: pnpm test:db:sql
+      - name: RLS, grants, RPCs, storage and real-DB integration
+        run: pnpm test:db
+      - name: Supabase advisors (fail on any unlisted finding)
+        run: pnpm test:db:advisors
+
+  e2e:
+    name: proxy probes + end-to-end (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+      - run: pnpm install --frozen-lockfile
+      - name: Install video test dependencies (B-roll proxies and stills)
+        run: |
+          sudo sed -i -e 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu|g' -e 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Start local Supabase in the background
+        run: pnpm db:start > supabase-start.log 2>&1 &
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(node -p 'require("@playwright/test/package.json").version')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+      - name: Install Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install chromium
+      - name: Chromium system dependencies
+        run: pnpm exec playwright install-deps chromium
+      - name: Wait for local Supabase
+        run: |
+          # `supabase status` exits 0 as soon as the database is up, while kong/auth/rest are still
+          # starting; wait until the API URL is actually reported (scripts/with-local-env.mjs needs it).
+          for i in $(seq 1 150); do
+            supabase status -o json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.exit(JSON.parse(s).API_URL?0:1)}catch{process.exit(1)}})' && exit 0
+            sleep 2
+          done
+          cat supabase-start.log; exit 1
+      - name: Build against local Supabase, then proxy probes + e2e
+        run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots-and-report
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14

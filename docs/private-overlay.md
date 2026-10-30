@@ -1,0 +1,9 @@
+# Private overlay v1
+
+Default CONTENT_MODE=sample reads only content/sample. Private mode requires PRIVATE_OVERLAY_ROOT outside the checkout, PRIVATE_OVERLAY_REVISION (40 hex characters) and PRIVATE_OVERLAY_DIGEST (SHA256 of manifest.json bytes). A manifest contains schemaVersion: 1, revision, and files mapping every required relative path to its SHA256. See REQUIRED_CONTENT in lib/content-overlay.mjs for the complete list.
+
+Missing, changed, malformed, incomplete or escaped files fail closed before any private file is served. No sample fallback or fetch token is used. Private prebuild validates the external snapshot and writes only the validated bytes to the ignored .content-runtime server payload. Runtime validates that payload against the same pinned digest and revision. Sample prebuild removes the payload and previous build cache; sample server traces exclude private runtime files. Tests and demos force samples. Preview private mode is refused. Private writers require a separate external CONTENT_WRITE_ROOT and cannot mutate an immutable overlay snapshot. Create and review a new snapshot and digest after writing.
+
+Production additionally requires canonical repository and main-branch metadata plus PRIVATE_RELEASE_SHA matching the exact deployment commit. A protected release and narrowly scoped delivery mechanism must be independently verified before configuring it. Never provide a broad repository or hub read token. Public CI and previews receive no private directory, token or production credentials. Provider secrets remain server-side.
+
+Private runtime packaging is generated at prebuild. Narrow overlay distribution and production credential scope remain release prerequisites. Keep the prior deployment serving until the new runtime has verified the exact overlay digest. Do not reconnect production based only on a local build.

@@ -1,0 +1,56 @@
+[
+  {
+    "slug": "sample-planning-worksheet",
+    "title": "Sample planning worksheet",
+    "kind": "lead_magnet",
+    "status": "shortlisted",
+    "format": "app",
+    "effort": "s",
+    "tags": [
+      "example"
+    ],
+    "summary": "A synthetic example used to demonstrate the backlog workflow."
+  },
+  {
+    "slug": "sample-list-note",
+    "title": "List sample review steps",
+    "kind": "content",
+    "status": "shortlisted",
+    "pillar": "lists",
+    "format": "text",
+    "effort": "s",
+    "source_url": "https://example.test/list",
+    "tags": [
+      "example"
+    ],
+    "summary": "List the steps in a fictional review workflow."
+  },
+  {
+    "slug": "sample-proof-note",
+    "title": "Compare fictional workflow outcomes",
+    "kind": "content",
+    "status": "shortlisted",
+    "pillar": "proof",
+    "format": "text",
+    "effort": "s",
+    "source_url": "https://example.test/proof",
+    "tags": [
+      "example-project"
+    ],
+    "summary": "Describe a synthetic input and output for a review exercise."
+  },
+  {
+    "slug": "sample-build-note",
+    "title": "Document a sample workflow",
+    "kind": "content",
+    "status": "shortlisted",
+    "pillar": "build",
+    "format": "text",
+    "effort": "s",
+    "source_url": "https://example.test/proof",
+    "tags": [
+      "example-project"
+    ],
+    "summary": "Describe a fictional workflow with an input, a review step and an output."
+  }
+]

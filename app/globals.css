@@ -1,0 +1,362 @@
+@import "tailwindcss";
+
+/* ===========================================================================
+   PRISM LIGHT: the Vibrana design system (source: Pravos-LLC/vibrana.ai
+   DESIGN.md + app/globals.css). Mirrored here because it ships as CSS, not a
+   package. When vibrana.ai changes a token, change it here too.
+   White canvas, near-black type, colour only where it earns attention.
+   =========================================================================== */
+:root {
+  /* Accent spectrum (invariant) */
+  --violet: #7c3aed;
+  --violet-tint: #8b5cf6;
+  --blue: #3b82f6;
+  --cyan: #2dd4bf;
+  --emerald: #4ade80;
+  --red: #ef4444;
+  --amber: #f59e0b;
+  --yellow: #fcd34d;
+
+  /* Deepened accent text (WCAG AA on white) */
+  --violet-strong: #6d28d9;
+  --blue-strong: #2563eb;
+  --cyan-strong: #0d9488;
+  --emerald-strong: #16a34a;
+  --amber-strong: #b45309;
+  --red-strong: #dc2626;
+
+  /* Data viz (VIB-419): one series is --viz-1; overlays add --viz-2..4 in this order, never cycled.
+     Validated with the dataviz skill's validate_palette.js (light on #fff, dark on #0a0a0b): all
+     checks pass with --pairs all, so any two may sit side by side. Text never wears these colors. */
+  --viz-1: #2563eb;
+  --viz-2: #b45309;
+  --viz-3: #0d9488;
+  --viz-4: #a21caf;
+  --viz-grid: rgba(0, 0, 0, 0.08);
+
+  /* Semantic surfaces / text / borders (light) */
+  --surface-base: #ffffff;
+  --surface-raised: #fafafa;
+  --surface-overlay: #f4f4f5;
+  --surface-card: rgba(0, 0, 0, 0.02);
+  --surface-card-hover: rgba(0, 0, 0, 0.04);
+  --surface-frost: rgba(255, 255, 255, 0.66);
+  --surface-nav: rgba(255, 255, 255, 0.94);
+  --surface-inset: rgba(255, 255, 255, 0.95);
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-default: rgba(0, 0, 0, 0.12);
+  --border-strong: rgba(0, 0, 0, 0.22);
+  --text-primary: rgba(15, 15, 17, 0.95);
+  --text-secondary: rgba(15, 15, 17, 0.66);
+  --text-tertiary: rgba(15, 15, 17, 0.48);
+
+  /* Gradients */
+  --gradient-prism: linear-gradient(135deg, #7c3aed 0%, #3b82f6 50%, #2dd4bf 100%);
+  --gradient-prism-text: linear-gradient(135deg, #6d28d9 0%, #2563eb 50%, #0d9488 100%);
+  --gradient-rainbow: linear-gradient(135deg, rgba(224, 86, 98, 0.95), rgba(232, 150, 40, 0.95),
+      rgba(40, 200, 120, 0.95), rgba(45, 150, 230, 0.95), rgba(150, 70, 230, 0.95), rgba(224, 86, 98, 0.95));
+
+  /* Fluid type scale. A new size here must also be added to the font-size group in lib/ui/cn.ts. */
+  --pl-text-xs: clamp(0.7rem, 0.65rem + 0.25vw, 0.8rem);
+  --pl-text-sm: clamp(0.85rem, 0.8rem + 0.25vw, 0.95rem);
+  --pl-text-base: clamp(1rem, 0.95rem + 0.25vw, 1.15rem);
+  --pl-text-lg: clamp(1.15rem, 1.05rem + 0.5vw, 1.35rem);
+  --pl-text-xl: clamp(1.375rem, 1.25rem + 0.6vw, 1.75rem);
+  --pl-text-2xl: clamp(1.75rem, 1.45rem + 1.4vw, 2.5rem);
+  --pl-text-3xl: clamp(2rem, 1.7rem + 1.6vw, 3rem);
+
+  /* shadcn semantic layer, Prism-mapped (RGB channels, as in vibrana.ai) */
+  --background: 255 255 255;
+  --foreground: 15 15 17;
+  --card: 255 255 255;
+  --card-foreground: 15 15 17;
+  --popover: 255 255 255;
+  --popover-foreground: 15 15 17;
+  --primary: 124 58 237;
+  --primary-foreground: 255 255 255;
+  --secondary: 250 250 250;
+  --secondary-foreground: 15 15 17;
+  --muted: 244 244 245;
+  --muted-foreground: 97 97 99;
+  --accent: 244 244 245;
+  --accent-foreground: 15 15 17;
+  --destructive: 239 68 68;
+  --destructive-foreground: 255 255 255;
+  --border: 224 224 224;
+  --input: 224 224 224;
+  --ring: 124 58 237;
+  --radius: 0.5rem;
+}
+
+/* Tailwind v4 bridge: shadcn class names resolve to the Prism channels. */
+@theme inline {
+  --color-background: rgb(var(--background));
+  --color-foreground: rgb(var(--foreground));
+  --color-card: rgb(var(--card));
+  --color-card-foreground: rgb(var(--card-foreground));
+  --color-popover: rgb(var(--popover));
+  --color-popover-foreground: rgb(var(--popover-foreground));
+  --color-primary: rgb(var(--primary));
+  --color-primary-foreground: rgb(var(--primary-foreground));
+  --color-secondary: rgb(var(--secondary));
+  --color-secondary-foreground: rgb(var(--secondary-foreground));
+  --color-muted: rgb(var(--muted));
+  --color-muted-foreground: rgb(var(--muted-foreground));
+  --color-accent: rgb(var(--accent));
+  --color-accent-foreground: rgb(var(--accent-foreground));
+  --color-destructive: rgb(var(--destructive));
+  --color-destructive-foreground: rgb(var(--destructive-foreground));
+  --color-border: rgb(var(--border));
+  --color-input: rgb(var(--input));
+  --color-ring: rgb(var(--ring));
+
+  /* Prism utilities */
+  --color-violet: var(--violet);
+  --color-violet-strong: var(--violet-strong);
+  --color-blue-strong: var(--blue-strong);
+  --color-cyan-strong: var(--cyan-strong);
+  --color-emerald-strong: var(--emerald-strong);
+  --color-amber-strong: var(--amber-strong);
+  --color-red-strong: var(--red-strong);
+  --color-viz-1: var(--viz-1);
+  --color-viz-2: var(--viz-2);
+  --color-viz-3: var(--viz-3);
+  --color-viz-4: var(--viz-4);
+  --color-ink: var(--text-primary);
+  --color-ink-2: var(--text-secondary);
+  --color-ink-3: var(--text-tertiary);
+  --color-line: var(--border-subtle);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+
+  --font-display: var(--font-display-family), -apple-system, sans-serif;
+  --font-sans: var(--font-body-family), -apple-system, sans-serif;
+  --font-mono: var(--font-mono-family), ui-monospace, monospace;
+
+  --text-pl-xs: var(--pl-text-xs);
+  --text-pl-sm: var(--pl-text-sm);
+  --text-pl-base: var(--pl-text-base);
+  --text-pl-lg: var(--pl-text-lg);
+  --text-pl-xl: var(--pl-text-xl);
+  --text-pl-2xl: var(--pl-text-2xl);
+  --text-pl-3xl: var(--pl-text-3xl);
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+}
+
+body {
+  background: var(--surface-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Shared Vibrana theme preference: this also updates the sibling apps' cookie. */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-base: #0a0a0b;
+  --surface-raised: #111114;
+  --surface-overlay: #18181b;
+  --surface-card: rgba(255, 255, 255, 0.03);
+  --surface-card-hover: rgba(255, 255, 255, 0.06);
+  --surface-frost: rgba(15, 15, 20, 0.72);
+  --surface-nav: rgba(10, 10, 11, 0.94);
+  --surface-inset: rgba(15, 15, 20, 0.95);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.22);
+  --text-primary: rgba(250, 250, 252, 0.95);
+  --text-secondary: rgba(250, 250, 252, 0.66);
+  --text-tertiary: rgba(250, 250, 252, 0.48);
+  --background: 10 10 11;
+  --foreground: 250 250 252;
+  --card: 17 17 20;
+  --card-foreground: 250 250 252;
+  --popover: 15 15 20;
+  --popover-foreground: 250 250 252;
+  --secondary: 17 17 20;
+  --secondary-foreground: 250 250 252;
+  --muted: 24 24 27;
+  --muted-foreground: 170 170 175;
+  --accent: 24 24 27;
+  --accent-foreground: 250 250 252;
+  --border: 39 39 42;
+  --input: 39 39 42;
+  --viz-1: #3b82f6;
+  --viz-2: #d97706;
+  --viz-3: #0d9488;
+  --viz-4: #a21caf;
+  --viz-grid: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] body {
+  background-color: var(--surface-base);
+}
+
+*:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* Ambient prismatic field behind the app (DESIGN.md mesh-gradient-hero). */
+.prism-field {
+  background:
+    radial-gradient(at 15% 10%, rgba(124, 58, 237, 0.06) 0px, transparent 45%),
+    radial-gradient(at 85% 5%, rgba(59, 130, 246, 0.06) 0px, transparent 45%),
+    radial-gradient(at 50% 100%, rgba(45, 212, 191, 0.05) 0px, transparent 50%);
+}
+
+[data-theme="dark"] .prism-field {
+  background-color: var(--surface-base);
+  background-image:
+    radial-gradient(at 15% 10%, rgba(124, 58, 237, 0.09) 0px, transparent 45%),
+    radial-gradient(at 85% 5%, rgba(59, 130, 246, 0.08) 0px, transparent 45%),
+    radial-gradient(at 50% 100%, rgba(45, 212, 191, 0.06) 0px, transparent 50%);
+}
+
+/* Primary CTA: violet fill; on hover a masked rainbow edge + violet/cyan glow. */
+.btn-prism {
+  position: relative;
+  overflow: hidden;
+  z-index: 1;
+  color: #fff;
+  background: var(--violet);
+  border: 1px solid var(--violet);
+  transition: all 0.3s ease;
+}
+.btn-prism::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  background: var(--gradient-rainbow);
+  background-size: 300% 300%;
+  border-radius: inherit;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  z-index: -1;
+}
+.btn-prism::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  background: var(--surface-inset);
+  border-radius: calc(var(--radius-md) - 2px);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: -1;
+}
+.btn-prism:hover:not(:disabled) {
+  color: var(--violet);
+  border-color: transparent;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 34px rgba(124, 58, 237, 0.16), 0 0 54px rgba(45, 150, 230, 0.09);
+}
+.btn-prism:hover:not(:disabled)::before {
+  opacity: 1;
+  animation: pl-rainbow-shift 3s linear infinite;
+}
+.btn-prism:hover:not(:disabled)::after {
+  opacity: 1;
+}
+
+/* Cards: flat at rest, coloured glow on hover (never grey shadow). */
+.card-glow-hover {
+  transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+}
+.card-glow-hover:hover {
+  border-color: rgba(124, 58, 237, 0.25);
+  box-shadow: 0 0 24px rgba(124, 58, 237, 0.13), 0 0 48px rgba(59, 130, 246, 0.08), 0 0 72px rgba(45, 212, 191, 0.05);
+}
+
+/* Nav link: tiny uppercase, rainbow underline wipes in on hover/active. */
+.nav-link {
+  position: relative;
+  font-size: var(--pl-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-secondary);
+  padding-bottom: 4px;
+  transition: color 0.2s ease;
+}
+.nav-link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--gradient-rainbow);
+  background-size: 300% 300%;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.35s ease;
+}
+.nav-link:hover,
+.nav-link[aria-current="page"] {
+  color: var(--text-primary);
+}
+.nav-link:hover::after,
+.nav-link[aria-current="page"]::after {
+  transform: scaleX(1);
+}
+
+.text-gradient-prism {
+  background: var(--gradient-prism-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@keyframes pl-rainbow-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Content Guide: one entrance motion (rise + fade). Static under reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .guide-rise { animation: guide-rise 700ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+}
+@keyframes guide-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Heatmap cells (VIB-419): one blue ramp over the surface; --v is the cell's share of the max (0 to 1).
+   Text flips to white above 55%. A thin cell (n < 3) is hatched at 45 degrees so it reads as tentative
+   without color alone. */
+.viz-cell {
+  background: color-mix(in oklab, var(--viz-1) calc(var(--v, 0) * 88%), var(--surface-overlay));
+  color: var(--text-primary);
+}
+.viz-cell[data-strong="true"] { color: #fff; }
+.viz-cell-empty { background: transparent; color: var(--text-tertiary); }
+.viz-hatch {
+  background-image: repeating-linear-gradient(45deg, color-mix(in oklab, var(--text-primary) 14%, transparent) 0 1px, transparent 1px 6px);
+}
+
+/* Skeletons for loading.tsx: a still block under reduced motion, a slow pulse otherwise. */
+.skeleton { background: var(--surface-overlay); border-radius: var(--radius-md); }
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton { animation: skeleton-pulse 1.6s ease-in-out infinite; }
+}
+@keyframes skeleton-pulse { 50% { opacity: 0.55; } }

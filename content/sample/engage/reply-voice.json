@@ -1,0 +1,161 @@
+{
+  "about": "Sample about",
+  "measured": {
+    "replies": 0,
+    "words_median": 0,
+    "words_p80": 0,
+    "words_p95": 0,
+    "sentences_median": 0,
+    "over_3_sentences": 0,
+    "over_50_words": 0,
+    "with_exclamation": 0,
+    "with_exclamation_when_commenter_had_none": 0,
+    "with_emoji": 0,
+    "with_emoji_on_linkedin": "Sample with emoji on linkedin",
+    "with_question": 0,
+    "with_dash": 0,
+    "with_hashtag": 0,
+    "with_link": 0
+  },
+  "rules": [
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "Sample rule",
+      "evidence": "Sample evidence"
+    },
+    {
+      "rule": "No em dashes.",
+      "evidence": "Synthetic sample style rule."
+    }
+  ],
+  "never_used": [
+    "great question",
+    "thanks for sharing",
+    "couldn't agree more",
+    "thoughts?"
+  ],
+  "examples": [
+    {
+      "platform": "linkedin",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "linkedin",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "linkedin",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "linkedin",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "linkedin",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "linkedin",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "linkedin",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "linkedin",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "linkedin",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "youtube",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "youtube",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "youtube",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "instagram",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "instagram",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    },
+    {
+      "platform": "instagram",
+      "comment": "Sample comment",
+      "john": "Sample john"
+    }
+  ]
+}

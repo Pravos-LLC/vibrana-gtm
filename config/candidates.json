@@ -1,0 +1,94 @@
+{
+  "about": "Candidate selection defaults for the synthetic demonstration.",
+  "total": {
+    "min": 5,
+    "target": 6,
+    "max": 7
+  },
+  "window_days": 7,
+  "min_audience_fit": 0.6,
+  "min_score": 5,
+  "pillar_cap": {
+    "perspective": 2
+  },
+  "lenses": [
+    {
+      "slug": "transformation",
+      "name": "Transformation",
+      "lanes": [
+        "cost",
+        "governance",
+        "security",
+        "privacy"
+      ],
+      "pillars": [
+        "perspective",
+        "build",
+        "lists"
+      ]
+    },
+    {
+      "slug": "thought_leadership",
+      "name": "Thought leadership",
+      "lanes": [
+        "builder",
+        "open_source"
+      ],
+      "pillars": [
+        "build",
+        "lists"
+      ]
+    },
+    {
+      "slug": "regenerative",
+      "name": "Regenerative",
+      "lanes": [
+        "datacenters",
+        "power",
+        "ethics",
+        "bias"
+      ],
+      "pillars": [
+        "perspective",
+        "lists"
+      ]
+    }
+  ],
+  "pillar_lens": {
+    "proof": "transformation",
+    "build": "thought_leadership",
+    "lists": "thought_leadership",
+    "perspective": "regenerative"
+  },
+  "formats": {
+    "text": {
+      "min": 0,
+      "channels": [
+        "linkedin"
+      ]
+    },
+    "carousel": {
+      "min": 1,
+      "channels": [
+        "linkedin",
+        "instagram"
+      ],
+      "prefer_pillars": [
+        "lists",
+        "build"
+      ]
+    },
+    "video": {
+      "min": 1,
+      "channels": [
+        "linkedin",
+        "instagram",
+        "youtube"
+      ],
+      "prefer_lenses": [
+        "regenerative",
+        "transformation"
+      ]
+    }
+  }
+}
