@@ -1,5 +1,5 @@
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
-import { activeOffers, eligibleOffers, selectionSchema, validateOfferResponse, type Offer, type OfferOverride, type OfferChoice, type OfferSelection } from "./offers-server";
+import { activeOffers, eligibleOffers, selectionSchema, validateOfferResponse, type Offer, type OfferOverride, type OfferChoice, type OfferSelection } from "./offers";
 import { guestRoute, scaffoldFor, type DossierRow, type Profile, type Route, type Track } from "./desk";
 import { formatOutreachEmail, outreachSignature, stripLinks } from "./email-format";
 
@@ -49,8 +49,8 @@ const list = (values: Array<string | null | undefined> | null | undefined, maxIt
   (values ?? []).map((value) => clean(value, maxText)).filter(Boolean).slice(0, maxItems);
 
 /** Build a bounded, minimal prompt context. Do not pass mailbox history or desk drafts to the model. */
-export function outreachDraftContext(row: DossierRow, profile: Profile, override: OfferOverride = "auto"): DraftContext {
-  const offers = row.track === "guest" ? [] : activeOffers();
+export function outreachDraftContext(row: DossierRow, profile: Profile, override: OfferOverride = "auto", configuredOffers: Offer[] = activeOffers()): DraftContext {
+  const offers = row.track === "guest" ? [] : configuredOffers;
   if (override !== "auto" && override !== "none" && !offers.some((offer) => offer.id === override)) throw new Error("That offer is unavailable. Choose another offer.");
   const dossier = row.dossier;
   const prospect = dossier.prospect ?? {};

@@ -1,5 +1,6 @@
 import { loadRuntimeConfig } from "../runtime-config.mjs";
 import type { OfferOverride } from "./offers";
+import { activeOffers } from "./offers-server";
 import "server-only";
 import type { DossierRow, Profile, Track } from "./desk";
 import { angleKeysFor, guestDraftContext, outreachDraftContext, outreachDraftModel, requestOutreachAngles } from "./ai-draft-core";
@@ -37,7 +38,7 @@ type GenerateOpts = { offerOverride?: OfferOverride; key?: string; model?: strin
 /** Three angles for a client prospect or, with track "guest", for a podcast guest invitation. */
 export async function generateOutreachAngles(row: DossierRow, profile: Profile, opts: GenerateOpts = {}, track: Track = "client"): Promise<OutreachAngles> {
   if (track === "guest") return requestOutreachAngles(guestDraftContext(row, profile), GUEST_SYSTEM, { ...opts, keys: angleKeysFor("guest") });
-  const context = outreachDraftContext(row, profile, opts.offerOverride);
+  const context = outreachDraftContext(row, profile, opts.offerOverride, activeOffers());
   const guidance = opts.guidance ? { ...opts.guidance, examples: opts.guidance.examples.map((e) => anonymizeExample(e, context.sender.signature)) } : null;
   return requestOutreachAngles(context, CLIENT_SYSTEM + guidanceBlock(guidance), opts);
 }

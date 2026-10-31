@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { OUTREACH_ANGLE_KEYS, outreachDraftContext, parseAngles, requestOutreachAngles, schemaForEvidence } from "../lib/outreach/ai-draft-core.js";
 import type { DossierRow, Profile } from "../lib/outreach/desk.js";
+import { activeOffers } from "../lib/outreach/offers";
 
 const row = (dossier: Record<string, unknown>) => ({
   twenty_person_id: "p-arjun", track: "client", created_at: "2026-10-26T00:00:00Z", updated_at: "2026-10-26T00:00:00Z",
@@ -10,6 +11,13 @@ const row = (dossier: Record<string, unknown>) => ({
 }) as DossierRow;
 
 const profile: Profile = { positioning: "AI transformation partner", voice: ["Clear", "Useful"], asks: ["Would a short note be useful?"] };
+
+test("the pure drafting core uses the configured server catalog without importing private loaders", () => {
+  const configured = activeOffers().map(offer => ({ ...offer, url: `https://configured.example.test/${offer.id}` }));
+  const context = outreachDraftContext(row({}), profile, "auto", configured);
+  assert.ok(context.offers?.catalog.length);
+  assert.ok(context.offers?.catalog.every(offer => offer.url.startsWith("https://configured.example.test/")));
+});
 
 const prospect = () => row({
   prospect: { first_name: "Arjun", title: "Founder" },
