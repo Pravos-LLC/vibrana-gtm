@@ -5,6 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { loadRuntimeConfig, readPrivateRuntimeConfig, validateRuntimeConfig } from '../lib/runtime-config.mjs';
 import { PRODUCTION_IDENTITY, providerReleaseContext, validateReleaseStamp } from '../lib/release-context.mjs';
 import { REQUIRED_CONTENT } from '../lib/content-overlay.mjs';
@@ -123,12 +124,58 @@ test('production bootstrap validates immutable delivery and cleans fetching key 
       }
       return '';
     };
-    entry.buildProduction(root, env, run);
+    await entry.buildProduction(root, env, run);
     assert.equal(nextRan, true); assert.equal(existsSync(temporary), false);
     assert.equal(runtime.loadRuntimeConfig(env).schemaVersion, 1); assert.equal(overlay.validateOverlay(env).mode, 'private');
+    const artifactFiles = Object.fromEntries(REQUIRED_CONTENT.map(name => [name, readFileSync(join('content/sample', name)).toString('base64')]));
+    const compressed = gzipSync(JSON.stringify({ schemaVersion: 1, revision: env.PRIVATE_CONTENT_REVISION, files: { ...artifactFiles, 'manifest.json': Buffer.from(manifest).toString('base64'), 'runtime.json': Buffer.from(runtimeBytes).toString('base64') } }));
+    const artifactEnv = { ...env, PRIVATE_CONTENT_URL: 'https://vibrana-gtm-runtime-private-abcdef123-johnellisons-projects.vercel.app/bundle.json.gz', PRIVATE_CONTENT_READ_TOKEN: 'synthetic-project-read-token', PRIVATE_CONTENT_BUNDLE_DIGEST: digest(compressed) };
+    delete (artifactEnv as Partial<typeof artifactEnv>).PRIVATE_CONTENT_SSH_KEY;
+    let artifactBuilt = false;
+    await entry.buildProduction(root, artifactEnv, (bin: string, _args: string[], options: { env: Record<string, string> }) => {
+      assert.equal(bin, 'pnpm'); assert.equal(options.env.PRIVATE_CONTENT_READ_TOKEN, undefined);
+      assert.equal(runtime.loadRuntimeConfig(options.env).schemaVersion, 1); assert.equal(overlay.validateOverlay(options.env).mode, 'private');
+      artifactBuilt = true;
+    }, async () => new Response(compressed, { status: 200 }));
+    assert.equal(artifactBuilt, true); assert.equal(runtime.loadRuntimeConfig(artifactEnv).schemaVersion, 1);
     assert.throws(() => entry.verifyDeliveryTree('120000 blob ' + 'f'.repeat(40) + '\toutside\n'));
-    assert.throws(() => entry.buildProduction(root, { ...env, VERCEL_GIT_COMMIT_REF: 'feature' }, run));
-    assert.throws(() => entry.buildProduction(root, env, () => { throw Error('fixture private command failure'); }), /^Error: Private production build failed$/);
+    await assert.rejects(() => entry.buildProduction(root, { ...env, VERCEL_GIT_COMMIT_REF: 'feature' }, run));
+    await assert.rejects(() => entry.buildProduction(root, env, () => { throw Error('fixture private command failure'); }), /^Error: Private production build failed$/);
     assert.equal(existsSync(join(root, '.content-runtime')), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('protected HTTPS artifact transport verifies immutable bytes, path allowlist and bounded gzip before materialization', async () => {
+  const entry = await import(pathToFileURL(join(process.cwd(), 'scripts/production-build.mjs')).href);
+  const root = mkdtempSync(join(tmpdir(), 'protected-artifact-'));
+  try {
+    const files = Object.fromEntries([...REQUIRED_CONTENT, 'manifest.json', 'runtime.json'].map(name => [name, Buffer.from('{"fixture":true}').toString('base64')]));
+    const bundle = { schemaVersion: 1, revision: 'b'.repeat(40), files };
+    const compressed = gzipSync(JSON.stringify(bundle));
+    const env = { ...productionEnv(), PRIVATE_CONTENT_URL: 'https://vibrana-gtm-runtime-private-abcdef123-johnellisons-projects.vercel.app/bundle.json.gz', PRIVATE_CONTENT_READ_TOKEN: 'synthetic-project-read-token', PRIVATE_CONTENT_BUNDLE_DIGEST: digest(compressed) };
+    let requested = false;
+    await entry.fetchContentArtifact(env, root, async (url: string, options: RequestInit) => {
+      requested = true; assert.equal(url, env.PRIVATE_CONTENT_URL); assert.equal(options.redirect, 'error');
+      assert.equal((options.headers as Record<string, string>)['x-vercel-protection-bypass'], env.PRIVATE_CONTENT_READ_TOKEN);
+      return new Response(compressed, { status: 200 });
+    });
+    assert.equal(requested, true); assert.equal(readFileSync(join(root, 'runtime.json'), 'utf8'), '{"fixture":true}');
+    assert.equal(entry.productionBuildEnvironment(env, root).PRIVATE_CONTENT_READ_TOKEN, undefined);
+    for (const url of ['http://vibrana-gtm-runtime-private-abcdef123-johnellisons-projects.vercel.app/bundle.json.gz', env.PRIVATE_CONTENT_URL + '?token=bad', env.PRIVATE_CONTENT_URL + '#fragment', env.PRIVATE_CONTENT_URL.replace('abcdef123', 'main'), 'https://attacker.example/bundle.json.gz']) assert.throws(() => entry.artifactLocation(url));
+    await assert.rejects(() => entry.fetchContentArtifact(env, root, async () => new Response(null, { status: 302 })));
+    assert.throws(() => entry.decodeContentArtifact(compressed, { ...env, PRIVATE_CONTENT_BUNDLE_DIGEST: '0'.repeat(64) }));
+    const encode = (value: unknown) => gzipSync(JSON.stringify(value));
+    for (const invalid of [
+      { ...bundle, revision: 'c'.repeat(40) },
+      { ...bundle, files: { ...files, '../outside.json': 'e30=' } },
+      { ...bundle, files: { ...files, 'runtime.json': 'e30===' } },
+      { ...bundle, executable: 'unreviewed.js' },
+    ]) {
+      const bytes = encode(invalid); assert.throws(() => entry.decodeContentArtifact(bytes, { ...env, PRIVATE_CONTENT_BUNDLE_DIGEST: digest(bytes) }));
+    }
+    const bomb = gzipSync(Buffer.alloc(33 * 1024 * 1024, 32));
+    assert.throws(() => entry.decodeContentArtifact(bomb, { ...env, PRIVATE_CONTENT_BUNDLE_DIGEST: digest(bomb) }));
+    await assert.rejects(() => entry.fetchContentArtifact(env, root, async () => new Response('x', { status: 200, headers: { 'content-length': String(9 * 1024 * 1024) } })));
+    await assert.rejects(() => entry.fetchContentArtifact(env, root, async () => new Response(new Uint8Array(9 * 1024 * 1024), { status: 200 })));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
