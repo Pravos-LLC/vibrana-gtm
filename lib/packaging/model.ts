@@ -12,6 +12,8 @@ export type PackagingBrief = {
   publication?: { companionStories: string[] };
   coverText?: Partial<Record<Shape,{text:string;emphasis?:string}>>;
   audience: string; promise: string; thumbnail: string; emphasis?: string; eyebrow?: string;
+  /** Leave the show name and eyebrow off the cover (John, 2026-10-31: "no john ellison show or anything on the top"). */
+  hideHeader?: boolean;
   opening: { text: string; spoken: string; source: string };
   payoff: { source: string; seconds: number; explanation: string };
   title: string; description: string;

@@ -237,3 +237,11 @@ test("native playback keeps running when its first animation timestamps are equa
   nodes["#outro"].onclick(); tick(200); tick(200); tick(300);
   assert.ok(Number(nodes["#seek"].value) < 120);
 });
+
+test("hideHeader leaves the show name and eyebrow off the cover, and is off by default", () => {
+ const b={...brief(),eyebrow:"AI · the missing question"};
+ const shown=renderToStaticMarkup(createElement(Thumbnail,{brief:b,shape:"portrait",portraits:[]}));
+ assert.ok(shown.includes('data-layer="identity"'));assert.ok(shown.includes("AI · the missing question"));
+ const hidden=renderToStaticMarkup(createElement(Thumbnail,{brief:{...b,hideHeader:true},shape:"portrait",portraits:[]}));
+ assert.ok(!hidden.includes('data-layer="identity"'));assert.ok(!hidden.includes("AI · the missing question"));assert.ok(hidden.includes('data-layer="headline"'));
+});

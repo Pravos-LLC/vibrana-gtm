@@ -23,7 +23,7 @@ export function Thumbnail({ brief: b, shape, portraits, background, focal, logo,
   } as React.CSSProperties}>
     {background && <div className="scene" data-layer="background"><img src={background} alt="" /></div>}
     <div className="atmosphere" data-layer="atmosphere" />
-    <header data-layer="identity">{logo ? <img className="logo" src={logo} alt={p.name}/> : <span className="identity">{p.name}</span>}<span className="series">{b.eyebrow ?? "A conversation worth having"}</span></header>
+    {!b.hideHeader && <header data-layer="identity">{logo ? <img className="logo" src={logo} alt={p.name}/> : <span className="identity">{p.name}</span>}<span className="series">{b.eyebrow ?? "A conversation worth having"}</span></header>}
     {b.style === "make-statement" && <div className="backdrop-type" data-layer="backdrop" aria-hidden="true">{b.backdropText ?? b.emphasis ?? b.thumbnail}</div>}
     <div className="subjects">{portraits.map((src, i) => <Portrait key={i} src={src} name={b.portraits[i].name} position={b.portraits[i].position}/>)}</div>
     {focal && <img className="focal-art" data-layer="focal" src={focal} alt="Source-backed visual for the cover promise"/>}
