@@ -32,12 +32,13 @@ Use the local environment wrapper invoked by these scripts. The vendored migrati
 
 ## Required PR checks
 
-The workflow files remain the source of executable commands and required check names:
+Workflow files define the executable commands and workflow checks. Branch protection also requires the separately reported provider check:
 
 - `typecheck, unit + contract tests, build`
 - `database, RLS, storage + advisors (local Supabase)`
 - `proxy probes + end-to-end (Playwright)`
 - `gitleaks`
 - `dependency audit`
+- `Vercel – vibrana-gtm-public-preview` (provider status from the Vercel GitHub App, app ID 8329)
 
 Run the relevant local checks for a change and retain the required hosted checks. A green sample preview proves sample behavior, not the actual private production configuration. Production replacement additionally needs the runtime, authorization and data checks in [deployment context](deployment.md) and [private data loading](private-overlay.md).
