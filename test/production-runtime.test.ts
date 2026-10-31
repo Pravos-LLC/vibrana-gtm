@@ -36,6 +36,12 @@ test('runtime schema accepts independent private identifiers and rejects unsafe 
   assert.throws(() => validateRuntimeConfig({ ...value, publicationChannels: { invalid: 'missing' } }));
   assert.throws(() => validateRuntimeConfig({ ...value, mail: { ...value.mail, from: 'test@example.test\r\nBcc: other@example.test' } }));
   assert.throws(() => validateRuntimeConfig({ ...value, candidates: { ...value.candidates, script: true } }));
+  for (const font of ['../private.json', '/etc/passwd', 'subdir/font.woff2', '..\\private.woff2', 'font.woff2\n']) {
+    const invalid = structuredClone(value); const profile = Object.values(invalid.packaging.profiles)[0] as { fonts: string[] };
+    profile.fonts[0] = font; assert.throws(() => validateRuntimeConfig(invalid));
+  }
+  const css = structuredClone(value); const profile = Object.values(css.packaging.profiles)[0] as { display: string };
+  profile.display = 'Fixture";}body{background:red}'; assert.throws(() => validateRuntimeConfig(css));
 });
 test('sample, tests and previews cannot load a private runtime config', () => {
   assert.equal(loadRuntimeConfig({ CONTENT_MODE: 'private', NODE_ENV: 'test', PRIVATE_OVERLAY_ROOT: '/nonexistent' }).schemaVersion, 1);
