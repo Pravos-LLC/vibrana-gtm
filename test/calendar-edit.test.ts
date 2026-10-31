@@ -77,8 +77,20 @@ test("killPiece refuses a post Zernio sent on some platforms (partial)", async (
 });
 
 test("killPiece of an unknown story is an error, not a success", async () => {
-  use([{ method: "GET", url: REST + "gtm_content_items", json: [] }]);
-  await assert.rejects(killPiece(adminDb(), "s1-typo"), /s1-typo has no calendar rows/);
+  use([{ method: "GET", url: REST + "gtm_content_items", json: [] }, { method: "GET", url: REST + "gtm_stories", json: [] }]);
+  await assert.rejects(killPiece(adminDb(), "s1-typo"), /s1-typo has no calendar rows and no Story/);
+});
+
+test("killPiece of a Story that was never scheduled records the kill instead of refusing", async () => {
+  const m = use([
+    { method: "GET", url: REST + "gtm_content_items", json: [] },
+    { method: "GET", url: REST + "gtm_stories", json: [{ id: "sd-never-scheduled" }] },
+    { method: "GET", url: REST + "gtm_story_assets", json: [{ id: "sd-never-scheduled-linkedin-copy" }] },
+    { method: "PATCH", url: REST + "gtm_story_feedback", json: [] },
+  ]);
+  const r = await killPiece(adminDb(), "sd-never-scheduled");
+  assert.deepEqual(r.skipped, []);
+  assert.ok(m.calls.some((c) => c.method === "POST" && c.url.includes("gtm_sync_state")), "the kill is recorded");
 });
 
 test("killPiece: a Zernio error part way leaves no row pointing at a deleted post", async () => {

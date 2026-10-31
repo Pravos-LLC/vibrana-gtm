@@ -19,8 +19,8 @@ export const KILLED_NOTE = /^Killed[:\s]/;
 
 /**
  * From calendar rows and the kill record: Stories with a post still to go (`live`), and killed Stories (`killed`): those a
- * kill recorded, while every row they have is skipped or published (a piece staged again after a kill has a live row and
- * comes back).
+ * kill recorded, while every row they have is skipped or published, or they have none (a piece staged again after a kill
+ * has a live row and comes back).
  */
 export function boardSets(rows: { story_id: string; status: string }[], recorded: Set<string> = new Set()): BoardIds {
   const byStory = new Map<string, string[]>();
@@ -30,6 +30,8 @@ export function boardSets(rows: { story_id: string; status: string }[], recorded
     if (statuses.some((s) => s !== "published" && s !== "skipped")) live.add(id);
     else if (recorded.has(id)) killed.add(id);
   }
+  // A piece killed before it was ever scheduled has no rows to loop over, and is still killed.
+  for (const id of recorded) if (!live.has(id)) killed.add(id);
   return { live, killed };
 }
 

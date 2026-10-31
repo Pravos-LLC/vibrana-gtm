@@ -45,6 +45,11 @@ test("only a recorded kill leaves the board; skipped rows alone never hide a pie
   assert.deepEqual([...boardSets(rows).killed], [], "no record, no kill");
 });
 
+test("a recorded kill with no calendar rows leaves the board (never scheduled), unless it is staged again", () => {
+  assert.deepEqual([...boardSets([], new Set(["sd-never"])).killed], ["sd-never"]);
+  assert.deepEqual([...boardSets([{ story_id: "sd-never", status: "scheduled" }], new Set(["sd-never"])).killed], []);
+});
+
 test("the kill record is read completely and fails loudly", async () => {
   const { createClient } = await import("@supabase/supabase-js");
   const { installFetchMock } = await import("./support/fetch-mock.ts");
