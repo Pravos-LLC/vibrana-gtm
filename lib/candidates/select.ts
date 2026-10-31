@@ -11,7 +11,7 @@
 //      text posts.
 // A signal that already became a candidate in another week is never picked again.
 import type { SupabaseClient } from "@supabase/supabase-js";
-import candidatesJson from "../../config/candidates.json";
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { must } from "../db";
 import { localDate } from "../reports/week";
 import type { Brief } from "../signals/config";
@@ -38,7 +38,7 @@ export type CandidatesConfig = {
   pillar_lens: Record<CandidatePillar, Lens>;
   formats: Record<CandidateFormat, { min: number; channels: string[]; prefer_pillars?: string[]; prefer_lenses?: string[] }>;
 };
-export const candidatesConfig = () => candidatesJson as CandidatesConfig;
+export const candidatesConfig = () => loadRuntimeConfig().candidates as CandidatesConfig;
 
 export type Source = { title: string; url: string; source: string };
 export type SignalRow = {

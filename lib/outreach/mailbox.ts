@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // Server-only Gmail reader. This module is never imported by a client component.
 // No send, label mutation, read receipts, or durable token/message storage.
@@ -11,7 +12,7 @@ export type OutreachMail = { id: string; subject: string; email_sent_at?: string
 export type MailStatus = "reply" | "automated" | "delivery-failure" | "awaiting-reply";
 export type Conversation = { id: string; draftId: string; company: string; subject: string; status: MailStatus; unread: boolean; lastAt: string; snippet: string; forwarded?: boolean; messageIds?: string[] };
 export type MailboxConfig = { email: string; clientId: string; clientSecret: string; refreshToken: string };
-export const MAILBOX = "user-045d73df3c9a@example.com";
+export const MAILBOX = loadRuntimeConfig().mail.mailbox;
 export const PAGE_SIZE = 25;
 export const validThreadId = (id: string) => /^[a-f0-9]{1,64}$/i.test(id);
 export const validPageToken = (token: string) => token.length <= 2048 && /^[a-zA-Z0-9_+=/.-]*$/.test(token);

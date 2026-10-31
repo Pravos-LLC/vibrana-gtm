@@ -72,6 +72,7 @@ test('build materialization survives an absent external root and sample builds r
  try {
   mkdirSync(join(repo,'lib'));mkdirSync(join(repo,'content'));
   cpSync(join(process.cwd(),'lib/content-overlay.mjs'),join(repo,'lib/content-overlay.mjs'));
+  cpSync(join(process.cwd(),'lib/release-context.mjs'),join(repo,'lib/release-context.mjs'));
   cpSync(join(process.cwd(),'content/sample'),join(repo,'content/sample'),{recursive:true});
   const loader=await import(pathToFileURL(join(repo,'lib/content-overlay.mjs')).href);
   loader.prepareContentBuild(snapshot.env);
@@ -85,7 +86,7 @@ test('build materialization survives an absent external root and sample builds r
  } finally {rmSync(snapshot.root,{recursive:true,force:true});rmSync(repo,{recursive:true,force:true});}
 });
 test('canonical production refuses test/demo bypasses even with an otherwise pinned release', () => {
- const env={CONTENT_MODE:'private',VERCEL_ENV:'production',VERCEL_GIT_REPO_OWNER:'Pravos-LLC',VERCEL_GIT_REPO_SLUG:'vibrana-gtm',VERCEL_GIT_COMMIT_REF:'main',VERCEL_GIT_COMMIT_SHA:'a'.repeat(40),PRIVATE_RELEASE_SHA:'a'.repeat(40)};
+ const env={CONTENT_MODE:'private',VERCEL_ENV:'production',VERCEL_GIT_PROVIDER:'github',VERCEL_PROJECT_ID:'prj_7pEB6cPxDSB77W1UF2sFcl2EmCRt',VERCEL_GIT_REPO_OWNER:'Pravos-LLC',VERCEL_GIT_REPO_SLUG:'vibrana-gtm',VERCEL_GIT_REPO_ID:'1440425392',VERCEL_GIT_COMMIT_REF:'main',VERCEL_GIT_COMMIT_SHA:'a'.repeat(40),VERCEL_DEPLOYMENT_ID:'dpl_example',PRIVATE_CONTENT_REVISION:'b'.repeat(40),PRIVATE_OVERLAY_DIGEST:'c'.repeat(64),PRIVATE_RUNTIME_DIGEST:'d'.repeat(64)};
  assert.equal(contentMode(env),'private');
  assert.throws(() => contentMode({...env,DEMO_MODE:'1'}));
  assert.throws(() => contentMode({...env,NODE_ENV:'test'}));

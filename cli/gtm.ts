@@ -1,4 +1,5 @@
 #!/usr/bin/env -S npx tsx
+import { loadRuntimeConfig } from "../lib/runtime-config.mjs";
 // gtm: agent-first CLI for the content calendar, Zernio publishing, and cockpit sync.
 // Every command accepts --json for machine-readable output.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -1460,7 +1461,7 @@ const commands: Record<string, () => Promise<void>> = {
         const waiting = await listCandidates(db!, { week_start: week, status: "candidate" });
         try {
           r.email_id = (await sendCandidatesEmail(waiting.map((c) => ({ ...c, john_slots: findAgentNotes([c.title, c.body, c.instagram ?? "", JSON.stringify(c.slides ?? ""), JSON.stringify(c.video ?? "")].join("\n")).filter((n) => /^\[JOHN/i.test(n)).length })), week,
-            { to: flag("--to") ?? process.env.CANDIDATES_EMAIL_TO ?? process.env.SIGNALS_DIGEST_TO ?? "user-f538cb95fc21@example.com", cockpitUrl: process.env.GTM_COCKPIT_URL ?? "http://localhost:3000" })).id;
+            { to: flag("--to") ?? process.env.CANDIDATES_EMAIL_TO ?? process.env.SIGNALS_DIGEST_TO ?? loadRuntimeConfig().mail.notify, cockpitUrl: process.env.GTM_COCKPIT_URL ?? "http://localhost:3000" })).id;
         } catch (e) {
           r.email_error = (e as Error).message;
           process.exitCode = 1;

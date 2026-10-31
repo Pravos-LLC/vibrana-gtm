@@ -1,5 +1,5 @@
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
-import { activeOffers, eligibleOffers, selectionSchema, validateOfferResponse, type Offer, type OfferOverride, type OfferChoice, type OfferSelection } from "./offers";
+import { activeOffers, eligibleOffers, selectionSchema, validateOfferResponse, type Offer, type OfferOverride, type OfferChoice, type OfferSelection } from "./offers-server";
 import { guestRoute, scaffoldFor, type DossierRow, type Profile, type Route, type Track } from "./desk";
 import { formatOutreachEmail, outreachSignature, stripLinks } from "./email-format";
 

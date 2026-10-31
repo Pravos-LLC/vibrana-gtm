@@ -1,21 +1,23 @@
+import { packagingProfiles } from "./server-catalog";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, dirname, relative } from "node:path";
 import { COVER_STYLES } from "./styles";
-import { BRANDS, PROFILES, TEMPLATES } from "./catalog";
+import { TEMPLATES } from "./catalog";
 import { readBrief, checkPackage } from "./model";
 import { renderPackage } from "./render";
 
 export async function renderGallery(briefPath: string, output: string, options: { styles?: boolean; artDir?: string } = {}) {
   const original = readBrief(briefPath), root = resolve(output);
+  const profiles = packagingProfiles(), brands = Object.keys(profiles);
   mkdirSync(root, { recursive: true });
   const entries: Array<{ brand: string; theme: string; template: string; landscape: string; portrait: string; square: string; manifest: string }> = [];
   const styles = options.styles ? Object.keys(COVER_STYLES) as Array<keyof typeof COVER_STYLES> : undefined;
   const selections = styles ? styles.map(style => ({ template: COVER_STYLES[style].family, style })) : (Object.keys(TEMPLATES) as Array<keyof typeof TEMPLATES>).map(template => ({ template, style: undefined }));
-  const total = BRANDS.length * 2 * selections.length;
+  const total = brands.length * 2 * selections.length;
   const { style: _oldStyle, typography: _oldType, backdropText: _oldBackdrop, ...base } = original;
-  for (const brand of BRANDS) for (const theme of ["light", "dark"] as const) for (const { template, style } of selections) {
+  for (const brand of brands) for (const theme of ["light", "dark"] as const) for (const { template, style } of selections) {
     const dir = resolve(root, brand, theme, style ?? template); mkdirSync(dir, { recursive: true });
     // Relative source references must be rebased when a specimen moves.
     const rebase = (p: string) => relative(dir, resolve(dirname(briefPath), p));
@@ -48,7 +50,7 @@ export async function renderGallery(briefPath: string, output: string, options: 
   </article>);
   const html = renderToStaticMarkup(<html><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Content Packaging / Template Library</title></head><body>
     <header><p className="eyebrow">CONTENT PACKAGING / 01</p><h1>Thumbnail studies</h1><p>{styles ? "Twelve Riverside-inspired styles. Three identities. Two themes. Headline type is independent of website fonts. Click motion to play or scrub native layers." : "Seven compositions. Three identities. Two themes. Each specimen uses the same real episode source."}</p><nav>
-      <label>Brand <select id="brand">{BRANDS.map(b => <option value={b} key={b}>{PROFILES[b].name}</option>)}</select></label>
+      <label>Brand <select id="brand">{brands.map(b => <option value={b} key={b}>{profiles[b].name}</option>)}</select></label>
       <label>Theme <select id="theme"><option value="dark">Dark</option><option value="light">Light</option></select></label>
       <label>Shape <select id="shape"><option value="landscape">Episode / horizontal</option><option value="portrait">Short / vertical</option><option value="square">Spotify / square</option></select></label>
     </nav></header><main>{cards}</main><footer>Composition specimens, not performance claims. Click an image for its full export. Refer to the playbook for selection and evidence.</footer>

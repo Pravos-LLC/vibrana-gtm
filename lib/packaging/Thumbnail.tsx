@@ -1,17 +1,17 @@
 import { HEADLINE_TYPES, headlineType } from "./styles";
 import React from "react";
-import { PROFILES, SIZES, type Shape } from "./catalog";
+import { PROFILES, SIZES, type Shape, type Profile } from "./catalog";
 import type { PackagingBrief } from "./model";
 
 export function Portrait({ src, name, position }: { src: string; name: string; position?: string }) {
   return <div className="portrait" data-layer="subject"><img src={src} alt={name} style={{ objectPosition: position ?? "center bottom" }} /></div>;
 }
 /** One composition, with brand and semantic theme injected at the boundary. */
-export function Thumbnail({ brief: b, shape, portraits, background, focal, logo }: {
-  brief: PackagingBrief; shape: Shape; portraits: string[]; background?: string; focal?: string; logo?: string;
+export function Thumbnail({ brief: b, shape, portraits, background, focal, logo, profile }: {
+  brief: PackagingBrief; shape: Shape; portraits: string[]; background?: string; focal?: string; logo?: string; profile?: Profile;
 }) {
   const headline = HEADLINE_TYPES[headlineType(b)];
-  const p = PROFILES[b.brand], t = p.themes[b.theme], [width, height] = SIZES[shape];
+  const p = profile ?? PROFILES[b.brand], t = p.themes[b.theme], [width, height] = SIZES[shape];
   const copy = b.coverText?.[shape], thumbnail = copy?.text ?? b.thumbnail, chosenEmphasis = copy?.emphasis ?? b.emphasis;
   const emphasis = chosenEmphasis && thumbnail.includes(chosenEmphasis) ? chosenEmphasis : undefined;
   const parts = emphasis ? thumbnail.split(emphasis) : [thumbnail];

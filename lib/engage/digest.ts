@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // The morning "N replies to approve" email (Resend), linking to /engage. Same sender setup as the
 // Signal Desk digest.
@@ -68,7 +69,7 @@ export async function sendEngageEmail(items: DigestItem[], opts: { to: string; c
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({
-      from: process.env.ENGAGE_DIGEST_FROM ?? "Vibrana Engage <user-10beea67bd6f@example.com>",
+      from: process.env.ENGAGE_DIGEST_FROM ?? loadRuntimeConfig().mail.engageFrom,
       to: opts.to.split(",").map((s) => s.trim()).filter(Boolean),
       subject: engageSubject(items, flags),
       html: engageHtml(items, opts.cockpitUrl, opts.date, flags),

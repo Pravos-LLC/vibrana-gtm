@@ -1,3 +1,4 @@
+import { packagingBrandOptions } from "@/lib/packaging/server-catalog";
 import { Suspense } from "react";
 import { loadSharedSection, type SharedSection } from "./shared/section";
 import { ReleasedNotice } from "@/components/review/released-notice";
@@ -43,7 +44,7 @@ async function ContentReviewBody({ searchParams }: { searchParams: Promise<Recor
   const params = await searchParams;
   if (params.view === "templates") {
     const db = await sessionDb(), story = typeof params.story === "string" ? params.story : undefined;
-    return <Shell title="Content review" active="/content" wide><div className="mb-6 flex gap-5 text-sm"><Link href="/content" className="underline">Publishing review</Link><span>Thumbnail templates</span></div><TemplateReview assets={await loadTemplateReview(db, story)}/></Shell>;
+    return <Shell title="Content review" active="/content" wide><div className="mb-6 flex gap-5 text-sm"><Link href="/content" className="underline">Publishing review</Link><span>Thumbnail templates</span></div><TemplateReview assets={await loadTemplateReview(db, story)} brands={packagingBrandOptions()}/></Shell>;
   }
   await restoreFilters("/content", params, CONTENT_REMEMBERED);
   const filters = contentFilters(params);

@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "@/lib/runtime-config.mjs";
 import { notFound } from "next/navigation";
 import { Shell } from "@/components/shell";
 import { ChapterChips, ChapterRail, type Chapter } from "@/components/guide/chapter-rail";
@@ -20,7 +21,7 @@ const CHAPTERS: Chapter[] = [
   { id: "stories", title: "Stories we tell" },
   { id: "voice", title: "Voice" },
   { id: "regenera", title: "Regenera" },
-  { id: "personal", title: "Sample Author Substack" },
+  { id: "personal", title: `${loadRuntimeConfig().brand.authorLabel} Substack` },
   { id: "assets", title: "Asset library" },
   { id: "channels", title: "Channels" },
   { id: "inspiration", title: "Inspiration" },

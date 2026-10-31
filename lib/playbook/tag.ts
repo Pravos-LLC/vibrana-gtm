@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // `gtm playbook tag` (VIB-421): tags each approved, scheduled or published calendar item with one hook,
 // one storyline and one CTA from the content canon's taxonomy, so the weekly report can grade our posts
@@ -72,7 +73,7 @@ export function selectRowsToTag<R extends TagRow>(rows: R[], opts: { all?: boole
 const list = (entries: { id: string; name: string; definition: string; signals?: string[] }[]) =>
   entries.filter((e) => !(e as { retired?: boolean }).retired).map((e) => `- ${e.id}: ${e.name}. ${e.definition}${e.signals?.length ? ` Signals: ${e.signals.join("; ")}.` : ""}`).join("\n");
 
-export const TAG_SYSTEM = `You classify one social post by Sample Author (Vibrana, an AI transformation consultancy) against the content canon's taxonomy.
+export const TAG_SYSTEM = `You classify one social post by ${loadRuntimeConfig().brand.authorLabel} (Vibrana, an AI transformation consultancy) against the content canon's taxonomy.
 
 Pick exactly one id from each list. Judge the copy as written, not what the author may have meant.
 - hook: how the first line or two (or the opening of a video script) earns attention.

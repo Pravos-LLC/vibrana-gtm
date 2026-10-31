@@ -1,8 +1,9 @@
+import { packagingProfiles } from "./server-catalog";
 import { COVER_STYLES, HEADLINE_TYPES, type CoverStyle, type HeadlineType } from "./styles";
 import { createHash } from "node:crypto";
 import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { BRANDS, PROFILES, SIZES, TEMPLATES, TOOLKIT_VERSION, type Brand, type Shape, type Template, type Theme } from "./catalog";
+import { SIZES, TEMPLATES, TOOLKIT_VERSION, type Brand, type Shape, type Template, type Theme } from "./catalog";
 import { imageProblems, sniffImage, IMAGE_TYPES, PUBLISH_IMAGE_BYTES } from "../image-loadable";
 
 export type PackagingBrief = {
@@ -36,13 +37,13 @@ export function fileHash(path: string): string {
   finally { closeSync(fd); }
   return h.digest("hex");
 }
-export function catalogHash(): string { return hash(JSON.stringify({ version: TOOLKIT_VERSION, profiles: PROFILES, templates: TEMPLATES, styles: COVER_STYLES, typography: HEADLINE_TYPES, sizes: SIZES })); }
+export function catalogHash(): string { return hash(JSON.stringify({ version: TOOLKIT_VERSION, profiles: packagingProfiles(), templates: TEMPLATES, styles: COVER_STYLES, typography: HEADLINE_TYPES, sizes: SIZES })); }
 const text = (v: unknown) => typeof v === "string" && !!v.trim();
 export function briefProblems(b: PackagingBrief): string[] {
   const errors: string[] = [];
   if (!b || b.schema !== 1) return ["packaging schema must be 1"];
   if (!text(b.story) || !/^[a-z0-9][a-z0-9-]*$/.test(b.story)) errors.push("invalid story id");
-  if (!BRANDS.includes(b.brand)) errors.push("unregistered brand");
+  if (!Object.hasOwn(packagingProfiles(), b.brand)) errors.push("unregistered brand");
   if (!["light", "dark"].includes(b.theme)) errors.push("invalid theme");
   if (!Object.hasOwn(TEMPLATES, b.template)) errors.push("unregistered template");
   if (b.style !== undefined && !Object.hasOwn(COVER_STYLES, b.style)) errors.push("unregistered cover style");

@@ -60,6 +60,10 @@ test("agent stages behind a started later stage read as done; an optional stage 
   assert.deepEqual(carousel.stages.map((s) => s.status), ["done", "review"]);
   const video = pipelineView(PIPELINES.video, [], { stagedStages: [FINAL], final: { staged: true, approved: false, changes: false } });
   assert.equal(video.current?.stage.key, FINAL, "a staged video final is the review, with no gate in front of it");
+  const stale = pipelineView(PIPELINES.video, [row("motion", "todo"), row("packaging", "todo")], { stagedStages: [FINAL], final: { staged: true, approved: false, changes: false } });
+  assert.equal(stale.current?.stage.key, FINAL, "stale todo rows on agent stages behind a staged final do not hide it");
+  const open = pipelineView(PIPELINES.video, [row("motion", "todo")]);
+  assert.equal(open.current?.stage.key, "motion", "a todo row with nothing later started is still todo");
 });
 
 test("final is derived from the platform approvals; once approved nothing is current and a third party may still be waited on", () => {

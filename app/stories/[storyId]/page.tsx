@@ -1,3 +1,5 @@
+import { publicationOf } from "@/lib/substack";
+import { publicationConfig } from "@/lib/publications-server";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
@@ -141,7 +143,7 @@ export default async function StoryPage({ params }: { params: Promise<{ storyId:
           const used = images.filter((image) => text.prose.includes(image.file));
           const reviewChannels = reviews.filter((review) => review.asset_id === asset.id).map((review) => review.channel);
           const newsletter = asset.kind === "copy" && (reviewChannels.includes("newsletter") || isNewsletterMeta(frontmatterMeta(text.frontmatter)));
-          const exported = newsletter ? newsletterExport(asset.body ?? "", exportSources) : null;
+          const exported = newsletter ? newsletterExport(asset.body ?? "", exportSources, publicationConfig()) : null;
           return (
             <StoryAssetCard
               key={asset.id}
@@ -185,4 +187,4 @@ function decode(value?: string) {
 }
 
 const isNewsletterMeta = (meta: Record<string, string>) =>
-  [meta.publication, meta.channel].some((v) => v !== undefined && /^(sample_author|regenera|[a-z]+-substack)/.test(v));
+  publicationOf(meta, publicationConfig()) !== null || [meta.channel].some((v) => v !== undefined && /^[a-z]+-substack/.test(String(v)));

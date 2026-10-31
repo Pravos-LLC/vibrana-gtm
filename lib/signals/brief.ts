@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // Briefs for the top stories: what happened, why it matters to Vibrana's buyers, the tension worth
 // writing about, and three angles. Facts come only from the story's own sources (the copy-brief rule:
@@ -13,7 +14,7 @@ import { listStories, storyItems } from "./pipeline";
 export const BRIEF_MODEL = "openai/gpt-6.1-sol";
 export const briefModel = () => process.env.SIGNALS_BRIEF_MODEL || BRIEF_MODEL;
 
-const system = () => `You brief Sample Author, founder of Vibrana (an AI transformation consultancy for companies), on one AI news story so he can decide whether to write about it.
+const system = () => `You brief ${loadRuntimeConfig().brand.authorLabel}, founder of Vibrana (an AI transformation consultancy for companies), on one AI news story so he can decide whether to write about it.
 
 Rules:
 - Use only facts stated in the sources provided. Never add a number, name, quote or claim that is not in them. If the sources disagree or are thin, say so.

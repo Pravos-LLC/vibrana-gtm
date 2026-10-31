@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 // Entry points shared by the Vercel cron routes and the `gtm signals` CLI.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -70,7 +71,7 @@ export async function runDigest(db: SupabaseClient, opts: { dryRun?: boolean; to
   const date = new Intl.DateTimeFormat("en-US", { timeZone: process.env.SIGNALS_DIGEST_TZ ?? "Asia/Makassar", weekday: "short", month: "short", day: "numeric" }).format(now);
   const cockpitUrl = process.env.GTM_COCKPIT_URL ?? "http://localhost:3000";
   if (opts.dryRun) return { briefs, stories, sent: null };
-  const to = opts.to ?? process.env.SIGNALS_DIGEST_TO ?? "user-f538cb95fc21@example.com";
+  const to = opts.to ?? process.env.SIGNALS_DIGEST_TO ?? loadRuntimeConfig().mail.notify;
   try {
     const sent = await sendDigest(cfg, stories, { to, cockpitUrl, date });
     if (run) await finishRun(db, run.id, { stories: stories.length, briefed: briefs.briefed, email_id: sent.id }, briefs.errors);

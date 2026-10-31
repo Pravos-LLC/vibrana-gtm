@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PUBLICATIONS, substackEditorUrl, type Publication } from "@/lib/publications";
+
 import type { SubstackExport } from "@/lib/substack";
 import type { NewsletterImage } from "@/lib/newsletter-card";
 import { WatchedImage } from "@/components/media/watched-media";
@@ -27,7 +27,7 @@ async function toPng(url: string): Promise<Blob> {
 export function SubstackExportPanel({ data, images, disabled }: { data: SubstackExport; images: ExportPanelImage[]; disabled?: boolean }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const publication = data.publication ? PUBLICATIONS[data.publication] : null;
+  const publication = data.publicationDetails;
 
   async function run(label: string, write: () => Promise<void>) {
     setNotice(null);
@@ -57,7 +57,7 @@ export function SubstackExportPanel({ data, images, disabled }: { data: Substack
         {publication
           ? <Badge variant="info" data-testid="substack-publication">{publication.label}</Badge>
           : <Badge variant="destructive">No publication set</Badge>}
-        {publication && <a href={substackEditorUrl(data.publication as Publication)} target="_blank" rel="noreferrer" data-testid="substack-editor" className="text-xs text-violet-strong hover:underline">Open Substack editor ({publication.url.replace("https://", "")})</a>}
+        {publication && <a href={`${publication.url}/publish/post?type=newsletter`} target="_blank" rel="noreferrer" data-testid="substack-editor" className="text-xs text-violet-strong hover:underline">Open Substack editor ({publication.url.replace("https://", "")})</a>}
       </div>
       <dl className="mt-3 grid gap-2 text-sm">
         {([["Title", data.title], ["Subtitle", data.subtitle], ...(data.subject && data.subject !== data.title ? [["Email subject", data.subject]] : [])] as [string, string][]).map(([label, value]) => (

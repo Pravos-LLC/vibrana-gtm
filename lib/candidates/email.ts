@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // "N candidates waiting": the Sunday email (Resend), the same plain pattern as the Signal Desk digest. It links
 // to /signals?view=candidates, where John sends each one to review, edits it or rejects it.
@@ -53,7 +54,7 @@ export async function sendCandidatesEmail(list: EmailCandidate[], weekStart: str
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({
-      from: process.env.CANDIDATES_EMAIL_FROM ?? process.env.SIGNALS_DIGEST_FROM ?? "Vibrana Signal Desk <user-10beea67bd6f@example.com>",
+      from: process.env.CANDIDATES_EMAIL_FROM ?? process.env.SIGNALS_DIGEST_FROM ?? loadRuntimeConfig().mail.from,
       to: opts.to.split(",").map((s) => s.trim()).filter(Boolean),
       subject: candidatesSubject(list, weekStart), html: candidatesHtml(list, weekStart, opts.cockpitUrl), text: candidatesText(list, weekStart, opts.cockpitUrl),
     }),

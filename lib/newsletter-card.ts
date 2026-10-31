@@ -1,6 +1,6 @@
 // The Substack card in /content (John, 2026-10-16: "add substack as a channel, and I'll copy paste to publish"). Pure, so
 // the page and the Story page build the same export, and every rule here is unit tested.
-import { substackEditorUrl } from "./publications";
+import { substackEditorUrl, SAMPLE_PUBLICATION_CONFIG, type PublicationConfig } from "./publications";
 import { referencedImages, substackExport, type SubstackExport } from "./substack";
 
 /** An image as the export panel needs it: `url` goes into the pasted HTML, `copyUrl` feeds "Copy image". */
@@ -69,13 +69,13 @@ export function withoutPublished<R extends Row>(own: Asset[], rows: R[]): R[] {
  * used when the image has one; otherwise the signed URL (flagged as expiring by the panel), so the copy still works
  * while the public bucket is not configured.
  */
-export function newsletterExport(body: string, images: Array<{ source: string; signedUrl: string | null; publicUrl: string | null; alt: string }>): NewsletterExport {
+export function newsletterExport(body: string, images: Array<{ source: string; signedUrl: string | null; publicUrl: string | null; alt: string }>, config: PublicationConfig = SAMPLE_PUBLICATION_CONFIG): NewsletterExport {
   const stored = images.filter((i) => i.signedUrl).map((i) => ({ file: fileOf(i.source), signedUrl: i.signedUrl!, publicUrl: i.publicUrl }));
-  const data = substackExport(body, stored.map((i) => ({ file: i.file, url: i.publicUrl ?? i.signedUrl, permanent: Boolean(i.publicUrl) })));
+  const data = substackExport(body, stored.map((i) => ({ file: i.file, url: i.publicUrl ?? i.signedUrl, permanent: Boolean(i.publicUrl) })), config);
   return {
     data,
     images: data.images.map((image) => ({ ...image, copyUrl: stored.find((s) => s.file === image.file)?.signedUrl ?? image.url })),
-    editorUrl: data.publication ? substackEditorUrl(data.publication) : null,
+    editorUrl: data.publication ? substackEditorUrl(data.publication, config.publications) : null,
   };
 }
 

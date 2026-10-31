@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 import { loadContent } from "../../lib/content-overlay.mjs";
 // Drafts replies to new comments in John's voice (VIB-423). One OpenRouter call per post, with a strict
@@ -56,7 +57,7 @@ export const STANCE_RULES = `- "supportive": agrees, thanks, adds an example in 
 - "spam": promotion, scams, bots, link drops.
 And "objection": one short line naming what they push back on or misread ("cost of training is ignored"), in neutral words, no quotes from them. Empty when they are supportive or simply asking.`;
 
-const SYSTEM = `You draft replies for Sample Author to comments and direct messages on his social posts. John runs Vibrana, an AI transformation consultancy for companies, and is building AIOS. He reads every draft and approves, edits or skips it.
+const SYSTEM = `You draft replies for ${loadRuntimeConfig().brand.authorLabel} to comments and direct messages on his social posts. John runs Vibrana, an AI transformation consultancy for companies, and is building AIOS. He reads every draft and approves, edits or skips it.
 
 Classify each target comment:
 - "reply": a substantive comment or question John can answer from the post and the thread alone.
@@ -117,7 +118,7 @@ const STRUCTURE = /<\/?\s*(?:linked_page|target|lessons|john_examples|example|po
 export const untag = (s: string) => s.replace(STRUCTURE, "");
 
 export function draftPrompt(input: DraftInput): string {
-  const thread = input.thread.slice(-20).map((t) => `- ${t.own ? "John" : untag(t.author)}: ${untag(t.text.slice(0, 600))}`).join("\n");
+  const thread = input.thread.slice(-20).map((t) => `- ${t.own ? loadRuntimeConfig().brand.authorLabel : untag(t.author)}: ${untag(t.text.slice(0, 600))}`).join("\n");
   const targets = input.targets.map((t) => [
     `<target comment_id="${t.id}" kind="${t.kind}">`, `author: ${untag(t.author)}`, t.about ? `about the author: ${untag(t.about.slice(0, 300))}` : null,
     t.john_says ? `john_says: ${t.john_says.slice(0, 200)}` : null,

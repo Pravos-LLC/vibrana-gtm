@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // The morning digest: the top briefed stories by email (Resend), linking back to /signals.
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -79,7 +80,7 @@ export async function sendDigest(cfg: SignalsConfig, stories: DigestStory[], opt
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({
-      from: process.env.SIGNALS_DIGEST_FROM ?? "Vibrana Signal Desk <user-10beea67bd6f@example.com>",
+      from: process.env.SIGNALS_DIGEST_FROM ?? loadRuntimeConfig().mail.from,
       to: opts.to.split(",").map((s) => s.trim()).filter(Boolean),
       subject: digestSubject(stories, opts.date),
       html: digestHtml(cfg, stories, opts.cockpitUrl, opts.date),

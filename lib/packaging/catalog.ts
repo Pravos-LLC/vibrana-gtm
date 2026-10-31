@@ -2,7 +2,8 @@ export { COVER_STYLES, HEADLINE_TYPES } from "./styles";
 /** Composition is independent of brand, theme and editorial voice. */
 export const TOOLKIT_VERSION = "1.1.0";
 export const BRANDS = ["sample-author", "vibrana", "aios"] as const;
-export type Brand = typeof BRANDS[number];
+// Operational brand IDs are validated against the pinned server catalog.
+export type Brand = string;
 export type Theme = "light" | "dark";
 export const SIZES = { landscape: [1920, 1080], portrait: [1080, 1920], square: [1080, 1080], feed: [1080, 1350] } as const;
 export type Shape = keyof typeof SIZES;

@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // Tells John when a third party acts on their review link, so a note or an approval never waits for him to open
 // /content. Best effort: the decision is already saved when this runs, and a failed email is only logged.
@@ -25,8 +26,8 @@ export async function notifyJohn(e: ReviewerEvent, opts: { fetcher?: typeof fetc
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({
-      from: process.env.REVIEW_NOTIFY_FROM ?? "Vibrana GTM <user-10beea67bd6f@example.com>",
-      to: (process.env.REVIEW_NOTIFY_TO ?? process.env.SIGNALS_DIGEST_TO ?? "user-f538cb95fc21@example.com").split(",").map((s) => s.trim()).filter(Boolean),
+      from: process.env.REVIEW_NOTIFY_FROM ?? loadRuntimeConfig().mail.outreachFrom,
+      to: (process.env.REVIEW_NOTIFY_TO ?? process.env.SIGNALS_DIGEST_TO ?? loadRuntimeConfig().mail.notify).split(",").map((s) => s.trim()).filter(Boolean),
       subject: eventSubject(e),
       html: `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#2b2838;max-width:600px"><p style="font-weight:600">${esc(eventSubject(e))}</p>${e.note ? `<blockquote style="margin:0;padding:8px 12px;border-left:3px solid #6d4aff;white-space:pre-wrap">${esc(e.note)}</blockquote>` : ""}<p>${esc(after)}</p><p><a href="${esc(link)}" style="color:#6d4aff">Open it in /content</a></p></body></html>`,
       text: [eventSubject(e), "", e.note, "", after, link].filter((l, i) => l || i === 1).join("\n"),

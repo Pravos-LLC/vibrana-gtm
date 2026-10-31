@@ -1,10 +1,11 @@
+import { packagingProfiles, defaultPackagingBrand } from "./server-catalog";
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve, relative, join } from "node:path";
 import { homedir } from "node:os";
 import { parseDocument } from "yaml";
 import { calendarPath } from "../calendar";
 import { splitFrontmatterRaw, frontmatterMeta } from "../frontmatter";
-import { PROFILES, selectTemplate, type Brand, type Theme } from "./catalog";
+import { selectTemplate, type Brand, type Theme } from "./catalog";
 import { checkPackage, hash, type PackagingBrief } from "./model";
 
 /** Resolve one exact Story. Never guess from fuzzy titles or overwrite somebody else's Story. */
@@ -39,7 +40,7 @@ export function deriveBrief(id: string, opts: { manifest?: string; brand?: Brand
   const path = findStory(id, opts.manifest), story = parseDocument(readFileSync(path, "utf8")).toJS();
   const bp = opts.out ? resolve(opts.out) : briefPathFor(id, path);
   if (existsSync(bp)) return { brief: bp, created: false, next: `gtm packaging check ${id}` };
-  const brand = opts.brand ?? "sample-author", profile = PROFILES[brand];
+  const brand = opts.brand ?? defaultPackagingBrand(), profile = packagingProfiles()[brand];
   if (!profile) throw new Error("unregistered brand");
   // Immutable evidence snapshot avoids a circular dependency: adding a generated cover to the
   // Story manifest must not invalidate the source package that produced it.
