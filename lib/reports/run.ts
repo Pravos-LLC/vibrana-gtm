@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 // Entry points for the weekly content report and the baseline (VIB-418), shared by the Sunday cron
 // (/api/cron/content-report) and `gtm report`. Modeled on the Signal Desk digest: the run row exists before
 // the model is called (a killed run shows as `running`), a deadline keeps it inside Vercel's 300 s, and
@@ -68,7 +69,7 @@ export async function runWeeklyReport(db: SupabaseClient, opts: WeeklyOpts = {})
     const errors: { source: string; error: string }[] = [];
     if (opts.send !== false) {
       try {
-        email_id = (await sendReport(pack, report, { to: opts.to ?? process.env.REPORT_EMAIL_TO ?? process.env.SIGNALS_DIGEST_TO ?? "user-f538cb95fc21@example.com", cockpitUrl: process.env.GTM_COCKPIT_URL ?? "http://localhost:3000" })).id;
+        email_id = (await sendReport(pack, report, { to: opts.to ?? process.env.REPORT_EMAIL_TO ?? process.env.SIGNALS_DIGEST_TO ?? loadRuntimeConfig().mail.notify, cockpitUrl: process.env.GTM_COCKPIT_URL ?? "http://localhost:3000" })).id;
       } catch (e) {
         errors.push({ source: "email", error: (e as Error).message.slice(0, 300) });
       }

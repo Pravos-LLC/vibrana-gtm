@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // Out-of-cycle red-flag alert (VIB-424): when a post newly crosses the backlash threshold, John gets one
 // email right away instead of at 07:00. At most one alert per post per cooldown (24 h), recorded in
@@ -74,8 +75,8 @@ export async function sendAlert(f: RedFlag, opts: { to?: string; cockpitUrl?: st
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({
-      from: process.env.ENGAGE_DIGEST_FROM ?? "Vibrana Engage <user-10beea67bd6f@example.com>",
-      to: (opts.to ?? process.env.ENGAGE_DIGEST_TO ?? process.env.SIGNALS_DIGEST_TO ?? "user-f538cb95fc21@example.com").split(",").map((s) => s.trim()).filter(Boolean),
+      from: process.env.ENGAGE_DIGEST_FROM ?? loadRuntimeConfig().mail.engageFrom,
+      to: (opts.to ?? process.env.ENGAGE_DIGEST_TO ?? process.env.SIGNALS_DIGEST_TO ?? loadRuntimeConfig().mail.notify).split(",").map((s) => s.trim()).filter(Boolean),
       subject: alertSubject(f),
       html: `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#2b2838;max-width:600px">${flagHtml(f, cockpitUrl)}<p style="font-size:12px;color:#6b6b80">Nothing has been hidden, deleted or answered. The recommendation is yours to take or leave.</p></body></html>`,
       text: [...flagLines(f), "", `${cockpitUrl}/engage?post=${encodeURIComponent(f.post_key)}`, "", "Nothing has been hidden, deleted or answered."].join("\n"),

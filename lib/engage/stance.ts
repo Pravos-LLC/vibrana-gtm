@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // Stance only (VIB-424): the same stance definitions and model as the drafting call, without drafting a
 // reply. For re-reading history in bulk (comment-history calibration) at a fraction of the cost: one call per
@@ -8,7 +9,7 @@ import { STANCES, type Stance } from "./parse";
 export type StanceInput = { platform: string; post: string; comments: { id: string; text: string; in_reply_to?: string | null }[] };
 export type StanceLabel = { comment_id: string; stance: Stance; objection: string };
 
-const SYSTEM = `You label comments on Sample Author's social posts. John runs Vibrana, an AI transformation consultancy for companies. Judge each comment against what the post actually says.
+const SYSTEM = `You label comments on ${loadRuntimeConfig().brand.authorLabel}'s social posts. John runs Vibrana, an AI transformation consultancy for companies. Judge each comment against what the post actually says.
 
 Stance:
 ${STANCE_RULES}

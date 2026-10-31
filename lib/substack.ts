@@ -3,25 +3,22 @@
 import { HtmlRenderer, Parser } from "commonmark";
 import { parse as parseYaml } from "yaml";
 
-import { PUBLICATIONS, type Publication } from "./publications";
+import { PUBLICATIONS, SAMPLE_PUBLICATION_CONFIG, type Publication, type PublicationConfig, type PublicationDetails } from "./publications";
 export { PUBLICATIONS, type Publication };
 
-/** Draft `channel:` values from the editorial package, mapped to the Substack they go to. */
-const CHANNEL_PUBLICATION: Record<string, Publication> = {
-  "personal-substack": "sample_author",
-  "regenera-substack": "regenera",
-};
-
-export function publicationOf(meta: Record<string, unknown>): Publication | null {
+export function publicationOf(meta: Record<string, unknown>, config: PublicationConfig = SAMPLE_PUBLICATION_CONFIG): Publication | null {
   const explicit = String(meta.publication ?? "").trim();
-  if (explicit in PUBLICATIONS) return explicit as Publication;
-  return CHANNEL_PUBLICATION[String(meta.channel ?? "").trim()] ?? null;
+  if (Object.hasOwn(config.publications, explicit)) return explicit;
+  const mapped = config.publicationChannels[String(meta.channel ?? "").trim()];
+  return mapped && Object.hasOwn(config.publications, mapped) ? mapped : null;
 }
 
 export type ExportImageSource = { file: string; url: string; permanent: boolean };
 export type ExportImage = ExportImageSource & { alt: string };
 export type SubstackExport = {
   publication: Publication | null;
+  /** Only the selected owner-visible destination, never the complete private registry. */
+  publicationDetails: PublicationDetails | null;
   title: string;
   subtitle: string;
   subject: string;
@@ -109,7 +106,7 @@ export function referencedImages(markdown: string): string[] {
   return [...main.matchAll(IMAGE)].map((m) => m[2]).filter((src) => !/^https:\/\//.test(src)).map(basename);
 }
 
-export function substackExport(markdown: string, sources: ExportImageSource[]): SubstackExport {
+export function substackExport(markdown: string, sources: ExportImageSource[], config: PublicationConfig = SAMPLE_PUBLICATION_CONFIG): SubstackExport {
   const { meta, body: raw } = splitDraft(markdown);
   const { body: noH1, h1 } = stripH1(raw);
   const { main, footer } = splitFooter(noH1);
@@ -135,8 +132,10 @@ export function substackExport(markdown: string, sources: ExportImageSource[]): 
   html = html.replace(/<img src="([^"]*)" alt="([^"]*)" \/>/g, (_all, src: string, alt: string) => `<img src="${src}" alt="${alt}">`);
   const str = (key: string) => (typeof meta[key] === "string" ? (meta[key] as string).trim() : "");
   const title = str("title") || h1;
+  const publication = publicationOf(meta, config);
   return {
-    publication: publicationOf(meta),
+    publication,
+    publicationDetails: publication ? config.publications[publication] : null,
     title,
     subtitle: str("subtitle") || str("previewText") || str("description"),
     subject: str("subject") || title,

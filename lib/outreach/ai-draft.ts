@@ -1,4 +1,6 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import type { OfferOverride } from "./offers";
+import { activeOffers } from "./offers-server";
 import "server-only";
 import type { DossierRow, Profile, Track } from "./desk";
 import { angleKeysFor, guestDraftContext, outreachDraftContext, outreachDraftModel, requestOutreachAngles } from "./ai-draft-core";
@@ -13,7 +15,7 @@ import { CLIENT_SYSTEM } from "./client-system";
 /** The model that writes the angles, recorded with each run so an edit is read against the right baseline. */
 export const angleModel = (model?: string) => outreachDraftModel(model);
 
-const GUEST_SYSTEM = `You help Sample Author prepare a personal invitation for a guest on his podcast, The Sample Author Show, inside the GTM Cockpit Writing Desk. Return exactly three distinct options: their_work, the_conversation, and shared_ground. Each option contains an email and a LinkedIn connection note.
+const GUEST_SYSTEM = `You help ${loadRuntimeConfig().brand.authorLabel} prepare a personal invitation for a guest on his podcast, ${loadRuntimeConfig().brand.podcastName}, inside the GTM Cockpit Writing Desk. Return exactly three distinct options: their_work, the_conversation, and shared_ground. Each option contains an email and a LinkedIn connection note.
 
 An invitation is a personal invitation to a conversation, never a pitch for Vibrana or any service. Do not sell, do not offer services, do not mention Vibrana unless a supplied fact makes it plainly relevant. The ask is one thing: would they be open to a conversation on the show.
 
@@ -36,7 +38,7 @@ type GenerateOpts = { offerOverride?: OfferOverride; key?: string; model?: strin
 /** Three angles for a client prospect or, with track "guest", for a podcast guest invitation. */
 export async function generateOutreachAngles(row: DossierRow, profile: Profile, opts: GenerateOpts = {}, track: Track = "client"): Promise<OutreachAngles> {
   if (track === "guest") return requestOutreachAngles(guestDraftContext(row, profile), GUEST_SYSTEM, { ...opts, keys: angleKeysFor("guest") });
-  const context = outreachDraftContext(row, profile, opts.offerOverride);
+  const context = outreachDraftContext(row, profile, opts.offerOverride, activeOffers());
   const guidance = opts.guidance ? { ...opts.guidance, examples: opts.guidance.examples.map((e) => anonymizeExample(e, context.sender.signature)) } : null;
   return requestOutreachAngles(context, CLIENT_SYSTEM + guidanceBlock(guidance), opts);
 }

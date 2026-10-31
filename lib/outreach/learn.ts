@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // The outreach angle learning loop (writing desk). John edits a generated angle (subject, body, LinkedIn note) and
 // marks it sent; the gap between what was generated and what he sent is a label on the generator's work. Mirrors the
@@ -248,7 +249,7 @@ export const FIXED_RULES = [
   "No fake warmth, hype or fear language.",
 ];
 
-const LEARN_SYSTEM = `You maintain the lessons that guide an assistant generating first-touch outreach angles in Sample Author's name. John reviews every option: he edits the subject, the body and the LinkedIn note, then sends. Each edit is evidence of how John actually wants to sound.
+const LEARN_SYSTEM = `You maintain the lessons that guide an assistant generating first-touch outreach angles in ${loadRuntimeConfig().brand.authorLabel}'s name. John reviews every option: he edits the subject, the body and the LinkedIn note, then sends. Each edit is evidence of how John actually wants to sound.
 
 You get the active lessons, recent earlier edits with their observations (context only), and the new edits to read. Each edit shows the generated text, what John sent, and a word diff where [-removed-] and [+added+] mark his changes. Return:
 1. "observations": for EVERY new edit, one to four short plain notes on what John changed and what it suggests about his taste ("Cut the opening compliment and started with the hiring signal", "Shortened the body from 140 to 95 words", "Made the ask a question instead of a request for time"). If he changed nothing, say "Sent as generated". Describe the change; do not praise or judge it.

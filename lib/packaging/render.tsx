@@ -1,3 +1,4 @@
+import { packagingProfiles } from "./server-catalog";
 import { motionDocument, type MotionPreset } from "./motion";
 import { HEADLINE_TYPES, headlineType, coverStyleCss } from "./styles";
 import React from "react";
@@ -8,13 +9,13 @@ import { dirname, resolve, relative, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { guardMediaBytes } from "../media-guard";
-import { PROFILES, SIZES, TOOLKIT_VERSION } from "./catalog";
+import { SIZES, TOOLKIT_VERSION } from "./catalog";
 import { catalogHash, checkPackage, fileHash, hash, inputPaths, readBrief, type PackagingManifest } from "./model";
 import { Thumbnail, thumbnailCss } from "./Thumbnail";
 const assetsRoot = fileURLToPath(new URL("../../assets/packaging/", import.meta.url));
 const dataUrl = (path: string) => `data:${({ ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml" } as Record<string,string>)[extname(path)] ?? "application/octet-stream"};base64,${readFileSync(path).toString("base64")}`;
 export async function renderPackage(briefPath: string, options: { assetRoot?: string } = {}): Promise<{ manifest: string; cached: boolean }> {
-  const b = readBrief(briefPath), root = dirname(resolve(briefPath)), profile = PROFILES[b.brand];
+  const b = readBrief(briefPath), root = dirname(resolve(briefPath)), profile = packagingProfiles()[b.brand];
   const rootAssets = options.assetRoot ?? assetsRoot;
   const headline = HEADLINE_TYPES[headlineType(b)];
   const fonts = [...profile.fonts, headline.file].map(f => resolve(rootAssets, "fonts", f));
@@ -48,7 +49,7 @@ export async function renderPackage(briefPath: string, options: { assetRoot?: st
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
       // All images and fonts are embedded; no outbound browser requests or executable brief text.
       await page.route("**/*", route => route.abort());
-      await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${fontCss}${thumbnailCss}${coverStyleCss}</style></head><body>${renderToStaticMarkup(<Thumbnail brief={b} shape={shape} portraits={portraits} background={background} focal={focal} logo={logoPath ? dataUrl(logoPath) : undefined}/>)}</body></html>`);
+      await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${fontCss}${thumbnailCss}${coverStyleCss}</style></head><body>${renderToStaticMarkup(<Thumbnail profile={profile} brief={b} shape={shape} portraits={portraits} background={background} focal={focal} logo={logoPath ? dataUrl(logoPath) : undefined}/>)}</body></html>`);
       await page.evaluate(async (families) => { await Promise.all(families.map(f => document.fonts.load(`400 24px "${f}"`))); await document.fonts.ready; await Promise.all([...document.images].map(i => i.decode())); }, [profile.display, profile.body, headline.family]);
       const loaded = await page.evaluate(() => document.fonts.size > 0 && [...document.fonts].every(f => f.status === "loaded"));
       if (!loaded) throw new Error("Brand fonts failed to load");

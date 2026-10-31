@@ -1,3 +1,4 @@
+import { publicationConfig } from "./publications-server";
 // The data half of /content: every read the review board needs, and the piece cards built from them. The page renders
 // what this returns. With a piece filter (a link from the calendar or the work board) only that piece is read and signed.
 // Reads are complete and ordered (lib/db-read.ts): a failed page throws, it never looks like an empty queue.
@@ -214,7 +215,7 @@ export async function loadContentBoard(db: SupabaseClient, filters: Filters) {
   }
   for (const p of [...all, ...directed]) for (const c of p.cards) if (c.channel === "newsletter") {
     const stored = assets.filter((a) => a.story_id === p.storyId && a.kind === "image" && playPath(a)).map((a) => ({ source: a.source, signedUrl: urls.get(playPath(a)!) ?? null, publicUrl: publicUrlOf(a), alt: a.title }));
-    c.substack = newsletterExport(assets.find((a) => a.id === c.copy.id)?.body ?? "", stored);
+    c.substack = newsletterExport(assets.find((a) => a.id === c.copy.id)?.body ?? "", stored, publicationConfig());
   }
   // Overview rows cover the whole season, shown or not; only the final counts as approved. Part states cover both the
   // season and the cards on screen (a card left out regroups its piece's media).

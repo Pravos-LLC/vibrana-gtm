@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 // Weekly numbers no API exposes (VIB-419): Substack subscribers, opens and views, YouTube impressions and
 // click-through rate. John types them into the /performance "Add week's stats" sheet; they land in
 // gtm_manual_metrics, one row per (week, channel). Parsing is pure so the rules are tested.
@@ -8,7 +9,7 @@ import { mondayOf } from "../week";
 export type ManualField = { key: string; label: string; kind: "count" | "percent"; hint?: string };
 export type ManualChannel = { slug: string; label: string; fields: ManualField[]; required: string[] };
 
-export const MANUAL_CHANNELS: ManualChannel[] = [
+const SAMPLE_MANUAL_CHANNELS: ManualChannel[] = [
   {
     slug: "youtube", label: "YouTube", required: ["impressions", "ctr"],
     fields: [
@@ -34,6 +35,13 @@ export const MANUAL_CHANNELS: ManualChannel[] = [
   },
 ];
 
+export function manualChannels(): ManualChannel[] {
+  const { brand } = loadRuntimeConfig();
+  return SAMPLE_MANUAL_CHANNELS.map(channel => channel.slug === "substack_sample_author"
+    ? { ...channel, slug: brand.personalFrontDoorId, label: `Substack: ${brand.authorLabel}` } : channel);
+}
+export const MANUAL_CHANNELS = manualChannels();
+
 export type ManualEntry = { week_start: string; channel: string; metrics: Record<string, number>; note: string };
 
 /**
@@ -44,7 +52,7 @@ export function parseManualEntry(input: { week: string; channel: string; values:
   // A server action receives whatever the client sends: coerce before using string methods.
   const str = (v: unknown) => (typeof v === "string" ? v : v == null ? "" : String(v));
   input = { week: str(input?.week), channel: str(input?.channel), note: str(input?.note), values: input?.values && typeof input.values === "object" ? input.values : {} };
-  const ch = MANUAL_CHANNELS.find((c) => c.slug === input.channel);
+  const ch = manualChannels().find((c) => c.slug === input.channel);
   if (!ch) return { ok: false, error: "Pick a channel." };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.week ?? "") || Number.isNaN(Date.parse(`${input.week}T12:00:00Z`))) return { ok: false, error: "Pick a week." };
   const metrics: Record<string, number> = {};
@@ -63,7 +71,7 @@ export function parseManualEntry(input: { week: string; channel: string; values:
 
 /** True when every required field for the channel is present in the stored row. */
 export function manualComplete(channel: string, metrics: Record<string, unknown> | null | undefined): boolean {
-  const ch = MANUAL_CHANNELS.find((c) => c.slug === channel);
+  const ch = manualChannels().find((c) => c.slug === channel);
   return !!ch && !!metrics && ch.required.every((k) => typeof metrics[k] === "number");
 }
 

@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // The weekly report by email (Resend), linking to /performance/report/<week> where the changes are decided.
 import type { Report } from "./guard";
@@ -63,7 +64,7 @@ export async function sendReport(pack: Pack, r: Report, opts: { to: string; cock
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({
-      from: process.env.REPORT_EMAIL_FROM ?? process.env.SIGNALS_DIGEST_FROM ?? "Vibrana Signal Desk <user-10beea67bd6f@example.com>",
+      from: process.env.REPORT_EMAIL_FROM ?? process.env.SIGNALS_DIGEST_FROM ?? loadRuntimeConfig().mail.from,
       to: opts.to.split(",").map((s) => s.trim()).filter(Boolean),
       subject: reportSubject(pack, r), html: reportHtml(pack, r, opts.cockpitUrl), text: reportText(pack, r, opts.cockpitUrl),
     }),

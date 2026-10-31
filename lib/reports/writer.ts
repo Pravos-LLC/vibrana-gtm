@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // The weekly report's model call (VIB-418): same route, model and env as the Signal Desk briefs
 // (OpenRouter, strict JSON schema, only providers that honor it; SIGNALS_BRIEF_MODEL overrides the model).
@@ -6,7 +7,7 @@ import { briefModel } from "../signals/brief";
 import { BANNED, type Report } from "./guard";
 import type { Pack } from "./pack";
 
-const SYSTEM = `You write Sample Author's weekly content report for Vibrana (an AI transformation consultancy). John posts on LinkedIn, Instagram and YouTube. You get a JSON pack with everything known about the week; you know nothing else.
+const SYSTEM = `You write ${loadRuntimeConfig().brand.authorLabel}'s weekly content report for Vibrana (an AI transformation consultancy). John posts on LinkedIn, Instagram and YouTube. You get a JSON pack with everything known about the week; you know nothing else.
 
 The phase is awareness (October to December 2026). Success means conversations (comments from others, replies, DMs), saves and sends, and net followers. Conversions are tracked, not judged. Each pillar has its own job and leading metric (pack.pillars); judge a pillar only on its own leading metric.
 

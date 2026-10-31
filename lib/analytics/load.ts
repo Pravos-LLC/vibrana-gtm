@@ -10,7 +10,7 @@ import {
   bestTimeGrid, bucketQueue, comparableBaseline, followersAt, followerWindow, leaderboard, localMidnight, ownTimeSlots, pillarFormatGrid, platformWeek,
   PLATFORMS, tzOffsetHours, weekStarts, weekTiles, type CompareMode, type FollowerRow, type ItemLite, type QueueCounts, type QueueRow, type Snap, type SortKey, type Week,
 } from "./dashboard";
-import { manualComplete, MANUAL_CHANNELS } from "./manual";
+import { manualComplete, manualChannels as configuredManualChannels } from "./manual";
 
 const WEEKS = 12;
 const COHORT_WEEKS = 8;
@@ -107,7 +107,7 @@ export async function loadPerformance(db: SupabaseClient, opts: { week: Week; co
 
   const manualRows = (manual.data ?? []) as { week_start: string; channel: string; metrics: Record<string, number> }[];
   const manualFor = (channel: string) => manualRows.find((r) => r.week_start === week.from && r.channel === channel) ?? null;
-  const manualChannels = MANUAL_CHANNELS.filter((c) => !platform || c.slug === platform).map((c) => {
+  const manualChannels = configuredManualChannels().filter((c) => !platform || c.slug === platform).map((c) => {
     const row = manualFor(c.slug);
     return { ...c, metrics: row?.metrics ?? null, complete: manualComplete(c.slug, row?.metrics), series: weeks.map((m) => manualRows.find((r) => r.week_start === m && r.channel === c.slug)?.metrics?.[c.required[0]] ?? null) };
   });

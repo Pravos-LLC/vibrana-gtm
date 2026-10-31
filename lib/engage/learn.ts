@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 // The engage learning loop (VIB-428). Every decision John makes in /engage is a label on the agent's work:
 // a reply sent as drafted, a reply he rewrote (draft and final_text are both kept), a draft he skipped, and a
@@ -141,7 +142,7 @@ export async function newSignals(db: SupabaseClient, since: string | null, limit
  */
 export const FIXED_RULES = REPLY_VOICE.rules.map((r) => r.rule);
 
-const LEARN_SYSTEM = `You maintain the lessons that guide an agent drafting replies, in Sample Author's name, to comments on his social posts. John reviews every draft: he sends it as is, rewrites it, skips it, or corrects the agent's label (for example "this is not spam"). Each of those decisions is evidence of how John actually wants to sound and what he considers worth answering.
+const LEARN_SYSTEM = `You maintain the lessons that guide an agent drafting replies, in ${loadRuntimeConfig().brand.authorLabel}'s name, to comments on his social posts. John reviews every draft: he sends it as is, rewrites it, skips it, or corrects the agent's label (for example "this is not spam"). Each of those decisions is evidence of how John actually wants to sound and what he considers worth answering.
 
 You get the active lessons and John's new decisions. Return the complete updated set of lessons:
 - Keep a lesson that still holds by returning its id in "keep_id" (its text unchanged). Rewrite one by returning new text with "keep_id" empty. Leave out a lesson the evidence now contradicts.

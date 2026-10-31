@@ -8,7 +8,7 @@ import { signedUrls } from "@/lib/sign-urls";
 import { BUCKET } from "@/lib/review";
 import { playPath } from "@/lib/reviewer/shared";
 import type { StoryAsset, StoryChannel } from "@/lib/story";
-import { PROFILES } from "@/lib/packaging/catalog";
+import { packagingProfiles, defaultPackagingBrand } from "@/lib/packaging/server-catalog";
 import { must } from "@/lib/db";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Publication" };
@@ -28,7 +28,8 @@ export default async function PublicationPage({ params, searchParams }: { params
   // Proxy playback is read-only and approval continues to bind the master bytes.
   for(const a of assets){const p=playPath(a);if(a.storage_path && p && urls.has(p))urls.set(a.storage_path,urls.get(p)!);}
   const channels = (await Promise.all(chunks(assets.map(a=>a.id),20).map(async ids => must(await db.from("gtm_story_asset_channels").select("*").in("asset_id",ids), "publication channels") ?? []))).flat() as StoryChannel[];
-  const profile = String(candidate?.metadata.packaging_brand ?? "sample-author") as keyof typeof PROFILES;
-  const pack = publicationPackage(story,assets,channels,urls,PROFILES[profile]?.name ?? "Sample Author Show",cover);
+  const profiles = packagingProfiles();
+  const profile = String(candidate?.metadata.packaging_brand ?? defaultPackagingBrand());
+  const pack = publicationPackage(story,assets,channels,urls,profiles[profile]?.name ?? profiles[defaultPackagingBrand()].name,cover);
   return <Shell title="Publication review" active="/content" wide><PublicationReview pack={pack}/></Shell>;
 }

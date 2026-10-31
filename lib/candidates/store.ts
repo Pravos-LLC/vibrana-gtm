@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 // Sunday candidates in the database (VIB-420): put a week's drafts, list them, and the three things John does
 // with one in the cockpit: edit it inline, reject it with a reason, or send it to review.
 //
@@ -166,7 +167,7 @@ export async function rejectCandidate(db: SupabaseClient, id: string, reason: Re
 export function candidateStory(c: CandidateRow, seasonId: string) {
   const storyId = `${seasonStoryPrefix(seasonId)}c${c.week_start.replaceAll("-", "").slice(2)}-${c.slug}`.slice(0, 80).replace(/-$/, "");
   const label = new Date(`${c.week_start}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
-  const story = { id: storyId, title: `Candidate wk ${label} | ${c.title}`, link: "https://brand.example.com/", season_id: seasonId };
+  const story = { id: storyId, title: `Candidate wk ${label} | ${c.title}`, link: loadRuntimeConfig().brand.websiteUrl, season_id: seasonId };
   // Tue, Wed, Thu of the week by position: a starting point John moves in the calendar.
   const date = addDays(c.week_start, 1 + (c.position % 3));
   const meta = { candidate_id: c.id, format: c.format, lens: c.lens, ...(c.slides ? { slides: c.slides } : {}), ...(c.video ? { video: c.video } : {}), sources: c.sources };

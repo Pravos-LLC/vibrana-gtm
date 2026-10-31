@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, posix, resolve } from "node:path";
 import { CALENDAR } from "../config/calendar";
+import { publicationConfig } from "./publications-server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { Document, Scalar, visit } from "yaml";
 import { frontmatterData, splitFrontmatter } from "./frontmatter";
@@ -14,7 +15,7 @@ import { BUCKET } from "./review";
 import { guardMediaBytes } from "./media-guard";
 
 export const PILLARS = ["proof", "perspective", "build", "lists"] as const;
-export const PUBLICATION_IDS = ["sample_author", "regenera"] as const;
+export const publicationIds = () => Object.keys(publicationConfig().publications);
 
 /** Row shape of gtm_content_items after the calendar-db migration. */
 export type ContentRow = {
@@ -72,7 +73,7 @@ export function validateRow(row: Partial<ContentRow> & { id: string }): string[]
   if (row.time != null && !isValidTime(row.time)) out.push(`${row.id}: bad time ${JSON.stringify(row.time)} (expected HH:MM)`);
   if (row.pillar !== undefined && !(PILLARS as readonly string[]).includes(row.pillar)) out.push(`${row.id}: pillar must be one of ${PILLARS.join(", ")}`);
   if (row.status !== undefined && !STATUSES.includes(row.status)) out.push(`${row.id}: bad status ${row.status}`);
-  if (row.publication != null && !(PUBLICATION_IDS as readonly string[]).includes(row.publication)) out.push(`${row.id}: publication must be ${PUBLICATION_IDS.join(" or ")}`);
+  if (row.publication != null && !publicationIds().includes(row.publication)) out.push(`${row.id}: publication must be ${publicationIds().join(" or ")}`);
   return out;
 }
 
@@ -169,9 +170,10 @@ function frontmatterField(body: string, key: string): string | null {
 }
 
 function publicationFromChannel(explicit: string | null, body: string | null): string | null {
-  if (explicit && (PUBLICATION_IDS as readonly string[]).includes(explicit)) return explicit;
+  const config = publicationConfig();
+  if (explicit && Object.hasOwn(config.publications, explicit)) return explicit;
   const channel = body ? frontmatterField(body, "channel") : null;
-  return channel === "personal-substack" ? "sample_author" : channel === "regenera-substack" ? "regenera" : null;
+  return channel ? config.publicationChannels[channel] ?? null : null;
 }
 
 function same(prior: ContentRow, next: Record<string, unknown>) {

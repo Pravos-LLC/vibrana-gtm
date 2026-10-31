@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 // The writing desk in the database: dossier and profile imports (`gtm outreach import-dossiers|import-profile`), the
 // queue, one person's desk, and John's actions (autosave, mark sent, LinkedIn invite sent, follow-up sent, skip, daily
 // target). Server and CLI only: the service client writes; the browser role can only read, and only as the owner.
@@ -69,11 +70,17 @@ export async function importProfile(db: SupabaseClient | null, text: string, opt
   const imported = { profile, profile_imported_at: now() };
   const rows = must(await db.from(TRACKS_TABLE).update(imported).eq("track", track).select("track"), "import profile") as unknown[];
   // The migration seeds both tracks; a missing row is made with the track's defaults, since sender and target are required.
-  if (!rows.length) must(await db.from(TRACKS_TABLE).upsert({ track, ...TRACK_DEFAULTS[track], ...imported }, { onConflict: "track" }).select("track"), "import profile");
+  if (!rows.length) must(await db.from(TRACKS_TABLE).upsert({ track, ...runtimeTrackDefaults()[track], ...imported }, { onConflict: "track" }).select("track"), "import profile");
   return { dryRun: false, ...summary };
 }
 
 // ---- reads -------------------------------------------------------------------------------------------------------------
+
+/** Database settings win; immutable runtime sender defaults cover missing legacy rows only. */
+function runtimeTrackDefaults() {
+  const from = loadRuntimeConfig().mail.trackFrom;
+  return { client: { ...TRACK_DEFAULTS.client, from_address: from.client }, guest: { ...TRACK_DEFAULTS.guest, from_address: from.guest } };
+}
 
 const SETTINGS_COLUMNS = "daily_target,from_address,profile,profile_imported_at";
 
@@ -86,9 +93,9 @@ export async function deskSettings(db: SupabaseClient, track: Track = "client"):
   if (row) return row;
   if (track === "client") {
     const old = must(await db.from(DESK).select("daily_target,profile,profile_imported_at").eq("id", true).maybeSingle(), "desk settings") as Omit<DeskSettings, "from_address"> | null;
-    if (old) return { ...old, from_address: TRACK_DEFAULTS.client.from_address };
+    if (old) return { ...old, from_address: runtimeTrackDefaults().client.from_address };
   }
-  return { ...TRACK_DEFAULTS[track], profile: {}, profile_imported_at: null };
+  return { ...runtimeTrackDefaults()[track], profile: {}, profile_imported_at: null };
 }
 
 /** Both tracks' settings, for the page (both meters are always on screen). */
@@ -318,6 +325,6 @@ export async function setDailyTarget(db: SupabaseClient, target: number, actor: 
   if (!Number.isInteger(target) || target < 1 || target > 200) throw new Error("The daily target is a whole number from 1 to 200.");
   const rows = must(await db.from(TRACKS_TABLE).update({ daily_target: target, updated_by: actor }).eq("track", track).select("daily_target"), "daily target") as Array<{ daily_target: number }>;
   if (rows.length) return rows[0].daily_target;
-  const up = must(await db.from(TRACKS_TABLE).upsert({ track, ...TRACK_DEFAULTS[track], daily_target: target, updated_by: actor }, { onConflict: "track" }).select("daily_target"), "daily target") as Array<{ daily_target: number }>;
+  const up = must(await db.from(TRACKS_TABLE).upsert({ track, ...runtimeTrackDefaults()[track], daily_target: target, updated_by: actor }, { onConflict: "track" }).select("daily_target"), "daily target") as Array<{ daily_target: number }>;
   return up[0].daily_target;
 }

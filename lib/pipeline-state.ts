@@ -53,6 +53,9 @@ export function pipelineView(pipeline: Pipeline, rows: StageRow[], opts: { stage
       // A stage that used to be John's gate (paper edit, storyboard) can still hold a "review" or "approved" row written
       // before the gates were removed (2026-10-28). It is agent work now: read those rows as done, never as waiting.
       status = stage.gate === "none" && (row.status === "review" || row.status === "approved") ? "done" : row.status;
+      // A stale "todo" row (a reopen that nobody cleared) on an agent stage reads like a missing row: if a later stage is
+      // staged or underway the work is evidently done, and the staged final must not stay hidden behind it.
+      if (stage.gate === "none" && !stage.final && row.status === "todo" && started(i)) status = "done";
     }
     else {
       implicit = true;

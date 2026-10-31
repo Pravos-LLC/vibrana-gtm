@@ -1,3 +1,4 @@
+import { loadRuntimeConfig } from "../runtime-config.mjs";
 // The daily engage run (Vercel cron 23:00 UTC, 07:00 in Bali): catch every comment and DM the webhook
 // missed, draft replies for the new ones, and email John "N replies to approve". Also `gtm engage run`.
 import { unresolvedFlags } from "./resolve";
@@ -113,7 +114,7 @@ export async function draftNew(db: SupabaseClient, opts: {
     q = first.kind === "dm" ? q.eq("conversation_id", first.conversation_id!) : first.zernio_post_id ? q.eq("zernio_post_id", first.zernio_post_id) : first.platform_post_id ? q.eq("platform_post_id", first.platform_post_id) : q.eq("external_id", first.external_id);
     const thread = (must(await q, "thread") as { author_name: string | null; author_username: string | null; text: string; is_own: boolean; final_text: string | null; status: string; external_id: string }[])
       .filter((t) => !targets.some((x) => x.external_id === t.external_id))
-      .flatMap((t) => [{ author: t.author_name ?? t.author_username ?? "someone", text: t.text, own: t.is_own }, ...(t.status === "sent" && t.final_text ? [{ author: "John", text: t.final_text, own: true }] : [])]);
+      .flatMap((t) => [{ author: t.author_name ?? t.author_username ?? "someone", text: t.text, own: t.is_own }, ...(t.status === "sent" && t.final_text ? [{ author: loadRuntimeConfig().brand.authorLabel, text: t.final_text, own: true }] : [])]);
     const byExt = new Map(fresh.map((c) => [c.external_id, c.text]));
     const guidance = await guide(first.platform);
     // Their links, read before drafting so the reply can answer what they shared. Never at the cost of the draft.
@@ -272,7 +273,7 @@ export async function runEngage(db: SupabaseClient, opts: { dryRun?: boolean; to
     if (items.length || flags.length) {
       const date = new Intl.DateTimeFormat("en-US", { timeZone: process.env.SIGNALS_DIGEST_TZ ?? "Asia/Makassar", weekday: "short", month: "short", day: "numeric" }).format(now);
       try {
-        sent = await sendEngageEmail(items, { to: opts.to ?? process.env.ENGAGE_DIGEST_TO ?? process.env.SIGNALS_DIGEST_TO ?? "user-f538cb95fc21@example.com", cockpitUrl: process.env.GTM_COCKPIT_URL ?? "http://localhost:3000", date, flags });
+        sent = await sendEngageEmail(items, { to: opts.to ?? process.env.ENGAGE_DIGEST_TO ?? process.env.SIGNALS_DIGEST_TO ?? loadRuntimeConfig().mail.notify, cockpitUrl: process.env.GTM_COCKPIT_URL ?? "http://localhost:3000", date, flags });
         stats.email_id = sent.id;
       } catch (e) {
         errors.push({ source: "email", error: (e as Error).message.slice(0, 200) });
