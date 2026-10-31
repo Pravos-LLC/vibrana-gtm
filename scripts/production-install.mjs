@@ -23,7 +23,7 @@ export function installProductionDependencies(root = process.cwd(), env = proces
   cleanBuildPayload(root);
   const home = mkdtempSync(resolve(tmpdir(), 'public-dependency-home-'));
   try {
-    run('pnpm', ['install', '--frozen-lockfile', '--prod=false'], {
+    run('pnpm', ['install', '--frozen-lockfile', '--prod=false', '--ignore-scripts'], {
       cwd: root, env: dependencyEnvironment(env, home), stdio: 'inherit', timeout: 600000,
     });
   } finally { rmSync(home, { recursive: true, force: true }); }

@@ -82,7 +82,7 @@ test('dependency installation removes restored private caches and scrubs credent
   try {
     for (const name of ['.next', '.content-runtime', '.content-runtime-stale']) mkdirSync(join(root, name));
     entry.installProductionDependencies(root, { PATH: process.env.PATH, PRIVATE_CONTENT_SSH_KEY: 'fixture-secret', SUPABASE_SECRET_KEY: 'fixture-secret', NODE_OPTIONS: '--require=bad', HOME: '/private/home' }, (_bin: string, args: string[], options: { env: Record<string, string> }) => {
-      assert.deepEqual(args, ['install', '--frozen-lockfile', '--prod=false']);
+      assert.deepEqual(args, ['install', '--frozen-lockfile', '--prod=false', '--ignore-scripts']);
       for (const name of ['.next', '.content-runtime', '.content-runtime-stale']) assert.equal(existsSync(join(root, name)), false);
       assert.equal(options.env.PRIVATE_CONTENT_SSH_KEY, undefined); assert.equal(options.env.SUPABASE_SECRET_KEY, undefined); assert.equal(options.env.NODE_OPTIONS, undefined);
       childHome = options.env.HOME; assert.notEqual(childHome, '/private/home'); assert.equal(existsSync(childHome), true);
