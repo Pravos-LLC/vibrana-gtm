@@ -289,7 +289,8 @@ export function materializeItem(storyId: string, channel: string, assets: Materi
     id: `${storyId}-${channel}`, week: weekOfDate(piece.date), date: piece.date, time: channelTime(channel, format), pillar: piece.pillar, title: piece.title,
     format, channels: [channel], status: "drafted", link: null, cta: null, zernio_post_id: null, published_at: null, urls: {},
     story_id: storyId, story_assets: [copies[0].id, ...mine.filter((a) => a.kind !== "copy" && a.kind !== "link").map((a) => a.id)],
-    publication: null, body: copies[0].body ?? null, media, approved_hash: null, copy_path: copies[0].source,
+    // No copy of the text: until it is sent, the Story's approved copy is the text (sending records what went out).
+    publication: null, body: null, media, approved_hash: null, copy_path: copies[0].source,
   };
   const problems = validateRow(row);
   return problems.length ? { error: problems.join("; ") } : { row };

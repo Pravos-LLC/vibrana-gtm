@@ -301,7 +301,7 @@ test("an approved platform with no calendar item becomes one, bound to exactly w
   assert.equal(made.row.id, `${sid}-youtube`);
   assert.deepEqual(made.row.media, ["stories/v.mp4"], "a cover beside a video is bound, not posted");
   assert.deepEqual(made.row.story_assets, [`${sid}-youtube`, `${sid}-video-9x16`, `${sid}-cover`]);
-  assert.deepEqual([made.row.date, made.row.time, made.row.format, made.row.status, made.row.copy_path, made.row.body], ["2026-11-20", "17:00", "video", "drafted", "src/youtube", "text"]);
+  assert.deepEqual([made.row.date, made.row.time, made.row.format, made.row.status, made.row.copy_path, made.row.body], ["2026-11-20", "17:00", "video", "drafted", "src/youtube", null]);
   assert.match((materializeItem(sid, "youtube", assets, rows, undefined) as { error: string }).error, /no season entry/);
   // Slides only: a LinkedIn document, slides in order.
   const deck = [a("linkedin", "copy", null, "li"), a("slide-02", "image", "stories/2.png"), a("slide-01", "image", "stories/1.png")];
