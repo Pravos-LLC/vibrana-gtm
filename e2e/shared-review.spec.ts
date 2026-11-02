@@ -244,7 +244,7 @@ test("shared review persists two decisions, blocks on accepted note, completes t
     ).toHaveCount(1);
     await page
       .getByRole("region", { name: "Shared third-party review" })
-      .getByText("Links sent (1 active)", { exact: true })
+      .getByText("Review links (1 active)", { exact: true })
       .click();
     await expect(
       page

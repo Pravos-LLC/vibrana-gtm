@@ -1027,7 +1027,8 @@ test("media burst: a 429 from Storage is retried so no slide or video stays blan
     expect(note?.[0]?.body).toMatch(/^\[unplayable-video\] BLOCK: .*will not load in a browser/);
     await page.unroute(/\/storage\/v1\/object\/sign\/content-review\//);
     await page.goto("/content");
-    await expect(page.getByText(/Won't load: s1-86-fx-burst-slide-01-[0-9a-f]+\.png in storage/).first()).toBeAttached();
+    await page.getByRole("button", { name: /^Findings \(\d+\)$/ }).click();
+    await expect(page.getByText(/Won't load: s1-86-fx-burst-slide-01-[0-9a-f]+\.png in storage/).first()).toBeVisible();
     await shot(page, "content-media-burst");
   } finally {
     await cleanup();
