@@ -130,7 +130,8 @@ export function SharedPieceCard({ piece, decide, preview = false, solo = false }
     <div className={`space-y-4 ${solo && short ? "mx-auto max-w-xl" : ""}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className={`font-display font-semibold text-ink ${short ? "text-lg" : "text-xl"}`}>{piece.name}</h2>
-        {overall}
+        {/* One video: its own badge below says the same thing. */}
+        {!(solo && videos.length === 1 && !rest.length) && overall}
       </div>
 
       {videos.map((v) => (
