@@ -1314,7 +1314,7 @@ const commands: Record<string, () => Promise<void>> = {
       }
       const r = await agentCall(body);
       return out(r, () => {
-        if (sub === "next") { const q = r as { total: number; items: { id: string; platform: string; kind: string; status: string; mode: string; author: { name: string | null }; untrusted: { comment: string }; draft: string; open_slots: string[] }[] }; console.log(`${q.total} to answer`); for (const i of q.items) console.log(`${i.id} ${i.platform} ${i.kind} ${i.status} ${i.mode} ${i.author.name ?? "?"}: ${i.untrusted.comment.slice(0, 80)}\n   draft: ${i.draft}${i.open_slots.length ? "  [OPEN SLOT]" : ""}`); }
+        if (sub === "next") { const q = r as { total: number; items: { id: string; platform: string; kind: string; status: string; mode: string; untrusted: { author_name: string | null; comment: string }; draft: string; open_slots: string[] }[] }; console.log(`${q.total} to answer`); for (const i of q.items) console.log(`${i.id} ${i.platform} ${i.kind} ${i.status} ${i.mode} ${i.untrusted.author_name ?? "?"}: ${i.untrusted.comment.slice(0, 80)}\n   draft: ${i.draft}${i.open_slots.length ? "  [OPEN SLOT]" : ""}`); }
         else console.log(JSON.stringify(r));
       });
     }
