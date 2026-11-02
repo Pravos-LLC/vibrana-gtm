@@ -1,8 +1,10 @@
 import { SharedPieceCard, type DecideAsset } from "@/components/shared/shared-piece";
 import type { SharedPiece } from "@/lib/reviewer/shared";
 
-/** The review page's body: the full episode, then its shorts. Shared by /shared (a reviewer, or the owner's preview) and /view (a read-only link). */
+/** The review page's body: the full episode, then its shorts. Shared by /shared (a reviewer, or the owner's preview) and /invite. */
 export function SharedList({ pieces, decide, preview }: { pieces: SharedPiece[]; decide: DecideAsset; preview: boolean }) {
+  // One piece is the whole page: that video and its buttons, no summary or section headings (John, 2026-11-02).
+  if (pieces.length === 1) return <SharedPieceCard piece={pieces[0]} decide={decide} preview={preview} solo />;
   const ready = pieces.filter((p) => p.state === "final");
   const waiting = ready.reduce((n, p) => n + p.assets.filter((a) => a.reviewable && a.decision !== "approved").length, 0);
   const episodes = pieces.filter((p) => p.format === "episode");

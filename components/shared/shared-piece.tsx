@@ -106,10 +106,10 @@ function Expandable({ text }: { text: string }) {
 }
 
 /** One piece for a third party: the final full width, then what it will be posted with, each asset decided on its own. */
-export function SharedPieceCard({ piece, decide, preview = false }: { piece: SharedPiece; decide: DecideAsset; preview?: boolean }) {
+export function SharedPieceCard({ piece, decide, preview = false, solo = false }: { piece: SharedPiece; decide: DecideAsset; preview?: boolean; solo?: boolean }) {
   if (piece.state !== "final") {
     return (
-      <Card glow={false} className="p-5">
+      <Card glow={false} className={`p-5 ${solo ? "mx-auto max-w-xl" : ""}`}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-display text-lg font-semibold text-ink">{piece.name}</h2>
           <Badge variant="outline">In production</Badge>
@@ -127,7 +127,7 @@ export function SharedPieceCard({ piece, decide, preview = false }: { piece: Sha
     : <Badge variant="warning" className="gap-1"><Clock className="size-3" aria-hidden /> Waiting for you</Badge>;
 
   return (
-    <div className="space-y-4">
+    <div className={`space-y-4 ${solo && short ? "mx-auto max-w-xl" : ""}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className={`font-display font-semibold text-ink ${short ? "text-lg" : "text-xl"}`}>{piece.name}</h2>
         {overall}
@@ -137,12 +137,12 @@ export function SharedPieceCard({ piece, decide, preview = false }: { piece: Sha
         <Card key={v.id} glow={false} className="overflow-hidden p-0">
           <div className={short ? "bg-black" : ""}>
             <SignedVideo key={`${v.id}-${v.revision}`} src={v.src ?? undefined} poster={v.poster ?? undefined} controls playsInline preload={v.poster ? "none" : "metadata"}
-              className={short ? "mx-auto block aspect-[9/16] max-h-[34rem] w-auto max-w-full bg-black object-contain" : "block aspect-video w-full bg-black object-contain"} />
+              className={short ? `mx-auto block aspect-[9/16] ${solo ? "max-h-[78vh]" : "max-h-[34rem]"} w-auto max-w-full bg-black object-contain` : "block aspect-video w-full bg-black object-contain"} />
           </div>
           <div className="space-y-3 p-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="min-w-0 space-y-1">
-                <p className="text-xs text-ink-3">{v.label ? `Final ${v.label}` : "Final"}{short ? "" : ""}</p>
+                {!solo && <p className="text-xs text-ink-3">{v.label ? `Final ${v.label}` : "Final"}</p>}
                 {!short && <Platforms channels={v.channels} />}
               </div>
               <DecisionBadge asset={v} />
