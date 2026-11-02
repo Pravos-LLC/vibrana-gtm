@@ -46,7 +46,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
             <p className="text-xs text-ink-3">{live ? `Shared for review with ${invite!.party}` : "Shared for review"}</p>
           </div>
         </div>
-        <ThemeToggle />
+        <div className="shrink-0"><ThemeToggle /></div>
       </header>
       {owner && live && <p className="mb-4 rounded-lg border border-line px-4 py-3 text-sm text-ink-2">Owner preview: exactly what {invite!.party} sees, without the buttons, so opening it never approves anything.</p>}
       {!live && <Card glow={false} className="p-8 text-center text-ink-2">This link is no longer valid. Ask John for a new one.</Card>}
