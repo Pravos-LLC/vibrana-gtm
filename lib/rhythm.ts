@@ -14,12 +14,13 @@ export type Weekday = (typeof WEEKDAYS)[number];
 export type Lane = "perspective" | "proof" | "build" | "lists" | "voices" | "reels";
 export type RhythmDay = { day: Weekday; primary: Lane | null; fallback: Lane[]; channels: string[]; note: string };
 export type Look = "prism" | "voiceover" | "talking-head" | "footage" | "text";
-export type Traits = { look?: Look; topic?: string };
+/** Per-Story operational traits (private guide config/piece-traits.json): look, topic, and the pillar when the copy has none. */
+export type Traits = { look?: Look; topic?: string; pillar?: string };
 
 /** A channel that never takes some pillars (John, 2026-11-02: Proof, Build and Lists never go to Instagram). Optional in the guide. */
 export type ChannelBlock = { channel: string; pillars: string[] };
 export const RHYTHM = (channelsJson as unknown as { rhythm: { days: RhythmDay[]; rules: string[]; summary: string; blocked?: ChannelBlock[] } }).rhythm;
-const TRAITS = (traitsJson as { pieces: Record<string, Traits> }).pieces;
+export const TRAITS = (traitsJson as { pieces: Record<string, Traits> }).pieces;
 
 export const LANE_LABEL: Record<Lane, string> = { perspective: "Perspective", proof: "Proof", build: "Build", lists: "Lists", voices: "Voices", reels: "Reels" };
 export const LOOK_LABEL: Record<Look, string> = { prism: "Prism Light", voiceover: "voiceover reel", "talking-head": "talking head", footage: "footage", text: "text" };
@@ -50,6 +51,11 @@ export function lookOf(storyId: string | null, format: string): Look {
   const set = storyId ? TRAITS[storyId]?.look : undefined;
   if (set) return set;
   return storyId && TALKING_HEAD.test(storyId) ? "talking-head" : "footage";
+}
+
+/** The pillar the private traits file gives a Story: classification kept out of approved post text. */
+export function traitPillarOf(storyId: string | null): string | null {
+  return (storyId && TRAITS[storyId]?.pillar) || null;
 }
 
 export function topicOf(storyId: string | null): string | null {

@@ -24,7 +24,7 @@ import { loadFixNotes } from "./approve-note-db";
 import type { FixNote } from "./approve-note";
 import { contentVisibility } from "./content-visibility-db";
 import { isHandPublished } from "./hand-published";
-import { channelAllowed, fitRank, lanesOf, lintCalendar, lookOf, pieceKeyOf, pillarAllowed, type Issue, type LintPost } from "./rhythm";
+import { channelAllowed, fitRank, lanesOf, lintCalendar, lookOf, pieceKeyOf, pillarAllowed, traitPillarOf, type Issue, type LintPost } from "./rhythm";
 import { addDays, mondayOf } from "./week";
 
 /** A held Story, or one whose third party has not approved the final, is never auto-scheduled (lib/third-party.ts). */
@@ -198,10 +198,11 @@ export function pieceFor(storyId: string, channel: string, assets: MaterialAsset
   const copies = assets.filter((a) => a.story_id === storyId && a.kind === "copy");
   const own = copies.filter((a) => rows.some((r) => r.asset_id === a.id && r.channel === channel));
   const metas = [...own, ...copies.filter((a) => !own.includes(a))].map((a) => parseCopy(a.body ?? "").meta);
-  // Classification is operational metadata: repairing it must not rewrite already-approved post text.
+  // Classification is operational metadata: repairing it must not rewrite already-approved post text. The operator's
+  // real Stories are classified in the private traits file; the public config holds samples only.
   const configured = (publishingMetadata as Record<string, { pillar: string }>)[storyId]?.pillar;
-  const pillar = [...metas.map((m) => m.pillar?.trim()), configured].find((x) => x && (PILLARS as readonly string[]).includes(x));
-  if (!pillar) return { error: `approved, but its text has no pillar: add "pillar:" (${PILLARS.join(", ")}) to the ${channel} copy front matter and restage it` };
+  const pillar = [...metas.map((m) => m.pillar?.trim()), traitPillarOf(storyId), configured].find((x) => x && (PILLARS as readonly string[]).includes(x));
+  if (!pillar) return { error: `approved, but its text has no pillar: add "pillar" (${PILLARS.join(", ")}) for ${storyId} in the private guide's config/piece-traits.json (no restage, approval stays), or to the ${channel} copy front matter and restage it` };
   const named = story?.title?.includes(" | ") ? story.title.split(" | ").slice(1).join(" | ") : story?.title;
   const title = metas[0]?.title?.trim() || named?.trim() || storyId;
   const planned = metas[0]?.date?.trim();
