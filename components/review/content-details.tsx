@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,9 @@ export function ContentDetails({ children }: { children: ReactNode }) {
 export function ContentDetail({ name, label, children }: { name: string; label: ReactNode; children: ReactNode }) {
   const context = useContext(DetailsContext);
   const id = useId();
+  // This streamed boundary must hydrate before it can add content to the shared host.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   if (!context) throw new Error("ContentDetail needs ContentDetails");
   const expanded = context.open === name;
   return (
@@ -34,9 +37,9 @@ export function ContentDetail({ name, label, children }: { name: string; label: 
         onClick={() => context.toggle(name)}>
         {label}<ChevronDown className={expanded ? "rotate-180" : ""} aria-hidden="true" />
       </Button>
-      {context.host && createPortal(<section id={`${id}-panel`} aria-labelledby={`${id}-trigger`} hidden={!expanded}
+      {expanded && mounted && context.host && createPortal(<section id={`${id}-panel`} aria-labelledby={`${id}-trigger`}
         className="mt-3 min-w-0 border-t border-line pt-4">
-        {expanded ? children : null}
+        {children}
       </section>, context.host)}
     </>
   );

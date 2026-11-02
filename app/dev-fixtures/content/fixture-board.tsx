@@ -1,5 +1,7 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 import { ContentToolbar } from "@/components/review/content-toolbar";
 import { SeriesSection } from "@/components/review/series-section";
 import { seriesOptions } from "@/lib/season-review";
@@ -14,10 +16,10 @@ import { ContentDetail } from "@/components/review/content-details";
 import { ReviewLinks, type ReviewLinkRow } from "@/components/review/review-links";
 import type { SeasonAnalysis, SeasonRecord } from "@/lib/season-analysis";
 
-type FixtureSeason = { record: SeasonRecord; analysis: SeasonAnalysis; pillarOptions: { slug: string; name: string }[] };
+export type FixtureSeason = { record: SeasonRecord; analysis: SeasonAnalysis; pillarOptions: { slug: string; name: string }[] };
 
 /** The same composition as app/content/page.tsx, with fake server calls that wait `latency` ms. */
-export function FixtureBoard({ fixture, season, params, latency }: { fixture: Fixture; season: FixtureSeason; params: Record<string, string | string[] | undefined>; latency: number }) {
+export function FixtureBoard({ fixture, season, params, latency, analysis }: { fixture: Fixture; season: FixtureSeason; params: Record<string, string | string[] | undefined>; latency: number; analysis?: ReactNode }) {
   const filters = parseFilters(params);
   const wait = <T,>(value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), latency));
   const actions: ReviewActions = {
@@ -51,10 +53,7 @@ export function FixtureBoard({ fixture, season, params, latency }: { fixture: Fi
   return (
     <ReviewProvider key={JSON.stringify(filters)} initial={initial} summary={summary} stages={stages} actions={actions}>
       <div className="space-y-5">
-        <OverviewStrip range={dateRange(pieces.map((p) => p.date))} analysis={
-          <SeasonDetails season={season.record} analysis={season.analysis} pillarOptions={season.pillarOptions} path="/dev-fixtures/content"
-            save={(input) => wait(input.title.includes("FAIL") ? { ok: false as const, error: "The database said no." } : { ok: true as const })} />
-        } externalReview={
+        <OverviewStrip range={dateRange(pieces.map((p) => p.date))} analysis={analysis ?? <FixtureSeasonDetails season={season} latency={latency} />} externalReview={
           <ContentDetail name="external" label="External review (3)">
             <ReviewLinks embedded parties={[
               { party: "Example partner with a long organization name for layout checks", pieces: ["Example final"] },
@@ -75,4 +74,10 @@ export function FixtureBoard({ fixture, season, params, latency }: { fixture: Fi
       </div>
     </ReviewProvider>
   );
+}
+
+/** Also used as a streamed server slot to check opening panels before analysis finishes. */
+export function FixtureSeasonDetails({ season, latency }: { season: FixtureSeason; latency: number }) {
+  return <SeasonDetails season={season.record} analysis={season.analysis} pillarOptions={season.pillarOptions} path="/dev-fixtures/content"
+    save={(input) => new Promise((resolve) => setTimeout(() => resolve(input.title.includes("FAIL") ? { ok: false as const, error: "The database said no." } : { ok: true as const }), latency))} />;
 }

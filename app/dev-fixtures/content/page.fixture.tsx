@@ -1,11 +1,13 @@
 // Dev-only visual check for the Content review screen. It renders the real components against fixture data
 // with fake server calls, because the real page sits behind owner login. Only compiled when
 // CONTENT_FIXTURES=1 (see next.config.ts) and the proxy only lets it through outside production.
+import { Suspense } from "react";
+import { SeasonDetailsStatus } from "@/components/review/content-details";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { notFound } from "next/navigation";
 import { Shell } from "@/components/shell";
-import { FixtureBoard } from "./fixture-board";
+import { FixtureBoard, FixtureSeasonDetails, type FixtureSeason } from "./fixture-board";
 import { buildFixture } from "./fixture-data";
 import { analyzeSeason, type PartState, type SeasonInput } from "@/lib/season-analysis";
 import { analysisOptions } from "@/lib/seasons";
@@ -33,9 +35,15 @@ export default async function FixturePage({ searchParams }: { searchParams: Prom
     })),
   };
   const season = { record: input.season, analysis: analyzeSeason(input, analysisOptions("2026-10-08")), pillarOptions: PILLARS.map((p) => ({ slug: p.slug, name: p.name })) };
+  const analysisDelay = Math.min(10000, Math.max(0, Number(params.analysisLatency) || 0));
   return (
     <Shell title="Content review (fixture)" active="/content" wide>
-      <FixtureBoard fixture={fixture} season={season} params={params} latency={Number(Array.isArray(params.latency) ? params.latency[0] : params.latency ?? 1500)} />
+      <FixtureBoard analysis={analysisDelay ? <Suspense fallback={<SeasonDetailsStatus state="loading" />}><DelayedAnalysis season={season} delay={analysisDelay} /></Suspense> : undefined} fixture={fixture} season={season} params={params} latency={Number(Array.isArray(params.latency) ? params.latency[0] : params.latency ?? 1500)} />
     </Shell>
   );
+}
+
+async function DelayedAnalysis({ season, delay }: { season: FixtureSeason; delay: number }) {
+  await new Promise((resolve) => setTimeout(resolve, delay));
+  return <FixtureSeasonDetails season={season} latency={10} />;
 }

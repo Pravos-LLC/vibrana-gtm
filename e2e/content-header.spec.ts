@@ -2,6 +2,8 @@ import { test, expect } from "@playwright/test";
 import { PASSWORD, USERS } from "../test/support/seed";
 
 test("compact content overview opens one accessible panel at a time without changing filters", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto("/login");
   await page.getByLabel("Email").fill(USERS.owner.email);
   await page.getByLabel("Password").fill(PASSWORD);
@@ -48,4 +50,5 @@ test("compact content overview opens one accessible panel at a time without chan
     const overviewBox = await overview.boundingBox();
     expect(overviewBox!.x + overviewBox!.width).toBeLessThanOrEqual(viewport.width);
   }
+  expect(pageErrors).toEqual([]);
 });
