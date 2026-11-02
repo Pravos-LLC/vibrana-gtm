@@ -265,43 +265,56 @@ export async function setTextApprovalAll(input: { storyId: string; channels: str
 }
 
 /**
- * One approval for the piece, with the channels John ticked (John, 2026-11-02: "the approval should come with a number of
- * channels I can select; if I select several, the same post text goes everywhere"). The text and final media are
- * approved on every ticked channel in one call; every unticked channel is taken back and its unsent post removed
- * (lib/kill-piece.ts dropPieceChannel). Auto-schedule runs once.
+ * One approval for the piece, with the channels John ticks (John, 2026-11-02: "the approval should come with a number of
+ * channels I can select; if I select several, the same post text goes everywhere"). Everything is checked before anything
+ * changes (lib/piece-channels.ts planChannels, dropPieceChannel dry runs, the bytes John saw). Then an unticked channel is
+ * taken back, its unsent post removed and the channel unbound from the piece's files (it cannot come back by a later
+ * approval); a newly ticked channel gets the piece's one text and media bound; and the text and media are approved on
+ * every ticked channel. Auto-schedule runs once.
  */
-export async function approvePieceChannels(input: { storyId: string; on: string[]; off: string[]; media: Array<{ assetIds: string[]; channels: string[]; expected: Expected[] }> }): Promise<Result> {
+export async function approvePieceChannels(input: { storyId: string; on: string[]; expected: Expected[] }): Promise<Result> {
   const { db, owner } = await requireOwner();
   if (!owner) return { ok: false, error: "Not signed in as the cockpit owner." };
-  if (!input.on.length) return { ok: false, error: "Tick at least one channel, or kill the piece." };
-  let final = true;
-  for (const group of input.media) {
-    const channels = group.channels.filter((c) => input.on.includes(c));
-    if (!channels.length) continue;
-    const found = await mediaRows(db, input.storyId, group.assetIds, channels, group.expected);
-    if (!found.ok) return found;
-    if (nonFinal(found.assets).length) { final = false; continue; }
-    for (const channel of channels) {
-      const r = await decideRows(db, found.assets, channel, "approved", "");
-      if (!r.ok) return { ok: false, error: `${channel} media: ${r.error}` };
+  const admin = adminDb();
+  const pc = await import("@/lib/piece-channels");
+  const { dropPieceChannel } = await import("@/lib/kill-piece");
+  try {
+    const state = await pc.loadPieceChannels(admin, input.storyId);
+    const plan = pc.planChannels(state, input.on);
+    if (plan.errors.length) return { ok: false, error: plan.errors.join(" ") };
+    // The bytes John looked at: any file that changed since the page loaded stops the approval.
+    for (const e of input.expected) {
+      const a = state.assets.find((x) => x.id === e.asset_id);
+      if (!a || a.sha256 !== e.sha256 || a.revision !== e.revision) return { ok: false, error: "This piece changed. Refresh the page." };
     }
-  }
-  const texts = await Promise.all(input.on.map((channel) => decidePart(db, input.storyId, channel, "text", true)));
-  const failed = texts.findIndex((r) => !r.ok);
-  if (failed >= 0) return { ok: false, error: `${input.on[failed]}: ${(texts[failed] as { error: string }).error}` };
-  for (const channel of input.off) {
-    for (const part of ["text", "asset"] as const) {
-      const r = await decidePart(db, input.storyId, channel, part, false);
-      if (!r.ok && r.error !== "Nothing to review here.") return { ok: false, error: `${channel}: ${r.error}` };
+    for (const c of plan.off) await dropPieceChannel(admin, input.storyId, c, { dryRun: true });
+    const keep = plan.on.filter((c) => !plan.add.includes(c));
+    const adding = plan.add.map((c) => ({ channel: c, files: pc.filesFor(state, c, keep) }));
+    for (const c of plan.off) {
+      for (const part of ["text", "asset"] as const) {
+        const r = await decidePart(db, input.storyId, c, part, false);
+        if (!r.ok && r.error !== "Nothing to review here.") return { ok: false, error: `${c}: ${r.error}` };
+      }
+      await dropPieceChannel(admin, input.storyId, c);
+      await pc.unbindChannel(admin, state, c);
     }
-    try {
-      const { dropPieceChannel } = await import("@/lib/kill-piece");
-      await dropPieceChannel(adminDb(), input.storyId, channel);
-    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+    for (const { channel, files } of adding) await pc.bindChannel(admin, files, channel);
+    const now = await pc.loadPieceChannels(admin, input.storyId);
+    for (const c of plan.on) {
+      const media = pc.filesFor(now, c, []).filter((a) => a.kind !== "copy").map((a) => ({ ...a, channels: [c] }));
+      if (media.length) {
+        const r = await decideRows(db, media, c, "approved", "");
+        if (!r.ok) return { ok: false, error: `${c} media: ${r.error}` };
+      }
+      const t = await decidePart(db, input.storyId, c, "text", true);
+      if (!t.ok) return { ok: false, error: `${c}: ${t.error}` };
+    }
+    scheduleApproved(input.storyId);
+    revalidatePath("/calendar");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
-  if (final && texts.some((r) => r.ok && r.final)) scheduleApproved(input.storyId);
-  revalidatePath("/calendar");
-  return { ok: true };
 }
 
 /** Season screen: "Request changes". Marks the part needs-changes on this platform AND records the note, so an agent reworks it. */

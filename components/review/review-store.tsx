@@ -23,7 +23,7 @@ export type ReviewActions = {
   /** `assetId` narrows a text decision to one copy file (a newsletter essay: a Story can carry two). */
   setPartApproval: (input: { storyId: string; channel: string; part: "text" | "asset"; approve: boolean; assetId?: string }) => Promise<Result>;
   setTextApprovalAll: (input: { storyId: string; channels: string[]; approve: boolean }) => Promise<Result>;
-  approvePieceChannels: (input: { storyId: string; on: string[]; off: string[]; media: Array<{ assetIds: string[]; channels: string[]; expected: Expected[] }> }) => Promise<Result>;
+  approvePieceChannels: (input: { storyId: string; on: string[]; expected: Expected[] }) => Promise<Result>;
   requestChanges: (input: { storyId: string; channel: string; part: "text" | "asset"; note: string; assetId?: string }) => Promise<Result>;
   setMediaApproval: (input: { storyId: string; assetIds: string[]; channels: string[]; expected: Expected[]; approve: boolean }) => Promise<Result>;
   requestMediaChanges: (input: { storyId: string; assetIds: string[]; channels: string[]; expected: Expected[]; note: string }) => Promise<Result>;

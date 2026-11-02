@@ -89,7 +89,9 @@ export async function killPiece(db: SupabaseClient, storyId: string, opts: { rea
  * any Zernio post that has not gone out is deleted, exactly like a kill but for one channel. A leg that already went out
  * is left alone and reported. Refuses while a send is in flight or a shared delivery holds the row.
  */
-export async function dropPieceChannel(db: SupabaseClient, storyId: string, channel: string): Promise<{ skipped: string[]; deleted: Record<string, string>; published: string[] }> {
+export async function dropPieceChannel(db: SupabaseClient, storyId: string, channel: string, opts: { dryRun?: boolean } = {}): Promise<{ skipped: string[]; deleted: Record<string, string>; published: string[] }> {
+  if (must(await db.from("gtm_piece_reviews").select("story_id").eq("story_id", storyId).maybeSingle(), "shared review check"))
+    throw new Error(`${storyId} uses shared review: change its channels on its shared card`);
   const rows = (must(await db.from("gtm_content_items").select("id,status,zernio_post_id,channels").eq("story_id", storyId), `rows of ${storyId}`) as (Row & { channels: string[] | null })[])
     .filter((r) => (r.channels ?? []).includes(channel));
   const out = { skipped: [] as string[], deleted: {} as Record<string, string>, published: rows.filter((r) => r.status === "published").map((r) => r.id) };
@@ -108,6 +110,7 @@ export async function dropPieceChannel(db: SupabaseClient, storyId: string, chan
       throw e;
     }
   }
+  if (opts.dryRun) return { ...out, skipped: live.map((r) => r.id) };
   for (const r of live) {
     if (r.zernio_post_id && !gone.has(r.id)) {
       try { await zernio(`/posts/${r.zernio_post_id}`, { method: "DELETE" }); }

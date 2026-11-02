@@ -24,3 +24,13 @@ Read this file, then [RESOLVER.md](RESOLVER.md), before working in this reposito
 Prefer codebase-memory-mcp when available: `search_graph` with project `vibrana-gtm`, then `trace_path` and `get_code_snippet`. Index a missing project first; index a worktree under a distinct key. Verify current source before editing. Use targeted file search when graph results are unavailable or insufficient, and read documentation/configuration normally.
 
 Run the checks appropriate to the change. Standard code checks are `pnpm typecheck`, `pnpm test:coverage`, `pnpm build` and the local database/browser checks defined in CI. Keep sample mode explicit and retain all existing check requirements. Documentation-only work still needs link/privacy validation and the required PR checks.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+## This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

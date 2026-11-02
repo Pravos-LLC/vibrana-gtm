@@ -396,47 +396,54 @@ function SendBack({ storyId, pipeline, expected }: { storyId: string; pipeline: 
  * own. The tab moves on once both are approved.
  */
 /**
- * One approval for the whole piece, with the channels John ticks (John, 2026-11-02). Ticked channels get the same post
- * text and the final media, approved in one call; an unticked channel is taken back and any unsent post on it removed.
- * A channel already sent stays sent. The per-part buttons below remain for changes and notes.
+ * One approval for the whole piece, with the channels John ticks (John, 2026-11-02). The ticks start at the channels the
+ * piece is staged for. A ticked channel gets the same post text and the final media, approved in one call; a newly ticked
+ * one has them bound first; an unticked one is taken back, its unsent post removed and the channel unbound, so no later
+ * approval brings it back. The button says what it removes or adds. Rough cuts are approved as a stage, not here.
  */
+const OFFER: Role[] = ["linkedin", "instagram", "youtube"];
 function ChannelApproval({ storyId, cards, groups }: { storyId: string; cards: PlatformCard[]; groups: MediaGroup[] }) {
   const states = usePartStates();
   const { actions } = useReviewActions();
-  const router = useRouter();
-  const channels = cards.map((c) => c.channel);
-  const approved = channels.filter((c) => states[partKey("text", storyId, c)]?.status === "approved");
-  const [on, setOn] = useState<Role[]>(approved.length ? approved : channels);
+  const bound = cards.map((c) => c.channel).filter((c) => OFFER.includes(c));
+  const media = groups.flatMap((g) => g.assets);
+  const offer = OFFER.filter((c) => bound.includes(c) || (c === "linkedin") || (c === "instagram" && media.length > 0) || (c === "youtube" && media.some((a) => a.kind === "video")));
+  const [on, setOn] = useState<Role[]>(bound);
   const [busy, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const done = approved.length > 0 && JSON.stringify([...approved].sort()) === JSON.stringify([...on].sort());
+  if (!bound.length) return null;
+  const rough = media.some((a) => a.stage && a.stage !== "final");
+  const adds = on.filter((c) => !bound.includes(c));
+  const removes = bound.filter((c) => !on.includes(c));
+  const approved = bound.every((c) => states[partKey("text", storyId, c)]?.status === "approved") && groups.every((g) => states[partKey("media", storyId, g.key)]?.status === "approved");
+  const done = approved && !adds.length && !removes.length;
   const approve = () => startTransition(async () => {
     setError(null);
-    const r = await actions.approvePieceChannels({
-      storyId, on, off: channels.filter((c) => !on.includes(c)),
-      media: groups.map((g) => ({ assetIds: g.assets.map((a) => a.id), channels: g.channels, expected: expectedOf(g.assets) })),
-    });
+    const seen = [...new Map([...cards.map((c) => c.copy), ...media].map((a) => [a.id, a])).values()];
+    const r = await actions.approvePieceChannels({ storyId, on, expected: expectedOf(seen) });
     if (!r.ok) setError(r.error);
-    else router.refresh();
+    // The review store is seeded once per page; a channel change adds or removes whole cards, so reload the board.
+    else window.location.reload();
   });
+  const label = done ? `Approved for ${names(on)}` : `Approve for ${names(on) || "no channel"}${removes.length ? `, removes ${names(removes)}` : ""}${adds.length ? `, adds ${names(adds)}` : ""}`;
   return (
     <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-line bg-[color:var(--surface-frost)] px-4 py-3" role="group" aria-label="Channels">
       <span className="text-sm font-medium text-ink">Goes to</span>
-      {cards.map((c) => {
-        const { Icon, label } = PLATFORM[c.channel];
-        const checked = on.includes(c.channel);
+      {offer.map((c) => {
+        const { Icon, label: name } = PLATFORM[c];
+        const checked = on.includes(c);
         return (
-          <label key={c.channel} className={cn("inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-sm", checked ? "border-violet/50 bg-violet/10 text-ink" : "border-line text-ink-3")}>
-            <input type="checkbox" className="sr-only" checked={checked} disabled={busy}
-              onChange={() => setOn(checked ? on.filter((x) => x !== c.channel) : [...on, c.channel])} />
-            <Icon className="size-4" aria-hidden />{label}
+          <label key={c} className={cn("inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-sm", checked ? "border-violet/50 bg-violet/10 text-ink" : "border-line text-ink-3")}>
+            <input type="checkbox" className="sr-only" checked={checked} disabled={busy || rough}
+              onChange={() => setOn(checked ? on.filter((x) => x !== c) : [...on, c])} />
+            <Icon className="size-4" aria-hidden />{name}
           </label>
         );
       })}
-      <Button size="sm" className="ml-auto" disabled={busy || !on.length || done} onClick={approve}>
-        <Check className="size-4" aria-hidden />{done ? `Approved for ${names(on)}` : `Approve for ${names(on) || "no channel"}`}
-      </Button>
-      {on.length > 1 && <span className="w-full text-xs text-ink-3">One post text goes to every ticked channel.</span>}
+      {rough
+        ? <span className="ml-auto text-xs text-ink-3">The media is a rough cut: approve the edit below. Channels are picked once the final is in.</span>
+        : <Button size="sm" className="ml-auto" disabled={busy || !on.length || done} onClick={approve}><Check className="size-4" aria-hidden />{label}</Button>}
+      {on.length > 1 && !rough && <span className="w-full text-xs text-ink-3">One post text goes to every ticked channel.</span>}
       {error && <p className="w-full text-sm text-red-strong" role="alert">{error}</p>}
     </div>
   );
@@ -496,6 +503,8 @@ function PlatformTabs({ storyId, cards, groups, all, mode, pipeline, decisions, 
   };
   const firstOwn = cards.map(ownOf).find((own) => own.length)?.[0];
   return (
+    <>
+    <ChannelApproval storyId={storyId} cards={cards} groups={groups} />
     <div className={cn("grid min-w-0 scroll-mt-20 gap-8", firstOwn && "lg:grid-cols-[minmax(0,auto)_minmax(24rem,1fr)]")} ref={box} id={`${storyId}-platforms`}>
       {firstOwn && (
         <div className="min-w-0 max-w-full" style={{ width: heroWidth(firstOwn.assets[0]?.ratio ?? 9 / 16) }}>
@@ -535,6 +544,7 @@ function PlatformTabs({ storyId, cards, groups, all, mode, pipeline, decisions, 
       ))}
       </div>
     </div>
+    </>
   );
 }
 
