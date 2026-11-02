@@ -1031,7 +1031,7 @@ const commands: Record<string, () => Promise<void>> = {
         console.log(`Weekly rhythm: ${WEEKDAYS.map((d) => `${d} ${dayLabels(d).primary}`).join(" · ")}`);
         for (const w of reports) {
           const errors = w.issues.filter((i) => i.severity === "error").length;
-          console.log(`\nWeek of ${w.monday}: ${w.pieces} pieces · ${w.counts.talkingHeads} talking heads · ${w.counts.voiceoverReels} voiceover reels · ${w.counts.prism} Prism Light · ${w.issues.length ? `${w.issues.length} issues (${errors} errors)` : "clean"}`);
+          console.log(`\nWeek of ${w.monday}: ${w.pieces} pieces · ${w.issues.length ? `${w.issues.length} issues (${errors} errors)` : "clean"}`);
           for (const i of w.issues) console.log(`  ${i.severity === "error" ? "ERROR" : "warn "} ${i.rule.padEnd(13)} ${i.message}`);
           for (const g of gaps.filter((x) => x.date >= w.monday && x.date <= addDays(w.monday, 6))) console.log(`  gap   ${g.day} ${g.date}: wants ${g.wants}`);
         }
@@ -1727,11 +1727,10 @@ const help = `gtm <command> [--json]
                            send it again from the current approved text at its slot
   piece kill <story-id> [--dry-run] [--reason text]   John's "kill it": every calendar row of the piece skipped (off the
                            calendar and /content), unsent Zernio posts deleted, open notes resolved
-  calendar lint [--weeks 4] [--from date] [--json]   the weekly rhythm (the guide's day map: each day's pillar,
-                           fallbacks, channels and off days) against the house rules: one piece a day,
-                           channels on one day, 2 talking heads, at most 1 voiceover reel, no look twice in a row,
-                           topic spacing, LinkedIn caption length; plus the weekdays still empty. Run it before
-                           planning a week
+  calendar lint [--weeks 4] [--from date] [--json]   what would break a post, week by week: two pieces on one day,
+                           a channel on a day it does not post, a piece's legs on different days, a channel that
+                           never takes the pillar, a missing pillar, LinkedIn caption length; plus the posting days
+                           still empty
   reviewer invite --party "<who>" [--days N] [--accounts 1-5] [--note text]   a private review link for a third party (example_approver / Example Series):
                            makes up to two logins (the reviewer and a cofounder; opening it again changes nothing, they
                            return with their email and password); they see only their pieces' finals at /shared and

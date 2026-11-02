@@ -369,7 +369,7 @@ export function seasonEndFor(seasons: Season[], today: string): string | undefin
   return (sorted.find((s) => s.starts_on <= today && today <= s.ends_on) ?? sorted.find((s) => s.starts_on > today))?.ends_on;
 }
 /** The rules a moved piece must not break (pillar fit is the ranking; caption length is the send gate's job). */
-const PLACEMENT_RULES = new Set<Issue["rule"]>(["one-piece", "voiceover", "look-adjacent", "prism-cap", "topic", "channel-day"]);
+const PLACEMENT_RULES = new Set<Issue["rule"]>(["one-piece", "channel-day", "channel-pillar"]);
 const placementIssues = (posts: LintPost[], date: string) =>
   lintCalendar(posts.filter((p) => p.date >= addDays(date, -14) && p.date <= addDays(date, 21)), mondayOf(date), 2).flatMap((w) => w.issues).filter((i) => PLACEMENT_RULES.has(i.rule)).map((i) => `${i.rule}|${i.date}|${i.message}`);
 
