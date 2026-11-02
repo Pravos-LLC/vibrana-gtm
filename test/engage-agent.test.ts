@@ -127,6 +127,7 @@ test("queueItem fences what a stranger wrote and flags open slots and reply-to-r
   assert.equal(item.lands_under_comment, "p1");
   assert.equal(item.version, ROW.updated_at);
   assert.ok(!("text" in item), "raw text only appears under untrusted");
+  assert.equal(item.untrusted.author_name, "A", "names are strangers' text too");
 });
 
 test("nextQueue keeps only the newest DM of a conversation and lists the rest as superseded", async () => {
@@ -135,4 +136,25 @@ test("nextQueue keeps only the newest DM of a conversation and lists the rest as
   const q = await agent.nextQueue(adminDb(), 25);
   assert.deepEqual(q.items.map((i) => i.id).sort(), ["b", "c", "d"]);
   assert.deepEqual(q.superseded_dm_ids, ["a"]);
+});
+
+test("nextQueue keeps rows with no classification yet (only spam is left out)", async () => {
+  const m = use([{ method: "GET", url: REST + "gtm_comments", json: [] }]);
+  await agent.nextQueue(adminDb(), 25);
+  assert.match(decodeURIComponent(m.calls[0].url), /or=\(classification\.is\.null,classification\.neq\.spam\)/);
+});
+
+test("agent hide: needs the version, and is claimed strictly from new/drafted on that version", async () => {
+  const bad = await agent.handleAgent(adminDb(), "hide", { id: ID });
+  assert.equal(bad.status, 400);
+  const m = use([
+    { method: "GET", url: REST + "gtm_comments", json: ROW }, HEAD_ZERO,
+    { method: "PATCH", url: REST + "gtm_comments", json: [] },
+  ]);
+  const r = await agent.handleAgent(adminDb(), "hide", { id: ID, version: ROW.updated_at });
+  assert.equal(r.status, 409);
+  const url = decodeURIComponent(m.calls.find((c) => c.method === "PATCH")!.url);
+  assert.match(url, /status=in\.\(new,drafted\)/);
+  assert.doesNotMatch(url, /acted_at\.lt/);
+  assert.match(url, /updated_at=eq\./);
 });

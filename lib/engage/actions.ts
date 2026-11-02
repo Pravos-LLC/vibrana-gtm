@@ -173,11 +173,11 @@ export async function markNotSpam(db: SupabaseClient, id: string, actor: string,
 }
 
 /** Hides the comment on the platform (spam). Only where Zernio supports hiding. */
-export async function hideCommentRow(db: SupabaseClient, id: string, actor: string, deps: Deps = {}): Promise<Result> {
+export async function hideCommentRow(db: SupabaseClient, id: string, actor: string, deps: Deps = {}, opts: SendOpts = {}): Promise<Result> {
   const c = await getComment(db, id);
   if (!c) return { ok: false, error: "That comment is gone." };
   if (!canHide(c)) return { ok: false, error: `${c.platform} comments cannot be hidden through Zernio. Skip it instead.` };
-  if (!(await claim(db, id, OPEN_STATUSES, { status: "approved", acted_by: actor, acted_at: new Date().toISOString(), error: null }))) return { ok: false, error: await alreadyHandled(db, id) };
+  if (!(await claim(db, id, opts.strict ? ["new", "drafted"] : OPEN_STATUSES, { status: "approved", acted_by: actor, acted_at: new Date().toISOString(), error: null }, { strict: opts.strict, version: opts.version }))) return { ok: false, error: await alreadyHandled(db, id) };
   try {
     await (deps.hide ?? hideComment)(replyTarget(c)!, c.external_id, c.account_id!);
     must(await db.from("gtm_comments").update({ status: "hidden", note: "hidden as spam", updated_at: new Date().toISOString() }).eq("id", id), "mark hidden");

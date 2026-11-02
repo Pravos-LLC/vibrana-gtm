@@ -26,8 +26,9 @@ export function queueItem(c: StoredComment) {
     // Replies to a reply land under the top-level comment on every platform.
     lands_under_comment: c.kind === "comment" ? replyCommentId(c) : null, is_reply_to_reply: c.kind === "comment" && Boolean(c.parent_external_id),
     classification: c.classification, stance: c.stance ?? null, draft: c.draft ?? "", draft_reason: c.draft_reason, open_slots: findAgentNotes(c.draft ?? ""),
-    author: { name: c.author_name, username: c.author_username, followers: c.author_followers, crm: c.author_crm ?? null },
+    author: { followers: c.author_followers, crm: c.author_crm ?? null },
     untrusted: {
+      author_name: c.author_name, author_username: c.author_username,
       comment: c.text, post_excerpt: c.post_preview, author_headline: c.author_headline ?? null, author_website: c.author_website ?? null,
       linked: c.linked ?? null, attachments: c.attachments ? c.attachments.length : 0,
     },
@@ -36,7 +37,7 @@ export function queueItem(c: StoredComment) {
 
 /** The open queue, oldest first. Several DMs in one conversation collapse to the newest one. */
 export async function nextQueue(db: SupabaseClient, limit: number) {
-  const rows = must(await db.from("gtm_comments").select(COMMENT_COLUMNS).eq("is_own", false).in("status", OPEN).neq("classification", "spam").order("received_at", { ascending: true }).limit(300), "queue") as unknown as StoredComment[];
+  const rows = must(await db.from("gtm_comments").select(COMMENT_COLUMNS).eq("is_own", false).in("status", OPEN).or("classification.is.null,classification.neq.spam").order("received_at", { ascending: true }).limit(300), "queue") as unknown as StoredComment[];
   const newestDm = new Map<string, StoredComment>();
   for (const c of rows) {
     if (c.kind !== "dm" || !c.conversation_id) continue;
@@ -75,7 +76,7 @@ export async function handleAgent(db: SupabaseClient, verb: string, body: Body, 
   }
   if (!uuid.test(id)) return bad("id must be the row's UUID.");
   const version = str(body.version);
-  const needsVersion = ["reply", "copied", "skip"].includes(verb);
+  const needsVersion = ["reply", "copied", "skip", "hide"].includes(verb);
   if (needsVersion && !version) return bad("version is required: send back the version `next` showed you.");
   const opts = { strict: true, version: version || undefined };
   const wrap = (r: { ok: true; status: string; message: string } | { ok: false; error: string }): AgentResult =>
@@ -96,7 +97,10 @@ export async function handleAgent(db: SupabaseClient, verb: string, body: Body, 
     return wrap(await markCopied(db, id, text, AGENT_ACTOR, { ...opts, source }));
   }
   if (verb === "skip") return wrap(await skipComment(db, id, AGENT_ACTOR, opts));
-  if (verb === "hide") return wrap(await hideCommentRow(db, id, AGENT_ACTOR));
+  if (verb === "hide") {
+    if (await sentThisHour(db) >= SENDS_PER_HOUR) return bad(`More than ${SENDS_PER_HOUR} actions in the last hour. Slow down.`, 429);
+    return wrap(await hideCommentRow(db, id, AGENT_ACTOR, {}, opts));
+  }
   if (verb === "not-spam") {
     const r = await markNotSpam(db, id, AGENT_ACTOR);
     return r.ok ? { status: 200, body: r } : { status: 409, body: r };
