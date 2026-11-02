@@ -7,7 +7,7 @@ import { createContext, useCallback, useContext, useMemo, useReducer, type React
 import type { EditableField } from "@/lib/season";
 import { combineStatus, summarize, type Overview, type SummaryCard, type SummaryStage } from "@/lib/season-review";
 import {
-  addSeriesNote, approveMediaWithNote, approveTextWithNote, approveTextWithNoteAll, decideStage, reopenStage, requestChanges, requestMediaChanges, requestTextChangesAll, saveSeasonCopy, setMediaApproval, setPartApproval, setStoryHold, setTextApprovalAll, killPiece, markPublished,
+  addSeriesNote, approveMediaWithNote, approveTextWithNote, approveTextWithNoteAll, decideStage, reopenStage, requestChanges, requestMediaChanges, requestTextChangesAll, saveSeasonCopy, setMediaApproval, setPartApproval, setStoryHold, setTextApprovalAll, killPiece, markPublished, approvePieceChannels,
 } from "@/app/stories/actions";
 import { shareForReview } from "@/app/content/reviewer-actions";
 import type { ShareForReviewAction } from "@/components/review/share-for-review";
@@ -23,6 +23,7 @@ export type ReviewActions = {
   /** `assetId` narrows a text decision to one copy file (a newsletter essay: a Story can carry two). */
   setPartApproval: (input: { storyId: string; channel: string; part: "text" | "asset"; approve: boolean; assetId?: string }) => Promise<Result>;
   setTextApprovalAll: (input: { storyId: string; channels: string[]; approve: boolean }) => Promise<Result>;
+  approvePieceChannels: (input: { storyId: string; on: string[]; off: string[]; media: Array<{ assetIds: string[]; channels: string[]; expected: Expected[] }> }) => Promise<Result>;
   requestChanges: (input: { storyId: string; channel: string; part: "text" | "asset"; note: string; assetId?: string }) => Promise<Result>;
   setMediaApproval: (input: { storyId: string; assetIds: string[]; channels: string[]; expected: Expected[]; approve: boolean }) => Promise<Result>;
   requestMediaChanges: (input: { storyId: string; assetIds: string[]; channels: string[]; expected: Expected[]; note: string }) => Promise<Result>;
@@ -41,7 +42,7 @@ export type ReviewActions = {
   /** A Substack essay is live: records its URL and the card leaves /content (lib/mark-published.ts). */
   markPublished: (input: { storyId: string; assetId: string; url: string }) => Promise<Result>;
 };
-export const realActions: ReviewActions = { setPartApproval, setTextApprovalAll, requestChanges, requestTextChangesAll, approveTextWithNoteAll, setMediaApproval, requestMediaChanges, approveTextWithNote, approveMediaWithNote, decideStage, reopenStage, saveSeasonCopy, setStoryHold, addSeriesNote, shareForReview, killPiece, markPublished };
+export const realActions: ReviewActions = { setPartApproval, setTextApprovalAll, approvePieceChannels, requestChanges, requestTextChangesAll, approveTextWithNoteAll, setMediaApproval, requestMediaChanges, approveTextWithNote, approveMediaWithNote, decideStage, reopenStage, saveSeasonCopy, setStoryHold, addSeriesNote, shareForReview, killPiece, markPublished };
 
 /**
  * Every call that hands John's words to an agent (a note, changes, approve with note, a series note) says so when it
