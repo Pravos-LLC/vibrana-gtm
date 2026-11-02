@@ -14,17 +14,30 @@ import { isFinalStage } from "./stage";
 import { allHandPublished } from "./hand-published";
 import { withoutAlternatives } from "./newsletter-card";
 
+/** The owner account an action is recorded under: the one named (`--as`, else GTM_OWNER_EMAIL), else the only owner. */
+export function pickOwner(users: Array<{ email?: string | null; app_metadata?: unknown }>, wanted?: string | null): string {
+  const owners = users.filter((u) => (u.app_metadata as { gtm_owner?: boolean } | undefined)?.gtm_owner === true && u.email).map((u) => u.email!);
+  const want = wanted?.trim().toLowerCase();
+  if (want) {
+    const hit = owners.find((e) => e.toLowerCase() === want);
+    if (!hit) throw new Error(`${wanted} is not a cockpit owner (owners: ${owners.join(", ") || "none"})`);
+    return hit;
+  }
+  if (owners.length === 1) return owners[0];
+  if (!owners.length) throw new Error("no cockpit owner account exists");
+  throw new Error(`${owners.length} cockpit owners (${owners.join(", ")}): say whose action this is with --as <email> or GTM_OWNER_EMAIL`);
+}
+
 /**
- * A client signed in as the cockpit owner. The review RPC checks `auth.uid()` and the owner claim, so it
- * needs a real owner session; this mints one for the existing owner user through the admin API. Only call
- * it for an action John has asked for or taken himself: it records the approval under his user id.
+ * A client signed in as a cockpit owner. The review RPC checks `auth.uid()` and the owner claim, so it needs a real
+ * owner session; this mints one for that owner through the admin API. Only call it for an action that owner asked for
+ * or took: it records the decision under their user id.
  */
-export async function ownerClient(admin: SupabaseClient): Promise<SupabaseClient> {
+export async function ownerClient(admin: SupabaseClient, as: string | null = process.env.GTM_OWNER_EMAIL ?? null): Promise<SupabaseClient> {
   const { data, error } = await admin.auth.admin.listUsers({ perPage: 200 });
   if (error) throw new Error(`list users: ${error.message}`);
-  const owners = data.users.filter((u) => (u.app_metadata as { gtm_owner?: boolean })?.gtm_owner === true && u.email);
-  if (owners.length !== 1) throw new Error(`expected exactly one gtm_owner user, found ${owners.length}`);
-  const link = await admin.auth.admin.generateLink({ type: "magiclink", email: owners[0].email! });
+  const email = pickOwner(data.users, as);
+  const link = await admin.auth.admin.generateLink({ type: "magiclink", email });
   if (link.error || !link.data.properties?.hashed_token) throw new Error(`owner session: ${link.error?.message ?? "no token"}`);
   const client = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, { auth: { persistSession: false } });
   const verified = await client.auth.verifyOtp({ token_hash: link.data.properties.hashed_token, type: "magiclink" });
@@ -52,10 +65,10 @@ export async function storyState(db: SupabaseClient, storyId: string): Promise<S
 }
 
 /** Approves every pending asset/channel pair (or just `only`) for the bytes currently staged. */
-export async function approveStory(admin: SupabaseClient, storyId: string, opts: { only?: string; note?: string } = {}) {
+export async function approveStory(admin: SupabaseClient, storyId: string, opts: { only?: string; note?: string; as?: string } = {}) {
   const copies = must(await admin.from("gtm_story_assets").select("id,body").eq("story_id", storyId).eq("kind", "copy"), "story copy") as { id: string; body: string | null }[];
   for (const c of copies) if (!opts.only || c.id === opts.only) assertNoAgentNotes(c.id, c.body);
-  const owner = await ownerClient(admin);
+  const owner = await ownerClient(admin, opts.as);
   const assets = must(await owner.from("gtm_story_assets").select("id,sha256,revision").eq("story_id", storyId), "story assets") as Pick<StoryAsset, "id" | "sha256" | "revision">[];
   const rows = must(await owner.from("gtm_story_asset_channels").select("asset_id,channel,status").in("asset_id", assets.map((a) => a.id)), "story approvals") as Pick<StoryChannel, "asset_id" | "channel" | "status">[];
   const approved: string[] = [];

@@ -37,7 +37,16 @@ const flag = (name: string) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const positional = argv.filter((a, i) => !a.startsWith("--") && !(argv[i - 1] ?? "").match(/^--(week|iso-week|track|season|days|since|only|round|series|title|description|starts|ends|pillars|batch|assets|asset|note|linkedin|instagram|youtube|kind|tags|tag|why|pillar|out|by|status|lane|limit|format|story|to|from|account|who|stage|changes|summary|effort|impact|source|owner|lens|slug|addresses|replies|motion-sha|motion-path|credits|balance-after|job|skill|from|category|rule|do-not-use|only|party|sha|render|keys|notes|eta|agent|storyboard|manifest|brand|theme|brief|prompt-file|reference|art-dir|asset-root|shape|weeks|email|file|reason|url|text|version)$/));
+// Whose owner account an approval or fix is recorded under, when the cockpit has more than one owner (lib/story-ops pickOwner).
+{
+  const eq = argv.find((a) => a.startsWith("--as="));
+  const as = eq ? eq.slice(5) : argv.includes("--as") ? (flag("--as") ?? "") : undefined;
+  if (as !== undefined) {
+    if (!as || as.startsWith("--")) { console.error("gtm: --as needs an owner email: --as you@example.com"); process.exit(1); }
+    process.env.GTM_OWNER_EMAIL = as;
+  }
+}
+const positional = argv.filter((a, i) => !a.startsWith("--") && !(argv[i - 1] ?? "").match(/^--(as|week|iso-week|track|season|days|since|only|round|series|title|description|starts|ends|pillars|batch|assets|asset|note|linkedin|instagram|youtube|kind|tags|tag|why|pillar|out|by|status|lane|limit|format|story|to|from|account|who|stage|changes|summary|effort|impact|source|owner|lens|slug|addresses|replies|motion-sha|motion-path|credits|balance-after|job|skill|from|category|rule|do-not-use|only|party|sha|render|keys|notes|eta|agent|storyboard|manifest|brand|theme|brief|prompt-file|reference|art-dir|asset-root|shape|weeks|email|file|reason|url|text|version)$/));
 const [cmd, ...rest] = positional;
 
 // In `gtm sync`, commands hand their result to a sink instead of printing.
@@ -699,7 +708,7 @@ const commands: Record<string, () => Promise<void>> = {
         for (const d of p.decisions) console.log(`  ${d.decided_at.slice(0, 16)} ${d.party === "john" ? "John" : d.who ?? "third party"} ${d.decision} ${d.stage}${d.note ? `: ${d.note}` : ""}`);
       });
     }
-    if (sub !== "stage" || !rest[1]) throw new Error("usage: gtm story stage <story.yaml> [--stage rough-cut|final] [--dry-run] [--no-heal] | status <id> | approve <id> [--asset a] [--note n] | schedule <id> [--linkedin 'YYYY-MM-DD HH:MM'] [--instagram '...'] [--dry-run] | pull <id> | publish-media <story-id> [--assets a,b] [--dry-run] | mark-published <story-id> <copy-asset-id> --url U [--force] [--dry-run] | drop-channel <story-id> <channel> [--dry-run] | feedback <id> | resolve <note-id> 'reply' | withdraw <id> --note N | hidden [id]");
+    if (sub !== "stage" || !rest[1]) throw new Error("usage: gtm story stage <story.yaml> [--stage rough-cut|final] [--dry-run] [--no-heal] | status <id> | approve <id> [--asset a] [--note n] [--as owner-email] | schedule <id> [--linkedin 'YYYY-MM-DD HH:MM'] [--instagram '...'] [--dry-run] | pull <id> | publish-media <story-id> [--assets a,b] [--dry-run] | mark-published <story-id> <copy-asset-id> --url U [--force] [--dry-run] | drop-channel <story-id> <channel> [--dry-run] | feedback <id> | resolve <note-id> 'reply' | withdraw <id> --note N | hidden [id]");
     if (argv.includes("--stage") && !flag("--stage")) throw new Error("--stage needs a stage key, e.g. --stage rough-cut or --stage final");
     if (argv.includes("--changes") && !flag("--changes")) throw new Error('--changes needs a sentence, e.g. --changes "Raw-track audio, new end card"');
     // A configured dry run may read legacy asset provenance but never writes. Offline dry runs
@@ -1899,6 +1908,9 @@ const help = `gtm <command> [--json]
                            different URL). The Mark published button on the card in /content does the same
   story publish-media <story-id> [--assets a,b] [--dry-run]
                            copy the Story's newsletter images to the public bucket (permanent URLs for Substack)
+  story approve <id> [--asset a] [--note n] [--as owner-email]
+                           record an owner's approval at their direction. With more than one owner account, say whose:
+                           --as <email> or GTM_OWNER_EMAIL (also used by story resolve and audit --fix)
   story status|feedback|pull <id>   John's approvals and notes from /content (Content review); pull syncs approved copy.
                            A note on one format of a video (4:5, 9:16, 9:16-youtube) covers every format unless John
                            ticked "Only this format": feedback prints it once as ALL FORMATS: <ids>; fix each, resolve once
