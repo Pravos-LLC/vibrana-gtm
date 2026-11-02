@@ -25,7 +25,7 @@ export function LineBlock({ title, unit, x, series }: { title: string; unit?: st
         <figcaption id={`${id}-t`} className="sr-only">{title}</figcaption>
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-3" aria-hidden>
           {series.map((s, i) => (
-            <span key={s.name} className="inline-flex items-center gap-1.5">
+            <span key={i} className="inline-flex items-center gap-1.5">
               <svg width="14" height="4"><line x1="0" y1="2" x2="14" y2="2" stroke={COLORS[i % COLORS.length]} strokeWidth="2" strokeDasharray={s.dashed ? "3 2" : undefined} /></svg>{s.name}
             </span>
           ))}
@@ -39,13 +39,13 @@ export function LineBlock({ title, unit, x, series }: { title: string; unit?: st
         <div className="max-h-72 overflow-auto rounded-lg border border-line">
           <table className="w-full text-xs">
             <thead className="sticky top-0 bg-surface-raised text-ink-3">
-              <tr><th className="px-2 py-1.5 text-left font-medium">When</th>{series.map((s) => <th key={s.name} className="px-2 py-1.5 text-right font-medium">{s.name}</th>)}</tr>
+              <tr><th className="px-2 py-1.5 text-left font-medium">When</th>{series.map((s, i) => <th key={i} className="px-2 py-1.5 text-right font-medium">{s.name}</th>)}</tr>
             </thead>
             <tbody>
               {x.map((label, j) => (
-                <tr key={label} className="border-t border-line">
+                <tr key={j} className="border-t border-line">
                   <td className="px-2 py-1 text-ink-2">{label}</td>
-                  {series.map((s) => <td key={s.name} className="px-2 py-1 text-right tabular-nums text-ink">{s.values[j] == null ? "—" : s.values[j]!.toLocaleString("en-US")}</td>)}
+                  {series.map((s, i) => <td key={i} className="px-2 py-1 text-right tabular-nums text-ink">{s.values[j] == null ? "—" : s.values[j]!.toLocaleString("en-US")}</td>)}
                 </tr>
               ))}
             </tbody>

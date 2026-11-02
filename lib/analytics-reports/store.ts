@@ -26,7 +26,8 @@ export async function getReport(db: SupabaseClient, slug: string): Promise<Repor
 
 /**
  * Validate and upsert one report (one per kind and Monday). A republished week keeps its email record, so a
- * correction does not send John a second link unless `resend` asks for it.
+ * correction does not send John a second link unless `resend` asks for it (the cron picks rows by updated_at, so
+ * --resend works on an old week too).
  */
 export async function publishReport(db: SupabaseClient, doc: unknown, opts: { resend?: boolean; dryRun?: boolean } = {}) {
   const problems = validateReportDoc(doc);
@@ -67,8 +68,12 @@ const missingKey = (monday: string) => `analytics_report.missing.${monday.replac
 export type DeliveryResult = { sent: { slug: string; email_id: string | null }[]; missing: { week: string; email_id: string | null } | null; errors: string[] };
 
 /**
- * The hourly cron's work: email a link for every report published in the last 14 days that has not been
- * emailed, then, from Monday noon in Bali, alert once if last week has no report at all.
+ * The hourly cron's work: email a link for every report published or republished in the last 14 days that has
+ * not been emailed, then, from Monday noon in Bali, alert once if last week has no report at all.
+ *
+ * Each send is claimed first (a conditional update, or an insert that only one run can win), so an overlapping
+ * run, a slow Resend answer or a failed bookkeeping write never sends a second email. A failed send releases its
+ * claim so the next hour retries; Resend's idempotency key covers a send that went out but answered too late.
  */
 export async function deliverReports(db: SupabaseClient, opts: { now?: Date; to: string; from: string; fetcher?: typeof fetch }): Promise<DeliveryResult> {
   const now = opts.now ?? new Date();
@@ -76,15 +81,21 @@ export async function deliverReports(db: SupabaseClient, opts: { now?: Date; to:
   if (!origin) throw new Error("GTM_COCKPIT_URL must be the deployed https cockpit, or the email would link to nowhere");
   const out: DeliveryResult = { sent: [], missing: null, errors: [] };
   const since = new Date(now.getTime() - 14 * 86_400_000).toISOString();
-  const unsent = must(await db.from("gtm_analytics_reports").select("id,slug,title,headline,period_start,period_end,doc").is("emailed_at", null).gte("published_at", since).order("period_start"), "unsent reports") as Pick<ReportRow, "id" | "slug" | "title" | "headline" | "period_start" | "period_end" | "doc">[];
+  const unsent = must(await db.from("gtm_analytics_reports").select("id,slug,title,headline,period_start,period_end,doc,updated_at").is("emailed_at", null).gte("updated_at", since).order("period_start"), "unsent reports") as Pick<ReportRow, "id" | "slug" | "title" | "headline" | "period_start" | "period_end" | "doc" | "updated_at">[];
   for (const r of unsent) {
+    const claimed = must(await db.from("gtm_analytics_reports").update({ emailed_at: new Date().toISOString() }).eq("id", r.id).is("emailed_at", null).select("id"), "claim report email") as { id: string }[];
+    if (!claimed.length) continue; // another run took it
+    let id: string | null;
     try {
-      const { id } = await sendReportLink(r, { to: opts.to, from: opts.from, url: `${origin}${reportPath(r.slug)}`, fetcher: opts.fetcher });
-      must(await db.from("gtm_analytics_reports").update({ email_id: id, emailed_at: new Date().toISOString() }).eq("id", r.id), "mark emailed");
-      out.sent.push({ slug: r.slug, email_id: id });
+      ({ id } = await sendReportLink(r, { to: opts.to, from: opts.from, url: `${origin}${reportPath(r.slug)}`, fetcher: opts.fetcher, idempotencyKey: `analytics-report/${r.id}/${r.updated_at}` }));
     } catch (e) {
       out.errors.push(`${r.slug}: ${(e as Error).message.slice(0, 300)}`);
+      await db.from("gtm_analytics_reports").update({ emailed_at: null }).eq("id", r.id);
+      continue;
     }
+    out.sent.push({ slug: r.slug, email_id: id });
+    const { error } = await db.from("gtm_analytics_reports").update({ email_id: id }).eq("id", r.id);
+    if (error) out.errors.push(`${r.slug}: sent, but the email id was not saved: ${error.message}`);
   }
 
   const monday = lastWeekStart(now);
@@ -92,14 +103,18 @@ export async function deliverReports(db: SupabaseClient, opts: { now?: Date; to:
   const due = today > addDays(monday, 7) || localHour(now) >= MISSING_AFTER_HOUR;
   if (due) {
     const have = must(await db.from("gtm_analytics_reports").select("id").eq("kind", "weekly").eq("period_start", monday).maybeSingle(), "last week's report");
-    const alerted = must(await db.from("gtm_sync_state").select("key").eq("key", missingKey(monday)).maybeSingle(), "missing alert record");
-    if (!have && !alerted) {
-      try {
-        const { id } = await sendMissingAlert({ from: monday, to: addDays(monday, 6) }, { to: opts.to, from: opts.from, url: `${origin}/performance/reports`, fetcher: opts.fetcher });
-        must(await db.from("gtm_sync_state").upsert({ key: missingKey(monday), value: { at: new Date().toISOString(), email_id: id }, updated_at: new Date().toISOString() }), "record missing alert");
-        out.missing = { week: monday, email_id: id };
-      } catch (e) {
-        out.errors.push(`missing alert ${monday}: ${(e as Error).message.slice(0, 300)}`);
+    if (!have) {
+      const key = missingKey(monday);
+      const claimed = must(await db.from("gtm_sync_state").upsert({ key, value: { at: new Date().toISOString() }, updated_at: new Date().toISOString() }, { onConflict: "key", ignoreDuplicates: true }).select("key"), "claim missing alert") as { key: string }[];
+      if (claimed.length) {
+        try {
+          const { id } = await sendMissingAlert({ from: monday, to: addDays(monday, 6) }, { to: opts.to, from: opts.from, url: `${origin}/performance/reports`, fetcher: opts.fetcher, idempotencyKey: `analytics-report-missing/${monday}` });
+          out.missing = { week: monday, email_id: id };
+          await db.from("gtm_sync_state").update({ value: { at: new Date().toISOString(), email_id: id } }).eq("key", key);
+        } catch (e) {
+          out.errors.push(`missing alert ${monday}: ${(e as Error).message.slice(0, 300)}`);
+          await db.from("gtm_sync_state").delete().eq("key", key);
+        }
       }
     }
   }

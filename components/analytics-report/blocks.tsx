@@ -41,10 +41,10 @@ function ExtLink({ l, className }: { l: Link; className?: string }) {
 function Kpis({ items }: { items: Kpi[] }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      {items.map((k) => {
+      {items.map((k, i) => {
         const value = k.value == null ? null : typeof k.value === "number" ? `${num(k.value)}${k.unit ? ` ${k.unit}` : ""}` : k.value;
         return (
-          <StatTile key={k.label} label={k.label} value={value} missing={k.note} note={k.value == null ? undefined : k.note}
+          <StatTile key={i} label={k.label} value={value} missing={k.note} note={k.value == null ? undefined : k.note}
             tone={k.tone === "bad" ? "bad" : k.tone === "warn" ? "warn" : undefined} spark={k.spark}
             delta={k.delta ? { value: k.delta.value, label: k.delta.label, goodWhen: k.delta.good, format: (n) => `${n > 0 ? "+" : ""}${num(n)}${k.delta?.unit ?? ""}` } : null} />
         );
@@ -62,8 +62,8 @@ function Bars({ items, unit }: { items: { label: string; value: number; group?: 
         <div key={g || "all"}>
           {g && <p className="mb-2 text-xs font-medium uppercase tracking-[0.1em] text-ink-3">{g}</p>}
           <ul className="space-y-2">
-            {items.filter((x) => (x.group ?? "") === g).map((x) => (
-              <li key={`${g}-${x.label}`} className="grid grid-cols-[minmax(8rem,14rem)_1fr_auto] items-center gap-3 text-sm">
+            {items.filter((x) => (x.group ?? "") === g).map((x, i) => (
+              <li key={i} className="grid grid-cols-[minmax(8rem,14rem)_1fr_auto] items-center gap-3 text-sm">
                 <span className="truncate text-ink-2" title={x.label}>{x.label}</span>
                 <span className="h-2.5 rounded-full bg-[color:var(--viz-grid)]" aria-hidden>
                   <span className={cn("block h-full rounded-full", TONE_BAR[x.tone ?? "neutral"])} style={{ width: `${Math.max(2, (Math.abs(x.value) / max) * 100)}%` }} />
@@ -91,7 +91,7 @@ function TableBlock({ columns, rows }: { columns: { label: string; align?: "l" |
     <div className="overflow-x-auto rounded-xl border border-line">
       <table className="w-full text-sm">
         <thead className="bg-surface-raised text-xs text-ink-3">
-          <tr>{columns.map((c) => <th key={c.label} scope="col" className={cn("px-3 py-2 font-medium", c.align === "r" ? "text-right" : "text-left")}>{c.label}</th>)}</tr>
+          <tr>{columns.map((c, i) => <th key={i} scope="col" className={cn("px-3 py-2 font-medium", c.align === "r" ? "text-right" : "text-left")}>{c.label}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
@@ -129,23 +129,23 @@ export function ReportBlock({ block, index }: { block: Block; index: number }) {
             <Icon aria-hidden className={cn("mt-0.5 size-5 shrink-0", TONE_TEXT[b.tone])} />
             <div className="max-w-[68ch] space-y-2 text-sm leading-relaxed text-ink-2">
               <Paragraphs text={b.body} />
-              {b.items?.length ? <ul className="list-disc space-y-1 pl-5">{b.items.map((x) => <li key={x}>{x}</li>)}</ul> : null}
+              {b.items?.length ? <ul className="list-disc space-y-1 pl-5">{b.items.map((x, i) => <li key={i}>{x}</li>)}</ul> : null}
             </div>
           </Card>
         );
       })()}
       {b.type === "findings" && (
         <div className="grid gap-4 md:grid-cols-2">
-          {b.items.map((x) => {
+          {b.items.map((x, i) => {
             const Icon = TONE_ICON[b.tone];
             return (
-              <Card key={x.title} glow={false} className="p-5">
+              <Card key={i} glow={false} className="p-5">
                 <div className="flex items-start gap-2.5">
                   {x.channel ? <SocialMark channel={x.channel} className="mt-0.5 size-4 shrink-0" /> : <Icon aria-hidden className={cn("mt-0.5 size-4 shrink-0", TONE_TEXT[b.tone])} />}
                   <h3 className="font-medium leading-snug text-ink">{x.url ? <a href={x.url} target="_blank" rel="noreferrer noopener" className="underline-offset-4 hover:underline">{x.title}</a> : x.title}</h3>
                 </div>
                 <p className="mt-2 text-sm leading-relaxed text-ink-2">{x.body}</p>
-                {x.metrics?.length ? <p className="mt-3 flex flex-wrap gap-1.5">{x.metrics.map((m) => <span key={m} className="rounded-md bg-surface-raised px-2 py-0.5 font-mono text-[0.7rem] text-ink-2">{m}</span>)}</p> : null}
+                {x.metrics?.length ? <p className="mt-3 flex flex-wrap gap-1.5">{x.metrics.map((m, j) => <span key={j} className="rounded-md bg-surface-raised px-2 py-0.5 font-mono text-[0.7rem] text-ink-2">{m}</span>)}</p> : null}
               </Card>
             );
           })}
@@ -154,7 +154,7 @@ export function ReportBlock({ block, index }: { block: Block; index: number }) {
       {b.type === "recommendations" && (
         <ol className="space-y-4">
           {b.items.map((x, i) => (
-            <li key={x.title}>
+            <li key={i}>
               <Card glow={false} className="grid gap-3 p-5 sm:grid-cols-[2rem_1fr]">
                 <span className="font-display text-pl-lg font-semibold tabular-nums text-ink-3" aria-hidden>{i + 1}</span>
                 <div>
@@ -173,18 +173,18 @@ export function ReportBlock({ block, index }: { block: Block; index: number }) {
       )}
       {b.type === "plan" && (
         <ol className="relative space-y-3 border-l border-line pl-5">
-          {b.items.map((x) => (
-            <li key={`${x.date}-${x.title}`} className="relative">
+          {b.items.map((x, i) => (
+            <li key={i} className="relative">
               <span aria-hidden className={cn("absolute -left-[1.6rem] top-2 size-2.5 rounded-full border-2 border-[color:var(--surface-base)]", x.status === "planned" ? "bg-[color:var(--emerald)]" : x.status === "open" ? "bg-[color:var(--amber)]" : x.status === "suggested" ? "bg-[color:var(--blue)]" : "bg-[color:var(--text-tertiary)]")} />
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <span className="w-24 shrink-0 text-xs font-medium uppercase tracking-[0.08em] text-ink-3">{day(x.date)}</span>
                 <span className="font-medium text-ink">{x.title}</span>
                 <Badge variant={STATUS[x.status].variant}>{STATUS[x.status].label}</Badge>
                 {x.format && <span className="text-xs text-ink-3">{x.format}</span>}
-                {x.channels?.length ? <span className="inline-flex gap-1">{x.channels.map((c) => <SocialMark key={c} channel={c} className="size-3.5" />)}</span> : null}
+                {x.channels?.length ? <span className="inline-flex gap-1">{x.channels.map((c, j) => <SocialMark key={j} channel={c} className="size-3.5" />)}</span> : null}
               </div>
               {x.body && <p className="mt-1 max-w-[68ch] text-sm leading-relaxed text-ink-2 sm:pl-[6.75rem]">{x.body}</p>}
-              {x.sources?.length ? <p className="mt-1 flex flex-wrap gap-x-3 text-xs sm:pl-[6.75rem]">{x.sources.map((s) => <ExtLink key={s.url} l={s} />)}</p> : null}
+              {x.sources?.length ? <p className="mt-1 flex flex-wrap gap-x-3 text-xs sm:pl-[6.75rem]">{x.sources.map((s, j) => <ExtLink key={j} l={s} />)}</p> : null}
             </li>
           ))}
         </ol>
@@ -196,7 +196,7 @@ export function ReportBlock({ block, index }: { block: Block; index: number }) {
 export function SourceList({ sources }: { sources: Link[] }) {
   return (
     <ul className="grid gap-x-6 gap-y-1.5 text-sm sm:grid-cols-2">
-      {sources.map((s) => <li key={s.url} className="min-w-0 truncate"><ExtLink l={s} /></li>)}
+      {sources.map((s, i) => <li key={i} className="min-w-0 truncate"><ExtLink l={s} /></li>)}
     </ul>
   );
 }

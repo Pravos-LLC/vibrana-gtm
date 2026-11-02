@@ -34,7 +34,7 @@ export default async function ReportPage({ params }: { params: Promise<{ slug: s
     <aside className="hidden xl:block">
       <nav className="sticky top-24 space-y-1 text-sm" aria-label="On this page">
         <p className="mb-2 text-xs font-medium uppercase tracking-[0.1em] text-ink-3">On this page</p>
-        {d.blocks?.map((b, i) => <a key={i} href={`#${anchorId(b.title, i)}`} className="block truncate rounded px-1 py-0.5 text-ink-2 hover:text-ink">{b.title}</a>)}
+        {!problems.length && d.blocks.map((b, i) => <a key={i} href={`#${anchorId(b.title, i)}`} className="block truncate rounded px-1 py-0.5 text-ink-2 hover:text-ink">{b.title}</a>)}
         <a href="#sources" className="block rounded px-1 py-0.5 text-ink-2 hover:text-ink">Sources</a>
       </nav>
     </aside>
@@ -52,7 +52,7 @@ export default async function ReportPage({ params }: { params: Promise<{ slug: s
           ) : (
             <>
               <ul className="mt-6 max-w-[68ch] space-y-2 text-pl-base leading-relaxed text-ink-2">
-                {d.summary.map((s) => <li key={s} className="flex gap-3"><span aria-hidden className="mt-[0.7em] size-1.5 shrink-0 rounded-full bg-[color:var(--viz-1)]" />{s}</li>)}
+                {d.summary.map((s, i) => <li key={i} className="flex gap-3"><span aria-hidden className="mt-[0.7em] size-1.5 shrink-0 rounded-full bg-[color:var(--viz-1)]" />{s}</li>)}
               </ul>
               <p className="mt-4 text-xs text-ink-3">Published {new Date(rep.published_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}{d.author ? ` by ${d.author}` : ""}{rep.emailed_at ? ", emailed" : ""}.</p>
               <div className="mt-8">

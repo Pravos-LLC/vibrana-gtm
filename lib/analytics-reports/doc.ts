@@ -9,7 +9,8 @@ export const TONES = ["good", "bad", "neutral", "warn", "info"] as const;
 export type Tone = (typeof TONES)[number];
 export const CHANGE_KINDS = ["new", "drop", "keep", "order", "frequency", "format", "fix"] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
-export const CHANNELS = ["linkedin", "instagram", "youtube", "tiktok", "substack", "x", "newsletter", "email"] as const;
+/** Channels the cockpit has a mark for (components/guide/social-mark.tsx). */
+export const CHANNELS = ["linkedin", "instagram", "youtube", "substack"] as const;
 
 export type Link = { label: string; url: string };
 export type Delta = { value: number; label: string; good: "up" | "down" | "neutral"; unit?: string };
@@ -52,6 +53,15 @@ function isDate(s: unknown): s is string {
 
 /** Every problem with a document, as plain lines; an empty list means it can be published. */
 export function validateReportDoc(input: unknown): string[] {
+  try {
+    return validateInner(input);
+  } catch (e) {
+    // A malformed member (a null where an object belongs) is a problem to list, never a crash in the page.
+    return [`document is malformed: ${(e as Error).message}`];
+  }
+}
+
+function validateInner(input: unknown): string[] {
   const out: string[] = [];
   const at = (path: string, msg: string) => out.push(`${path}: ${msg}`);
   const str = (v: unknown, path: string, max = 4000, optional = false): v is string => {
@@ -107,7 +117,8 @@ export function validateReportDoc(input: unknown): string[] {
         if (arr(b.items, `${p}.items`, 1, 12)) b.items.forEach((k, j) => {
           const q = `${p}.items[${j}]`;
           str(k.label, `${q}.label`, 80);
-          if (typeof k.value !== "string") num(k.value, `${q}.value`, true);
+          if (typeof k.value === "string") str(k.value, `${q}.value`, 40);
+          else num(k.value, `${q}.value`, true);
           str(k.unit, `${q}.unit`, 40, true);
           str(k.note, `${q}.note`, 200, true);
           oneOf(k.tone, TONES, `${q}.tone`, true);

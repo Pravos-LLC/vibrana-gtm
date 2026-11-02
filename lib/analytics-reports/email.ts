@@ -7,7 +7,8 @@ const esc = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").re
 const fmt = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 export const periodLabel = (from: string, to: string) => `${fmt(from)} to ${fmt(to)}`;
 
-type Mail = { to: string; from: string; url: string; fetcher?: typeof fetch };
+/** idempotencyKey: Resend returns the first send for a repeat of the same key within 24 hours. */
+type Mail = { to: string; from: string; url: string; fetcher?: typeof fetch; idempotencyKey?: string };
 type ReportLike = { title: string; headline: string; period_start: string; period_end: string; doc: Pick<ReportDoc, "summary"> };
 
 export function linkSubject(r: ReportLike) {
@@ -43,7 +44,7 @@ async function send(mail: Mail, subject: string, html: string, text: string) {
   if (!key) throw new Error("RESEND_API_KEY is required to send the report email");
   const res = await providerFetch(mail.fetcher)("https://api.resend.com/emails", {
     method: "POST",
-    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json", ...(mail.idempotencyKey ? { "idempotency-key": mail.idempotencyKey } : {}) },
     body: JSON.stringify({ from: mail.from, to: mail.to.split(",").map((s) => s.trim()).filter(Boolean), subject, html, text }),
     signal: AbortSignal.timeout(20_000),
   });

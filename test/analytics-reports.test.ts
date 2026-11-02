@@ -85,45 +85,122 @@ test("deliver refuses to send without an https cockpit URL", async () => {
   await assert.rejects(deliverReports(adminDb(), { to: "owner@example.test", from: "Reports <r@example.test>" }), /https cockpit/);
 });
 
-test("deliver emails each unsent report once with its link, then marks it emailed; before Monday noon no alert check", async () => {
+const unsentRow = () => { const d = fixture(); return { id: "r1", slug: "weekly-2026-10-26", title: d.title, headline: d.headline, period_start: "2026-10-26", period_end: "2026-11-01", doc: d, updated_at: "2026-11-02T00:30:00Z" }; };
+const MON_9AM_BALI = new Date("2026-11-02T01:00:00Z");
+const opts = (now = MON_9AM_BALI) => ({ now, to: "owner@example.test", from: "Reports <r@example.test>" });
+
+test("deliver claims each unsent report, emails its link once with an idempotency key, then saves the email id; before Monday noon no alert check", async () => {
   process.env.GTM_COCKPIT_URL = "https://cockpit.test/";
-  const d = fixture();
   const m = use([
-    { method: "GET", url: REST + "gtm_analytics_reports", json: [{ id: "r1", slug: "weekly-2026-10-26", title: d.title, headline: d.headline, period_start: "2026-10-26", period_end: "2026-11-01", doc: d }] },
+    { method: "GET", url: REST + "gtm_analytics_reports", json: [unsentRow()] },
+    { method: "PATCH", url: REST + "gtm_analytics_reports", times: 1, json: [{ id: "r1" }] },
     { method: "POST", url: "https://api.resend.com/emails", json: { id: "em_1" } },
     { method: "PATCH", url: REST + "gtm_analytics_reports", json: [] },
   ]);
-  const r = await deliverReports(adminDb(), { now: new Date("2026-11-02T01:00:00Z"), to: "owner@example.test", from: "Reports <r@example.test>" });
+  const r = await deliverReports(adminDb(), opts());
   assert.deepEqual(r, { sent: [{ slug: "weekly-2026-10-26", email_id: "em_1" }], missing: null, errors: [] });
-  const mail = JSON.parse(m.calls.find((c) => c.url.startsWith("https://api.resend.com"))!.body!);
+  assert.match(m.calls[0].url, /emailed_at=is\.null/);
+  assert.match(m.calls[0].url, /updated_at=gte\./, "--resend on an old week is picked up by updated_at");
+  const claim = m.calls[1];
+  assert.match(claim.url, /id=eq\.r1/); assert.match(claim.url, /emailed_at=is\.null/, "the claim only wins on an unclaimed row");
+  const send = m.calls.find((c) => c.url.startsWith("https://api.resend.com"))!;
+  assert.equal(send.headers["idempotency-key"], "analytics-report/r1/2026-11-02T00:30:00Z");
+  const mail = JSON.parse(send.body!);
   assert.deepEqual(mail.to, ["owner@example.test"]);
   assert.match(mail.subject, /^Week 4 review: Sample/);
   assert.match(mail.html, /href="https:\/\/cockpit\.test\/performance\/reports\/weekly-2026-10-26"/);
   assert.match(mail.text, /Open the report: https:\/\/cockpit\.test\/performance\/reports\/weekly-2026-10-26/);
-  assert.match(m.calls.find((c) => c.method === "PATCH")!.url, /id=eq\.r1/);
+  assert.deepEqual(JSON.parse(m.calls.at(-1)!.body!), { email_id: "em_1" });
   assert.equal(m.calls.filter((c) => c.url.includes("gtm_sync_state")).length, 0);
 });
 
-test("from Monday noon in Bali, a week with no report gets one alert, recorded so it never repeats", async () => {
+test("a report another run already claimed is not sent", async () => {
   process.env.GTM_COCKPIT_URL = "https://cockpit.test";
-  const routes: Route[] = [
+  const m = use([
+    { method: "GET", url: REST + "gtm_analytics_reports", json: [unsentRow()] },
+    { method: "PATCH", url: REST + "gtm_analytics_reports", json: [] },
+  ]);
+  assert.deepEqual(await deliverReports(adminDb(), opts()), { sent: [], missing: null, errors: [] });
+  assert.equal(m.calls.filter((c) => c.url.startsWith("https://api.resend.com")).length, 0);
+});
+
+test("a failed send releases the claim so the next hour retries", async () => {
+  process.env.GTM_COCKPIT_URL = "https://cockpit.test";
+  const m = use([
+    { method: "GET", url: REST + "gtm_analytics_reports", json: [unsentRow()] },
+    { method: "PATCH", url: REST + "gtm_analytics_reports", times: 1, json: [{ id: "r1" }] },
+    { method: "POST", url: "https://api.resend.com/emails", status: 422, json: { message: "bad from" } },
+    { method: "PATCH", url: REST + "gtm_analytics_reports", json: [] },
+  ]);
+  const r = await deliverReports(adminDb(), opts());
+  assert.deepEqual(r.sent, []);
+  assert.match(r.errors[0], /weekly-2026-10-26: resend 422: bad from/);
+  assert.deepEqual(JSON.parse(m.calls.at(-1)!.body!), { emailed_at: null });
+});
+
+test("a sent email whose id cannot be saved stays claimed: reported, never sent again", async () => {
+  process.env.GTM_COCKPIT_URL = "https://cockpit.test";
+  use([
+    { method: "GET", url: REST + "gtm_analytics_reports", json: [unsentRow()] },
+    { method: "PATCH", url: REST + "gtm_analytics_reports", times: 1, json: [{ id: "r1" }] },
+    { method: "POST", url: "https://api.resend.com/emails", json: { id: "em_1" } },
+    { method: "PATCH", url: REST + "gtm_analytics_reports", status: 500, json: { message: "db down" } },
+  ]);
+  const r = await deliverReports(adminDb(), opts());
+  assert.deepEqual(r.sent, [{ slug: "weekly-2026-10-26", email_id: "em_1" }]);
+  assert.match(r.errors[0], /sent, but the email id was not saved/);
+});
+
+test("from Monday noon in Bali, a week with no report gets one alert; the claim row makes it once only", async () => {
+  process.env.GTM_COCKPIT_URL = "https://cockpit.test";
+  const base: Route[] = [
     { method: "GET", url: REST + "gtm_analytics_reports?select=id%2Cslug", json: [] },
     { method: "GET", url: REST + "gtm_analytics_reports?select=id&kind=eq.weekly&period_start=eq.2026-10-26", json: null },
-    { method: "GET", url: REST + "gtm_sync_state", json: null },
-    { method: "POST", url: "https://api.resend.com/emails", json: { id: "em_missing" } },
-    { method: "POST", url: REST + "gtm_sync_state", json: [] },
   ];
-  const m = use(routes);
-  const r = await deliverReports(adminDb(), { now: new Date("2026-11-02T04:30:00Z"), to: "owner@example.test", from: "r@example.test" });
+  const m = use([...base,
+    { method: "POST", url: REST + "gtm_sync_state", json: [{ key: "analytics_report.missing.20261026" }] },
+    { method: "POST", url: "https://api.resend.com/emails", json: { id: "em_missing" } },
+    { method: "PATCH", url: REST + "gtm_sync_state", json: [] },
+  ]);
+  const r = await deliverReports(adminDb(), opts(new Date("2026-11-02T04:30:00Z")));
   assert.deepEqual(r.missing, { week: "2026-10-26", email_id: "em_missing" });
-  assert.match(JSON.parse(m.calls.find((c) => c.url.startsWith("https://api.resend.com"))!.body!).subject, /No weekly report for Oct 26 to Nov 1/);
-  assert.equal(JSON.parse(m.calls.find((c) => c.method === "POST" && c.url.includes("gtm_sync_state"))!.body!).key, "analytics_report.missing.20261026");
+  const send = m.calls.find((c) => c.url.startsWith("https://api.resend.com"))!;
+  assert.match(JSON.parse(send.body!).subject, /No weekly report for Oct 26 to Nov 1/);
+  assert.equal(send.headers["idempotency-key"], "analytics-report-missing/2026-10-26");
+  const claim = m.calls.find((c) => c.method === "POST" && c.url.includes("gtm_sync_state"))!;
+  assert.equal(JSON.parse(claim.body!).key, "analytics_report.missing.20261026");
+  assert.match(claim.headers.prefer ?? "", /ignore-duplicates/);
   mock!.restore();
 
-  const m2 = use([routes[0], routes[1], { method: "GET", url: REST + "gtm_sync_state", json: { key: "analytics_report.missing.20261026" } }]);
-  const again = await deliverReports(adminDb(), { now: new Date("2026-11-02T05:40:00Z"), to: "owner@example.test", from: "r@example.test" });
-  assert.equal(again.missing, null);
+  const m2 = use([...base, { method: "POST", url: REST + "gtm_sync_state", json: [] }]);
+  const again = await deliverReports(adminDb(), opts(new Date("2026-11-03T05:40:00Z")));
+  assert.equal(again.missing, null, "Tuesday: already alerted, nothing sent");
   assert.equal(m2.calls.filter((c) => c.url.startsWith("https://api.resend.com")).length, 0);
+});
+
+test("a failed missing alert deletes its claim so the next hour retries", async () => {
+  process.env.GTM_COCKPIT_URL = "https://cockpit.test";
+  const m = use([
+    { method: "GET", url: REST + "gtm_analytics_reports?select=id%2Cslug", json: [] },
+    { method: "GET", url: REST + "gtm_analytics_reports?select=id&kind=eq.weekly", json: null },
+    { method: "POST", url: REST + "gtm_sync_state", json: [{ key: "analytics_report.missing.20261026" }] },
+    { method: "POST", url: "https://api.resend.com/emails", error: "timeout" },
+    { method: "DELETE", url: REST + "gtm_sync_state", json: [] },
+  ]);
+  const r = await deliverReports(adminDb(), opts(new Date("2026-11-02T04:30:00Z")));
+  assert.equal(r.missing, null);
+  assert.match(r.errors[0], /missing alert 2026-10-26/);
+  assert.match(m.calls.at(-1)!.url, /key=eq\.analytics_report\.missing\.20261026/);
+});
+
+test("a null where a block or item belongs is a listed problem, not a crash", () => {
+  const d = fixture();
+  d.blocks[5].items.push(null);
+  d.blocks.push(null);
+  const problems = validateReportDoc(d);
+  assert.equal(problems.length > 0, true);
+  const d2 = fixture(); d2.blocks[0].items[0].value = "";
+  assert.match(validateReportDoc(d2).join("\n"), /items\[0\]\.value: must be a non-empty string/);
 });
 
 test("the link email escapes report text", () => {

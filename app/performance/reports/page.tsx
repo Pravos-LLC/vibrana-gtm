@@ -13,7 +13,8 @@ export const metadata = { title: "Reports" };
 // Analytics > Reports: every weekly review, newest first, to look back on. The weekly-report skill writes them
 // (gtm analytics publish) and the hourly cron emails John the link.
 export default async function ReportsPage() {
-  const rows = await listReports(await sessionDb()).catch(() => []);
+  let failed: string | null = null;
+  const rows = await listReports(await sessionDb()).catch((e: Error) => { failed = e.message; return []; });
   return (
     <Shell title="Reports" active="/performance/reports">
       <Eyebrow>Analytics</Eyebrow>
@@ -21,7 +22,9 @@ export default async function ReportsPage() {
       <p className="mt-3 max-w-[62ch] text-pl-base leading-relaxed text-ink-2">
         What did well on which channel, what didn&apos;t, what to change next week and how sure we are, with the news worth posting on. One report a week, emailed as a link on Monday.
       </p>
-      {rows.length === 0 ? (
+      {failed ? (
+        <p role="alert" className="mt-10 rounded-xl border border-dashed border-line px-5 py-8 text-sm text-red-strong">Reports could not be loaded: {failed}</p>
+      ) : rows.length === 0 ? (
         <p className="mt-10 rounded-xl border border-dashed border-line px-5 py-8 text-sm text-ink-3">No reports yet. The weekly-report skill publishes one each Monday with <code className="font-mono">gtm analytics publish</code>.</p>
       ) : (
         <ol className="mt-10 space-y-3">
