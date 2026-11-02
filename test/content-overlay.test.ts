@@ -130,6 +130,8 @@ test('trait records accept independent private IDs and reject malformed values',
   assert.throws(()=>validateOverlay(update({'independent-private-record':{look:'unknown'}})));
   assert.throws(()=>validateOverlay(update({'independent-private-record':{lanes:'invalid'}})));
   assert.throws(()=>validateOverlay(update({'../escaped':{topic:'example'}})));
+  assert.equal(validateOverlay(update({'independent-private-record':{look:'talking-head',pillar:'perspective'}})).mode,'private');
+  assert.throws(()=>validateOverlay(update({'independent-private-record':{pillar:'community'}})));
  } finally {rmSync(f.root,{recursive:true,force:true});}
 });
 
