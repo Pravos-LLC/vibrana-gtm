@@ -19,10 +19,12 @@ create table public.gtm_analytics_reports (
   email_id text,
   emailed_at timestamptz,
   constraint gtm_analytics_reports_period check (period_end >= period_start),
+  -- A weekly report covers Monday to Sunday; its slug is always weekly-<monday> (lib/analytics-reports/doc.ts reportSlug).
+  constraint gtm_analytics_reports_weekly_monday check (kind <> 'weekly' or extract(isodow from period_start) = 1),
+  constraint gtm_analytics_reports_slug_period check (slug = kind || '-' || to_char(period_start, 'YYYY-MM-DD')),
   constraint gtm_analytics_reports_once unique (kind, period_start)
 );
-create index gtm_analytics_reports_recent_idx on public.gtm_analytics_reports (kind, period_start desc);
-create index gtm_analytics_reports_unsent_idx on public.gtm_analytics_reports (published_at) where emailed_at is null;
+create index gtm_analytics_reports_unsent_idx on public.gtm_analytics_reports (updated_at) where emailed_at is null;
 
 -- ---- access: owner reads, service role writes --------------------------------------------------
 
