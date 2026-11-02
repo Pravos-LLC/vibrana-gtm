@@ -3,7 +3,7 @@ import { loadContent } from "../lib/content-overlay.mjs";
 // goes to Zernio in the best open slot. There is no second approval. A slot is the item's own planned date and
 // time when that is still ahead and free (no other piece that day); otherwise (a missed date, or the day already has a
 // piece) the next day the weekly rhythm gives its pillar (lib/rhythm.ts; the day map, off days and the pillars a channel
-// never takes are guide data), then a day that takes it as a fallback, never one that breaks the house rules, at the
+// never takes are guide data), then a day that takes it as a fallback, never one that would break a post, at the
 // channel's guide time (content/guide/channels.json). A leg on a channel that never takes its pillar is never scheduled.
 // Imported, not read from disk: inside the Next.js server bundle a file URL built from import.meta.url is not a
 // path readFileSync accepts ("Received an instance of URL"), so the after-approval auto-schedule pass threw in a

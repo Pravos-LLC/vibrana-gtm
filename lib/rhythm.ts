@@ -1,6 +1,6 @@
 import { loadContent } from "../lib/content-overlay.mjs";
 // The weekly rhythm: each posting day has a pillar, a day takes a piece from its primary pillar or, when none is ready,
-// from its fallback, and the house rules keep the week varied. A day with no primary is off: no gaps, no channels.
+// from its fallback; the lint checks only what would break a post. A day with no primary is off: no gaps, no channels.
 // Pure and client-safe: the calendar headers, the week's lint strip, `gtm calendar lint` and auto-schedule all read it.
 // The day map lives in content/guide/channels.json ("rhythm"), so the operator's rhythm is data, not code; looks and
 // topics per Story are in config/piece-traits.json.

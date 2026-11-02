@@ -12,13 +12,13 @@ import { rowText } from "./row-text";
 type Row = {
   id: string; date: string; time: string | null; title: string; channels: string[] | null; status: string; pillar: string | null;
   format: string; story_id: string | null; publication: string | null; body: string | null; media: string[] | null;
-  story_assets: string[] | null; urls: Record<string, string> | null;
+  story_assets: string[] | null; urls: Record<string, string> | null; zernio_post_id: string | null;
 };
 
 /** Every post in [from, to] (both optional, ISO dates), oldest first. Signed thumbnail URLs last six hours. */
 export async function loadPosts(db: SupabaseClient, range: { from?: string; to?: string } = {}): Promise<{ posts: Post[]; error: string | null }> {
   let query = db.from("gtm_content_items")
-    .select("id,date,time,title,channels,status,pillar,format,story_id,publication,body,media,story_assets,urls");
+    .select("id,date,time,title,channels,status,pillar,format,story_id,publication,body,media,story_assets,urls,zernio_post_id");
   if (range.from) query = query.gte("date", range.from);
   if (range.to) query = query.lte("date", range.to);
   const { data, error } = await query.order("date").order("time").order("id");
