@@ -382,7 +382,10 @@ export async function loadPackInputs(db: SupabaseClient, wk: ReportWeek, opts: {
   ]);
   // body, media and approval hashes never go to the model; only what the report reasons about.
   // Tags that describe an older body are dropped here, while the body is still at hand: they describe copy that never went out.
-  const itemRows = (must(items, "content items") as (ItemRow & Record<string, unknown>)[]).map(({ body: _b, media: _m, approved_hash: _h, copy_path: _c, ...rest }) => {
+  // Tags are hashed from each row's one text (lib/row-text.ts: the Story's copy until the row records what it sent).
+  const { withRowText } = await import("../row-text-db");
+  const textRows = await withRowText(db, must(items, "content items") as (ItemRow & Record<string, unknown> & { body: string | null; story_id: string | null; story_assets: string[] | null; status: string; zernio_post_id: string | null })[]);
+  const itemRows = textRows.map(({ body: _b, media: _m, approved_hash: _h, copy_path: _c, ...rest }) => {
     const row = rest as ItemRow;
     if (row.playbook_tags != null && !tagsCurrent(row.playbook_tags, (_b as string | null) ?? null)) row.playbook_tags = null;
     return row;
