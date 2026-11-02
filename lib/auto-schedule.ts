@@ -9,7 +9,6 @@ import { loadContent } from "../lib/content-overlay.mjs";
 // path readFileSync accepts ("Received an instance of URL"), so the after-approval auto-schedule pass threw in a
 // `next build` server before it read a single row.
 const season1 = loadContent("config/season1.json") as typeof import("../content/sample/config/season1.json");
-import publishingMetadata from "../config/publishing-metadata.json";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseCopy, zonedToUtc, type Calendar, type Item } from "./calendar";
 import { calendarFromDb, loadCalendarDb, PILLARS, rowToItem, updateItemDb, validateRow, type ContentRow } from "./calendar-db";
@@ -198,10 +197,9 @@ export function pieceFor(storyId: string, channel: string, assets: MaterialAsset
   const copies = assets.filter((a) => a.story_id === storyId && a.kind === "copy");
   const own = copies.filter((a) => rows.some((r) => r.asset_id === a.id && r.channel === channel));
   const metas = [...own, ...copies.filter((a) => !own.includes(a))].map((a) => parseCopy(a.body ?? "").meta);
-  // Classification is operational metadata: repairing it must not rewrite already-approved post text. The operator's
-  // real Stories are classified in the private traits file; the public config holds samples only.
-  const configured = (publishingMetadata as Record<string, { pillar: string }>)[storyId]?.pillar;
-  const pillar = [...metas.map((m) => m.pillar?.trim()), traitPillarOf(storyId), configured].find((x) => x && (PILLARS as readonly string[]).includes(x));
+  // Classification is operational metadata: repairing it must not rewrite already-approved post text, so a Story whose
+  // copy carries no pillar is classified in the private traits file.
+  const pillar = [...metas.map((m) => m.pillar?.trim()), traitPillarOf(storyId)].find((x) => x && (PILLARS as readonly string[]).includes(x));
   if (!pillar) return { error: `approved, but its text has no pillar: add "pillar" (${PILLARS.join(", ")}) for ${storyId} in the private guide's config/piece-traits.json (no restage, approval stays), or to the ${channel} copy front matter and restage it` };
   const named = story?.title?.includes(" | ") ? story.title.split(" | ").slice(1).join(" | ") : story?.title;
   const title = metas[0]?.title?.trim() || named?.trim() || storyId;

@@ -1,4 +1,3 @@
-import publishingMetadata from '../config/publishing-metadata.json';
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -342,10 +341,6 @@ test("a Story's own planned date and title win; the slot prefix of a Story title
   assert.deepEqual("error" in planned ? planned : [planned.date, planned.title], ["2026-10-28", "Kogui mirror"]);
   // No pillar anywhere: reported, never guessed.
   assert.match((pieceFor(sid, "linkedin", [copy("Text")], rows, undefined, story, TODAY) as { error: string }).error, /no pillar/);
-  const operationalId = Object.keys(publishingMetadata)[0];
-  const operational = pieceFor(operationalId, "linkedin", [{ ...copy("Approved text"), story_id: operationalId }], rows, undefined, { id: operationalId, title: "Example operational item" }, TODAY);
-  assert.ok(!("error" in operational));
-  if (!("error" in operational)) assert.equal(operational.pillar, (publishingMetadata as Record<string, {pillar:string}>)[operationalId].pillar, "classification repair does not require changing approved copy");
   // The private traits file classifies a real Story whose approved copy has no pillar, without touching the copy.
   const { TRAITS } = await import("../lib/rhythm");
   TRAITS[sid] = { pillar: "perspective" };
