@@ -1,10 +1,9 @@
 import { loadContent } from "../lib/content-overlay.mjs";
-// The weekly rhythm (John, 2026-10-17): every weekday has a pillar, a day takes a piece from its primary pillar or,
-// when none is ready, from its fallback, and the house rules keep the week varied. Pure and client-safe: the
-// calendar headers, the week's lint strip, `gtm calendar lint` and auto-schedule all read it.
-//   Mon Perspective (fb Lists)  Tue Proof (fb Build)  Wed Build (fb Proof)  Thu Voices (fb Proof)
-//   Fri Lists (fb Build, Proof)  Sat Reels, IG and YouTube only  Sun off
-// The day map lives in content/guide/channels.json ("rhythm"); looks and topics per Story in config/piece-traits.json.
+// The weekly rhythm: each posting day has a pillar, a day takes a piece from its primary pillar or, when none is ready,
+// from its fallback, and the house rules keep the week varied. A day with no primary is off: no gaps, no channels.
+// Pure and client-safe: the calendar headers, the week's lint strip, `gtm calendar lint` and auto-schedule all read it.
+// The day map lives in content/guide/channels.json ("rhythm"), so the operator's rhythm is data, not code; looks and
+// topics per Story are in config/piece-traits.json.
 const channelsJson = loadContent("guide/channels.json") as typeof import("../content/sample/guide/channels.json");
 const traitsJson = loadContent("config/piece-traits.json") as typeof import("../content/sample/config/piece-traits.json");
 import { addDays, mondayOf } from "./week";
@@ -227,13 +226,13 @@ export function lintCalendar(posts: LintPost[], from: string, weeks = 1): WeekRe
   return reports;
 }
 
-/** Weekdays in [from, to] with nothing on them, and what each one wants. Saturday is optional and Sunday is off. */
+/** Rhythm days in [from, to] with nothing on them, and what each one wants. Saturday is optional; an off day (no primary) never counts. */
 export function gapsFor(posts: LintPost[], from: string, to: string): Array<{ date: string; day: Weekday; wants: string }> {
   const taken = new Set(posts.filter(live).map((p) => p.date));
   const out: Array<{ date: string; day: Weekday; wants: string }> = [];
   for (let date = from; date <= to; date = addDays(date, 1)) {
     const day = weekdayOf(date);
-    if (day === "Sat" || day === "Sun" || taken.has(date)) continue;
+    if (day === "Sat" || !rhythmDay(date).primary || taken.has(date)) continue;
     const l = dayLabels(date);
     out.push({ date, day, wants: [l.primary, ...l.fallback].join(", then ") });
   }

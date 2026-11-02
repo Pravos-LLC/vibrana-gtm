@@ -1727,8 +1727,8 @@ const help = `gtm <command> [--json]
                            send it again from the current approved text at its slot
   piece kill <story-id> [--dry-run] [--reason text]   John's "kill it": every calendar row of the piece skipped (off the
                            calendar and /content), unsent Zernio posts deleted, open notes resolved
-  calendar lint [--weeks 4] [--from date] [--json]   the weekly rhythm (Mon Perspective, Tue Proof, Wed Build, Thu
-                           Voices, Fri Lists, Sat IG+YT reels, Sun off) against the house rules: one piece a day,
+  calendar lint [--weeks 4] [--from date] [--json]   the weekly rhythm (the guide's day map: each day's pillar,
+                           fallbacks, channels and off days) against the house rules: one piece a day,
                            channels on one day, 2 talking heads, at most 1 voiceover reel, no look twice in a row,
                            topic spacing, LinkedIn caption length; plus the weekdays still empty. Run it before
                            planning a week

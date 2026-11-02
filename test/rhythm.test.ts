@@ -111,6 +111,20 @@ test("gaps are empty weekdays and say what the day wants; Saturday and Sunday ar
   assert.deepEqual(gaps.map((g) => [g.day, g.wants]), [["Tue", "Proof, then Build"], ["Wed", "Build, then Proof"], ["Thu", "Voices, then Proof"], ["Fri", "Lists, then Build, then Proof"]]);
 });
 
+test("an off day in the guide (no primary) is never a gap and takes no channel", () => {
+  const wed = RHYTHM.days.find((d) => d.day === "Wed")!;
+  const saved = { ...wed };
+  Object.assign(wed, { primary: null, fallback: [], channels: [], note: "Off" });
+  try {
+    const gaps = gapsFor([post("a-linkedin", "2026-10-19", "linkedin")], "2026-10-19", "2026-10-25");
+    assert.deepEqual(gaps.map((g) => g.day), ["Tue", "Thu", "Fri"]);
+    assert.equal(channelAllowed("2026-10-21", "linkedin"), false);
+    assert.equal(fitRank("2026-10-21", ["build"]), -1);
+  } finally {
+    Object.assign(wed, saved);
+  }
+});
+
 test("F4: a piece with no pillar, or one outside the four, is flagged by name", () => {
   const issues = (pillar: string | null) => lintCalendar([post("t-linkedin", "2026-10-20", "linkedin", { pillar, format: "text" })], "2026-10-19")[0].issues.filter((i) => i.rule === "pillar-fit").map((i) => i.message);
   assert.match(issues(null)[0], /has no pillar; set one/);
