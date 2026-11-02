@@ -63,3 +63,17 @@ test("a shared piece's delivery is refused before any claim when its channel nev
     delete RHYTHM.blocked;
   }
 });
+
+test("a Story classified only in the private traits file is still blocked when no row carries a pillar", async () => {
+  const { TRAITS } = await import("../lib/rhythm.ts");
+  RHYTHM.blocked = [{ channel: "instagram", pillars: ["build"] }];
+  TRAITS["t-story"] = { pillar: "build" };
+  const cal = { items: [{ id: "t-story-instagram", story_id: "t-story", pillar: "", channels: ["instagram"] }] } as unknown as Calendar;
+  try {
+    assert.equal(deliveryPillar(cal, { calendar_id: "t-story-instagram", story_id: "t-story" }), "build");
+    assert.throws(() => assertChannelTakesPiece(cal, { calendar_id: "t-story-instagram", story_id: "t-story", channel: "instagram" }), CHANNEL_BLOCKED);
+  } finally {
+    delete RHYTHM.blocked;
+    delete TRAITS["t-story"];
+  }
+});

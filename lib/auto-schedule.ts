@@ -361,7 +361,7 @@ function* daysFrom(now: Date, timeZone: string) {
 
 const LIVE = new Set(["scheduled", "published"]);
 
-const toLint = (i: Item, date = i.date): LintPost => ({ id: i.id, date, channels: i.channels, status: i.status, pillar: i.pillar ?? null, format: i.format, storyId: i.story_id ?? null, title: i.title });
+const toLint = (i: Item, date = i.date): LintPost => ({ id: i.id, date, channels: i.channels, status: i.status, pillar: i.pillar || traitPillarOf(i.story_id ?? null), format: i.format, storyId: i.story_id ?? null, title: i.title });
 const keyOfItem = (i: Pick<Item, "id" | "story_id">) => pieceKeyOf(i.story_id, i.id);
 
 /** The last day a move may land on: the end of the season holding today, else of the next season to start. */
@@ -404,7 +404,7 @@ export function planSlots(input: { items: Item[]; ready: Item[]; now: Date; time
     if (hold) { skipped.push({ id: item.id, reason: `held: ${holdReason(hold)}` }); continue; }
     if (item.channels.length !== 1) { skipped.push({ id: item.id, reason: "needs exactly one channel" }); continue; }
     if (manual.has(item.channels[0]) || isHandPublished(item.channels[0])) { skipped.push({ id: item.id, reason: `${item.channels[0]} is published by hand` }); continue; }
-    const piecePillar = item.pillar || items.find((x) => item.story_id && x.story_id === item.story_id && x.pillar)?.pillar || null;
+    const piecePillar = item.pillar || items.find((x) => item.story_id && x.story_id === item.story_id && x.pillar)?.pillar || traitPillarOf(item.story_id ?? null);
     if (!pillarAllowed(piecePillar, item.channels[0])) { skipped.push({ id: item.id, reason: `${item.channels[0]} never takes ${piecePillar} pieces (the guide's weekly rhythm); skip this leg` }); continue; }
     if (lastSeasonDay && item.date > lastSeasonDay) { skipped.push({ id: item.id, reason: `parked in the reserve bank (${item.date}, after the last season ends ${lastSeasonDay}); give it a slot inside a season to schedule it` }); continue; }
     eligible.push(item);
@@ -440,7 +440,7 @@ export function planSlots(input: { items: Item[]; ready: Item[]; now: Date; time
   }
   for (const group of toMove) {
     const key = keyOf(group);
-    const lanes = lanesOf(group[0].pillar ?? null, [...new Set(group.map((i) => lookOf(i.story_id ?? null, i.format)))]);
+    const lanes = lanesOf(group[0].pillar || traitPillarOf(group[0].story_id ?? null), [...new Set(group.map((i) => lookOf(i.story_id ?? null, i.format)))]);
     const opens = (date: string) => !dayHasOther(date, key)
       && group.every((i) => channelAllowed(date, i.channels[0]) && !taken.has(`${i.channels[0]}|${date}`) && ahead(date, channelTime(i.channels[0], i.format)))
       && (() => {
