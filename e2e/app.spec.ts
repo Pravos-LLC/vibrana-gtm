@@ -156,7 +156,7 @@ test.describe("owner", () => {
     await page.getByText("Sample: conversation clips carried Instagram while list carousels stalled").click();
     await expect(page).toHaveURL(/\/performance\/reports\/weekly-2026-10-26$/);
     await expect(page.getByRole("heading", { level: 1, name: /Sample: conversation clips/ })).toBeVisible();
-    for (const h of ["The week in numbers", "Instagram median reach by kind", "What to change next week", "Next week", "Sources"]) await expect(page.getByRole("heading", { name: h })).toBeVisible();
+    for (const h of ["The week in numbers", "Instagram median reach by kind", "What to change next week", "Next week", "Sources"]) await expect(page.getByRole("heading", { name: h, exact: true })).toBeVisible();
     await expect(page.getByText("High confidence")).toBeVisible();
     await expect(page.getByText("Low confidence")).toBeVisible();
     await shot(page, "analytics-report");
