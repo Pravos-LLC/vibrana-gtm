@@ -134,7 +134,7 @@ test("run: tags due rows, saves tags with the body hash, leaves current rows alo
   assert.deepEqual(seen, ["a", "c"]);
   assert.deepEqual(r.tagged.map((t) => t.id), ["a", "c"]);
   const get = m.calls.find((c) => c.method === "GET")!;
-  assert.match(decodeURIComponent(get.url), /select=id,title,pillar,format,channels,status,body,playbook_tags/);
+  assert.match(decodeURIComponent(get.url), /select=id,title,pillar,format,channels,body,story_id,story_assets,status,zernio_post_id,playbook_tags/);
   assert.match(decodeURIComponent(get.url), /status=in\.\(approved,scheduled,published\)/);
   const patches = m.calls.filter((c) => c.method === "PATCH");
   assert.equal(patches.length, 2);

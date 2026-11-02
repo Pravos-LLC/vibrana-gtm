@@ -186,10 +186,8 @@ async function record(
 }
 async function recordPost(db: SupabaseClient, d: PieceDelivery, p: ZPost) {
   const outcome = deliveryOutcome(d, p);
-  // The calendar row records the approved text it sent, as a direct send does (lib/row-text.ts). Only once, never over it.
-  const text = d.review_snapshot?.text?.asset?.body;
-  if (text && (outcome.state === "scheduled" || outcome.state === "published"))
-    must(await db.from("gtm_content_items").update({ body: text }).eq("id", d.calendar_id).is("body", null), "record the text sent");
+  // No text is written to the calendar row here: a queued row is frozen (gtm_piece_calendar_freeze). Readers take the
+  // Story's copy for a sent row with no text (lib/row-text-db.ts).
   return record(
     db,
     d,
