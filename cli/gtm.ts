@@ -42,7 +42,7 @@ const flag = (name: string) => {
   const eq = argv.find((a) => a.startsWith("--as="));
   const as = eq ? eq.slice(5) : argv.includes("--as") ? (flag("--as") ?? "") : undefined;
   if (as !== undefined) {
-    if (!as || as.startsWith("--")) throw new Error("--as needs an owner email: --as you@example.com");
+    if (!as || as.startsWith("--")) { console.error("gtm: --as needs an owner email: --as you@example.com"); process.exit(1); }
     process.env.GTM_OWNER_EMAIL = as;
   }
 }
