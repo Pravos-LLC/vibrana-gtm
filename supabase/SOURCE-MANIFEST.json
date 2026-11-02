@@ -82,5 +82,6 @@
   "supabase/tests/gtm_storyboard_agent_notes_never_block.sql": "8fdf945d8eebf5453b33f632141115291db4bdcdf3d6f5a23b8072afa4cbb338",
   "supabase/tests/gtm_storyboard_approve_with_notes.sql": "ef2e95b706ebb0badf2705135d0465eec785a11063c39e707a6ea83cb5cc5474",
   "supabase/tests/gtm_storyboards.sql": "3723e55e35e31693ea853e65e044513b54d37a7a40ee81e3c93078cfad81632b",
-  "supabase/tests/gtm_work_items.sql": "17d580c26ec298ba65f6cebbca943a059c46de1ba7e5a735e15a619e0e37edd9"
+  "supabase/tests/gtm_work_items.sql": "17d580c26ec298ba65f6cebbca943a059c46de1ba7e5a735e15a619e0e37edd9",
+  "supabase/migrations/20261102030000_gtm_comment_final_source.sql": "56440f41ad505975cc4e1c09707ffa0228e226cf9e404730eadfaf930d04f817"
 }

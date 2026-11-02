@@ -55,7 +55,9 @@ export function lessonSetId(lessons: Pick<Lesson, "id" | "kind">[]): string | nu
 
 /** John's most recent sends that started from an agent draft, newest first: the drafting call's examples. */
 export async function recentExamples(db: SupabaseClient, opts: { platform?: string; limit?: number } = {}): Promise<Example[]> {
-  let q = db.from("gtm_comments").select("platform,text,draft,final_text").eq("status", "sent").eq("is_own", false).not("draft", "is", null).not("final_text", "is", null);
+  let q = db.from("gtm_comments").select("platform,text,draft,final_text").eq("status", "sent").eq("is_own", false).not("draft", "is", null).not("final_text", "is", null)
+    // A rewrite Claude wrote in a chat session is not John's voice, even when he approved it.
+    .or("final_source.is.null,final_source.neq.chat_agent");
   if (opts.platform) q = q.eq("platform", opts.platform);
   const rows = must(await q.order("sent_at", { ascending: false }).limit(opts.limit ?? EXAMPLES), "examples") as { platform: string; text: string; draft: string; final_text: string }[];
   return rows.map((r) => ({ platform: r.platform, comment: r.text, draft: r.draft, sent: r.final_text }));
@@ -116,15 +118,16 @@ export async function learningScore(db: SupabaseClient, opts: { days?: number } 
 
 /** Decisions John made since `since` on comments the agent had drafted or labeled. */
 export async function newSignals(db: SupabaseClient, since: string | null, limit = 60): Promise<Signal[]> {
-  let q = db.from("gtm_comments").select("id,platform,text,post_preview,author_name,author_username,author_headline,classification,draft,draft_reason,status,final_text,edited,reclassified_from,note,acted_at")
+  let q = db.from("gtm_comments").select("id,platform,text,post_preview,author_name,author_username,author_headline,classification,draft,draft_reason,status,final_text,edited,reclassified_from,note,acted_at,final_source")
     .eq("is_own", false).not("acted_at", "is", null).or("status.eq.sent,reclassified_from.not.is.null,and(status.eq.skipped,draft.not.is.null)");
   if (since) q = q.gt("acted_at", since);
   // Oldest first: past the limit, the newer decisions wait for the next run instead of being skipped forever.
   const rows = must(await q.order("acted_at", { ascending: true }).order("id").limit(limit), "signals") as {
     id: string; platform: string; text: string; post_preview: string | null; author_name: string | null; author_username: string | null; author_headline: string | null;
-    classification: string | null; draft: string | null; draft_reason: string | null; status: string; final_text: string | null; edited: boolean; reclassified_from: string | null; note: string | null; acted_at: string;
+    classification: string | null; draft: string | null; draft_reason: string | null; status: string; final_text: string | null; edited: boolean; reclassified_from: string | null; note: string | null; acted_at: string; final_source: string | null;
   }[];
-  return rows.filter((r) => r.note !== "our own comment or reply").map((r) => ({
+  // A chat rewrite John approved is Claude's text, not his edit: it teaches nothing about his voice.
+  return rows.filter((r) => r.note !== "our own comment or reply" && !(r.status === "sent" && r.final_source === "chat_agent")).map((r) => ({
     id: r.id, platform: r.platform, comment: r.text, post: r.post_preview, author: r.author_name ?? r.author_username ?? "someone", headline: r.author_headline,
     agent: { classification: r.reclassified_from ?? r.classification, draft: r.draft, reason: r.draft_reason },
     john: {

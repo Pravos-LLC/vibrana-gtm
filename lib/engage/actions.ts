@@ -59,18 +59,30 @@ type Deps = { reply?: typeof replyToComment; dm?: typeof sendDirectMessage; late
  * act. A send interrupted mid-flight leaves the row `approved`; after two minutes it can be retried, and
  * the same Idempotency-Key makes Zernio replay rather than post twice.
  */
-async function claim(db: SupabaseClient, id: string, from: readonly string[], patch: Record<string, unknown>) {
+async function claim(db: SupabaseClient, id: string, from: readonly string[], patch: Record<string, unknown>, opts: { strict?: boolean; version?: string } = {}) {
   const stale = new Date(Date.now() - 120_000).toISOString();
-  const { data, error } = await db.from("gtm_comments").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id)
-    .or(`status.in.(${from.join(",")}),and(status.eq.approved,acted_at.lt.${stale})`).select("id");
+  let q = db.from("gtm_comments").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
+  // Strict (Claude Code): never reopen a stalled `approved` row (the reply may have posted), and only act on the
+  // exact version of the row John was shown.
+  q = opts.strict ? q.in("status", [...from]) : q.or(`status.in.(${from.join(",")}),and(status.eq.approved,acted_at.lt.${stale})`);
+  if (opts.version) q = q.eq("updated_at", opts.version);
+  const { data, error } = await q.select("id");
   if (error) throw new Error(error.message);
   return (data ?? []).length > 0;
 }
 
 /** Sends John's reply through Zernio. The final text is stored next to the agent's draft (voice signal). */
-export async function approveComment(db: SupabaseClient, id: string, text: string, actor: string, deps: Deps = {}): Promise<Result> {
+/**
+ * Claude Code sends (lib/engage/agent.ts) pass `strict`: a `failed` row is refused unless `retry` (John checked
+ * the platform first, since a timeout may have posted the reply), a stalled `approved` row is never reopened, a
+ * DM answered after a newer message from the same person is refused, and `version` must still match.
+ */
+export type SendOpts = { strict?: boolean; retry?: boolean; version?: string; source?: "draft" | "john" | "chat_agent" };
+
+export async function approveComment(db: SupabaseClient, id: string, text: string, actor: string, deps: Deps = {}, opts: SendOpts = {}): Promise<Result> {
   const c = await getComment(db, id);
   if (!c) return { ok: false, error: "That comment is gone." };
+  if (opts.strict && c.status === "failed" && !opts.retry) return { ok: false, error: `The last send failed (${c.error ?? "unknown"}). It may still have gone out: check the post on the platform, then retry that row on purpose.` };
   if (replyMode(c) === "manual") return { ok: false, error: "This one is answered on the platform: use Copy reply and open." };
   const problem = replyProblem(text);
   if (problem) return { ok: false, error: problem };
@@ -79,8 +91,13 @@ export async function approveComment(db: SupabaseClient, id: string, text: strin
   if (c.kind === "dm" && dmWindowClosed(c.platform, lastInbound)) {
     return { ok: false, error: "This DM is more than 7 days old. Meta only allows a reply inside 7 days of their last message, so answer it in the Instagram or Facebook app." };
   }
+  if (opts.strict && c.kind === "dm" && c.commented_at && lastInbound && Date.parse(lastInbound) > Date.parse(c.commented_at)) {
+    return { ok: false, error: "They sent a newer message in this conversation. Reload the queue and answer the latest one." };
+  }
   const finalText = text.trim();
-  if (!(await claim(db, id, OPEN_STATUSES, { status: "approved", final_text: finalText, acted_by: actor, acted_at: new Date().toISOString(), error: null }))) {
+  const from = opts.strict && !opts.retry ? ["new", "drafted"] : OPEN_STATUSES;
+  const patch = { status: "approved", final_text: finalText, acted_by: actor, acted_at: new Date().toISOString(), error: null, ...(opts.source ? { final_source: opts.source } : {}) };
+  if (!(await claim(db, id, from, patch, { strict: opts.strict, version: opts.version }))) {
     return { ok: false, error: await alreadyHandled(db, id) };
   }
   try {
@@ -100,18 +117,18 @@ export async function approveComment(db: SupabaseClient, id: string, text: strin
 }
 
 /** A manual reply (LinkedIn email intake): John copied the text and opened the comment, so it counts as sent. */
-export async function markCopied(db: SupabaseClient, id: string, text: string, actor: string): Promise<Result> {
+export async function markCopied(db: SupabaseClient, id: string, text: string, actor: string, opts: SendOpts = {}): Promise<Result> {
   const c = await getComment(db, id);
   if (!c) return { ok: false, error: "That comment is gone." };
   if (replyMode(c) !== "manual") return { ok: false, error: "This one is sent through Zernio: use Approve and send." };
   const problem = replyProblem(text);
   if (problem) return { ok: false, error: problem };
-  const ok = await claim(db, id, OPEN_STATUSES, { status: "sent", sent_at: new Date().toISOString(), final_text: text.trim(), acted_by: actor, acted_at: new Date().toISOString(), note: "replied by hand on the platform" });
+  const ok = await claim(db, id, opts.strict ? ["new", "drafted"] : OPEN_STATUSES, { status: "sent", sent_at: new Date().toISOString(), final_text: text.trim(), acted_by: actor, acted_at: new Date().toISOString(), note: "replied by hand on the platform", ...(opts.source ? { final_source: opts.source } : {}) }, { strict: opts.strict, version: opts.version });
   return ok ? { ok: true, status: "sent", message: "Marked sent. Paste it in LinkedIn." } : { ok: false, error: await alreadyHandled(db, id) };
 }
 
-export async function skipComment(db: SupabaseClient, id: string, actor: string): Promise<Result> {
-  const ok = await claim(db, id, OPEN_STATUSES, { status: "skipped", acted_by: actor, acted_at: new Date().toISOString(), note: "skipped by John" });
+export async function skipComment(db: SupabaseClient, id: string, actor: string, opts: SendOpts = {}): Promise<Result> {
+  const ok = await claim(db, id, opts.strict ? ["new", "drafted", "failed"] : OPEN_STATUSES, { status: "skipped", acted_by: actor, acted_at: new Date().toISOString(), note: "skipped by John" }, { strict: opts.strict, version: opts.version });
   return ok ? { ok: true, status: "skipped", message: "Skipped." } : { ok: false, error: await alreadyHandled(db, id) };
 }
 

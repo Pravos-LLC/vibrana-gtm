@@ -37,7 +37,7 @@ const flag = (name: string) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const positional = argv.filter((a, i) => !a.startsWith("--") && !(argv[i - 1] ?? "").match(/^--(week|iso-week|track|season|days|since|only|round|series|title|description|starts|ends|pillars|batch|assets|asset|note|linkedin|instagram|youtube|kind|tags|tag|why|pillar|out|by|status|lane|limit|format|story|to|from|account|who|stage|changes|summary|effort|impact|source|owner|lens|slug|addresses|replies|motion-sha|motion-path|credits|balance-after|job|skill|from|category|rule|do-not-use|only|party|sha|render|keys|notes|eta|agent|storyboard|manifest|brand|theme|brief|prompt-file|reference|art-dir|asset-root|shape|weeks|email|file|reason|url)$/));
+const positional = argv.filter((a, i) => !a.startsWith("--") && !(argv[i - 1] ?? "").match(/^--(week|iso-week|track|season|days|since|only|round|series|title|description|starts|ends|pillars|batch|assets|asset|note|linkedin|instagram|youtube|kind|tags|tag|why|pillar|out|by|status|lane|limit|format|story|to|from|account|who|stage|changes|summary|effort|impact|source|owner|lens|slug|addresses|replies|motion-sha|motion-path|credits|balance-after|job|skill|from|category|rule|do-not-use|only|party|sha|render|keys|notes|eta|agent|storyboard|manifest|brand|theme|brief|prompt-file|reference|art-dir|asset-root|shape|weeks|email|file|reason|url|text|version)$/));
 const [cmd, ...rest] = positional;
 
 // In `gtm sync`, commands hand their result to a sink instead of printing.
@@ -1301,6 +1301,23 @@ const commands: Record<string, () => Promise<void>> = {
       const posted = r.comments.length ? await postIntake(r.comments) : { inserted: 0, duplicates: 0 };
       return out({ emails: r.emails, comments: r.comments.length, ...posted }, () => console.log(`${r.emails} emails, ${r.comments.length} comments, ${posted.inserted ?? 0} new in the queue`));
     }
+    if (["next", "reply", "copied", "skip", "hide", "not-spam", "lesson"].includes(sub ?? "")) {
+      // Claude Code engage (VIB-428): thin client over the cockpit's /api/engage/agent. No database or Zernio key here.
+      const { agentCall } = await import("../lib/engage/agent-client");
+      const id = rest[1];
+      const body: Record<string, unknown> = { verb: sub };
+      if (sub === "next") body.limit = Number(flag("--limit") ?? 25);
+      else if (sub === "lesson") { body.text = rest.slice(1).join(" "); body.kind = flag("--kind") ?? "voice"; }
+      else {
+        body.id = id; body.version = flag("--version");
+        if (sub === "reply" || sub === "copied") { body.text = flag("--text"); body.source = flag("--source") ?? "chat_agent"; body.retry = argv.includes("--retry"); }
+      }
+      const r = await agentCall(body);
+      return out(r, () => {
+        if (sub === "next") { const q = r as { total: number; items: { id: string; platform: string; kind: string; status: string; mode: string; author: { name: string | null }; untrusted: { comment: string }; draft: string; open_slots: string[] }[] }; console.log(`${q.total} to answer`); for (const i of q.items) console.log(`${i.id} ${i.platform} ${i.kind} ${i.status} ${i.mode} ${i.author.name ?? "?"}: ${i.untrusted.comment.slice(0, 80)}\n   draft: ${i.draft}${i.open_slots.length ? "  [OPEN SLOT]" : ""}`); }
+        else console.log(JSON.stringify(r));
+      });
+    }
     const { adminDb, must } = await import("../lib/db");
     if (sub === "run") {
       const { runEngage } = await import("../lib/engage/run");
@@ -1402,7 +1419,7 @@ const commands: Record<string, () => Promise<void>> = {
       await subscribeEngageEvents(hook);
       return out({ webhook: hook._id, added: missing, applied: true });
     }
-    throw new Error("usage: gtm engage run [--dry-run] [--to email] | draft [--dry-run] [--limit N] | list [--status S] [--limit N] | counts [--from YYYY-MM-DD] [--to YYYY-MM-DD] | intake-linkedin [--days N] [--account email] [--dry-run] | health | subscribe [--dry-run] | flags [--days N] | classify --dry-run [--days N] | learn [--dry-run] [--all] | profiles [--dry-run]");
+    throw new Error("usage: gtm engage next [--limit N] | reply <id> --version V --text T [--source john|chat_agent] [--retry] | copied <id> --version V --text T | skip <id> --version V | hide <id> | not-spam <id> | lesson <text> [--kind voice|classification] | run [--dry-run] [--to email] | draft [--dry-run] [--limit N] | list [--status S] [--limit N] | counts [--from YYYY-MM-DD] [--to YYYY-MM-DD] | intake-linkedin [--days N] [--account email] [--dry-run] | health | subscribe [--dry-run] | flags [--days N] | classify --dry-run [--days N] | learn [--dry-run] [--all] | profiles [--dry-run]");
   },
 
   async stats() {
@@ -1808,6 +1825,9 @@ const help = `gtm <command> [--json]
   playbook tag [--all] [--dry-run] [--limit N]   tag approved, scheduled and published items with one hook, storyline
                            and CTA from the content canon's taxonomy (content/guide/playbook-taxonomy.json); only untagged
                            items or ones whose copy changed, unless --all. The weekly report grades against these (cron: daily sync)
+  engage next [--limit N]   Claude Code: the open queue as JSON (untrusted text fenced), DM threads collapsed
+  engage reply <id> --version V --text T [--source john|chat_agent] [--retry]   send one reply through the cockpit API (needs GTM_COCKPIT_URL, ENGAGE_AGENT_TOKEN)
+  engage copied|skip <id> --version V ... | hide <id> | not-spam <id> | lesson <text>   the other Claude Code verbs
   engage run [--dry-run] [--to email]   poll Zernio for comments the webhook missed, draft replies, email "N replies to
                            approve" (cron: daily, 07:00 Bali time). Replies are approved and sent in /engage only
   engage draft [--dry-run] [--limit N]   draft replies for new comments now (--dry-run prints them, writes nothing)
