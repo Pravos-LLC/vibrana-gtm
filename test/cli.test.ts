@@ -911,21 +911,32 @@ test("packaging render takes licensed assets from --asset-root or PACKAGING_ASSE
     title: "Who owns the recordings?", description: "A conversation.", sources: [{ path: "transcript.json", role: "transcript" }],
     portraits: [], shapes: ["landscape"], selection: "Question and human account" };
   const files = { "packaging/brief.json": JSON.stringify(brief), "packaging/transcript.json": "spoken account", "licensed/fonts/.keep": "" };
-  const render = ["packaging", "render", "test-story", "--brief", "{dir}/packaging/brief.json"];
-  // The flag selects the external root (and wins over the env); an empty font directory is refused, not substituted.
-  const flagged = gtm([...render, "--asset-root", "{dir}/licensed"], { files, env: { PACKAGING_ASSET_ROOT: "relative/ignored" } });
-  assert.equal(flagged.code, 1);
-  assert.match(flagged.stderr, /Missing licensed font \S*\/licensed\/fonts\/clash-display\.woff2\. Set PACKAGING_ASSET_ROOT or --asset-root/);
+  const commands: Record<string, string[]> = {
+    render: ["packaging", "render", "test-story", "--brief", "{dir}/packaging/brief.json"],
+    gallery: ["packaging", "gallery", "test-story", "--brief", "{dir}/packaging/brief.json", "--out", "{dir}/gallery"],
+    motion: ["packaging", "motion", "test-story", "--brief", "{dir}/packaging/brief.json", "--out", "{dir}/title.webm", "--shape", "landscape"],
+  };
+  const missing = /Missing licensed font \S*\/licensed\/fonts\/clash-display\.woff2\. Set PACKAGING_ASSET_ROOT or --asset-root/;
   const external = mkdtempSync(join(tmpdir(), "gtm-assets-"));
   mkdirSync(join(external, "fonts"));
   try {
-    const env = gtm(render, { files, env: { PACKAGING_ASSET_ROOT: external } });
-    assert.equal(env.code, 1);
-    assert.ok(env.stderr.includes(`fonts/clash-display.woff2`) && env.stderr.includes(external.split("/").pop()!), env.stderr);
+    for (const [name, args] of Object.entries(commands)) {
+      // The flag selects the external root and wins over the env; an empty font directory is refused, not substituted.
+      const flagged = gtm([...args, "--asset-root", "{dir}/licensed"], { files, env: { PACKAGING_ASSET_ROOT: "relative/ignored" } });
+      assert.equal(flagged.code, 1, name);
+      assert.match(flagged.stderr, missing, name);
+      // A flag before the story id must not be taken for the story id.
+      const [group, sub, ...tail] = args;
+      const first = gtm([group, sub, "--asset-root", "{dir}/licensed", ...tail], { files });
+      assert.match(first.stderr, missing, `${name} with the flag first`);
+      const env = gtm(args, { files, env: { PACKAGING_ASSET_ROOT: external } });
+      assert.equal(env.code, 1, name);
+      assert.ok(env.stderr.includes(`${external.split("/").pop()}/fonts/clash-display.woff2`), `${name}: ${env.stderr}`);
+    }
   } finally { rmSync(external, { recursive: true, force: true }); }
-  const relative = gtm(render, { files, env: { PACKAGING_ASSET_ROOT: "relative/assets" } });
+  const relative = gtm(commands.render, { files, env: { PACKAGING_ASSET_ROOT: "relative/assets" } });
   assert.equal(relative.code, 1);
   assert.match(relative.stderr, /PACKAGING_ASSET_ROOT must be an absolute path/);
-  const inside = gtm([...render, "--asset-root", ROOT], { files });
+  const inside = gtm([...commands.render, "--asset-root", ROOT], { files });
   assert.match(inside.stderr, /--asset-root must be outside this checkout/);
 });

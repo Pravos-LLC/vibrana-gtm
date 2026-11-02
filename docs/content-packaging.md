@@ -36,7 +36,7 @@ Point the renderer at your copy with either:
 
 With neither set, the renderer looks in the ignored `assets/packaging/` of this checkout, which is empty in a fresh clone. A supplied root fails closed, the same way the private overlay inputs do: it must be an absolute path to an existing directory **outside this checkout** (a symlink that resolves inside it is refused) and must contain `fonts/`. An invalid root is an error, never a quiet fallback to the bundled location.
 
-A missing font or mark stops the render with `Missing licensed font <path>`. The toolkit never substitutes another typeface: a cover in the wrong brand font is worse than no cover.
+A missing font or mark stops the render with `Missing licensed font <path>` or `Missing licensed mark <path>`. The toolkit never substitutes another typeface: a cover in the wrong brand font is worse than no cover.
 
 The render manifest records every font and mark it used among its `inputs`, with a SHA256 of the bytes, alongside the brief, sources and renderer files. `gtm packaging check` rehashes them, so changed or missing font bytes mark the package stale. Paths are stored relative to the render directory, so check a package on the machine (and with the asset root) that rendered it.
 
