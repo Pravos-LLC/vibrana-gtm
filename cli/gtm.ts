@@ -1539,6 +1539,42 @@ const commands: Record<string, () => Promise<void>> = {
     throw new Error("usage: gtm report weekly [--week N] [--season id] [--dry-run] [--force] [--to email] | pack [--week N] | baseline [--dry-run] | list [--limit N]");
   },
 
+  async analytics() {
+    // Analytics reports: the weekly review dashboard at /performance/reports, written by the weekly-report skill.
+    // publish validates and upserts; the hourly cron emails John the link (once per report).
+    const { adminDb } = await import("../lib/db");
+    const sub = rest[0];
+    if (sub === "validate" || sub === "publish") {
+      const file = rest[1];
+      if (!file) throw new Error(`usage: gtm analytics ${sub} <report.json>`);
+      const { readFileSync } = await import("node:fs");
+      const doc = JSON.parse(readFileSync(file, "utf8"));
+      const { validateReportDoc, reportSlug } = await import("../lib/analytics-reports/doc");
+      if (sub === "validate") {
+        const problems = validateReportDoc(doc);
+        return out({ ok: !problems.length, problems, slug: problems.length ? null : reportSlug(doc) }, () => {
+          if (!problems.length) return console.log(`ok: ${reportSlug(doc)}`);
+          console.log(problems.map((x) => `- ${x}`).join("\n"));
+          process.exitCode = 1;
+        });
+      }
+      const { publishReport, reportPath, cockpitOrigin } = await import("../lib/analytics-reports/store");
+      const r = await publishReport(adminDb(), doc, { dryRun: dry, resend: argv.includes("--resend") });
+      const link = `${cockpitOrigin() ?? "https://<cockpit>"}${reportPath(r.slug)}`;
+      return out({ ...r, url: link }, () => {
+        if (r.dryRun) return console.log(`DRY RUN (valid, nothing written): ${link}`);
+        console.log(`published ${r.slug}: ${link}`);
+        console.log(r.emailed_at ? `already emailed ${r.emailed_at} (--resend to send the link again)` : "the link email goes out at the next :40 cron run");
+      });
+    }
+    if (sub === "list") {
+      const { listReports } = await import("../lib/analytics-reports/store");
+      const rows = await listReports(adminDb(), Number(flag("--limit") ?? 12));
+      return out(rows, () => { for (const x of rows) console.log(`${x.period_start} ${x.slug.padEnd(20)} ${x.emailed_at ? "emailed" : "unsent "} ${x.headline}`); });
+    }
+    throw new Error("usage: gtm analytics validate <report.json> | publish <report.json> [--dry-run] [--resend] | list [--limit N]");
+  },
+
   async playbook() {
     // Playbook tags (VIB-421): one hook, storyline and CTA per approved, scheduled or published item, from the
     // content canon's taxonomy. --dry-run calls the model and writes nothing. The daily Vercel sync runs this too.
@@ -1757,6 +1793,10 @@ const help = `gtm <command> [--json]
   report pack [--week N]   the report's input pack (deterministic JSON; every citable number is in .facts)
   report baseline [--dry-run]   record absolute counts per channel (followers, last 28 days of reach and engagements)
   report list              recent reports and baselines
+  analytics validate <report.json>   check a weekly review document (lib/analytics-reports/doc.ts) without writing
+  analytics publish <report.json> [--dry-run] [--resend]   publish it to Analytics > Reports (/performance/reports/<slug>);
+                           the hourly cron emails John the link once, and alerts him from Monday noon in Bali if last week has none
+  analytics list [--limit N]   published reports, newest first
   candidates select [--week N|YYYY-MM-DD] [--no-score]   the Sunday candidates for next week (read-only): queued signals
                            and the report's new_story actions first, then briefed stories that clear the audience-fit and score
                            floors, balanced across lenses and pillars (Perspective capped), at least one carousel and one video

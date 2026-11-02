@@ -150,6 +150,18 @@ test.describe("owner", () => {
     await shot(page, "performance-post");
   });
 
+  test("Analytics > Reports lists the weekly review and renders its dashboard blocks", async ({ page }) => {
+    await page.goto("/performance/reports");
+    await expect(page.getByRole("link", { name: "Reports" })).toHaveAttribute("aria-current", "page");
+    await page.getByText("Sample: conversation clips carried Instagram while list carousels stalled").click();
+    await expect(page).toHaveURL(/\/performance\/reports\/weekly-2026-10-26$/);
+    await expect(page.getByRole("heading", { level: 1, name: /Sample: conversation clips/ })).toBeVisible();
+    for (const h of ["The week in numbers", "Instagram median reach by kind", "What to change next week", "Next week", "Sources"]) await expect(page.getByRole("heading", { name: h })).toBeVisible();
+    await expect(page.getByText("High confidence")).toBeVisible();
+    await expect(page.getByText("Low confidence")).toBeVisible();
+    await shot(page, "analytics-report");
+  });
+
   test("Performance: the owner adds the week's YouTube stats in the sheet and they land in gtm_manual_metrics", async ({ page }) => {
     // Today in John's timezone (REPORT_TZ, Bali), as the dashboard picks the current week.
     const week = mondayOf(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Makassar" }).format(new Date()));

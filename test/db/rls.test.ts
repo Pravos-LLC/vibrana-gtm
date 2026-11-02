@@ -64,6 +64,7 @@ function probe(t: (typeof TABLES)[number]): { row: Record<string, unknown>; key:
     case "gtm_content_reports": return { row: { kind: "baseline", period_start: "2001-01-01", period_end: "2001-01-02" }, key: ["period_start", "2001-01-01"], patch: { headline: "changed" } };
     case "gtm_report_actions": return { row: { report_id: FIXTURE_REPORT, type: "move", proposal: id }, key: ["proposal", id], patch: { rationale: "changed" } };
     case "gtm_sync_state": { const k = id.replace(/-/g, "_"); return { row: { key: k, value: {} }, key: ["key", k], patch: { value: { x: 1 } } }; }
+    case "gtm_analytics_reports": { const day = `2001-0${1 + Math.floor(Math.random() * 9)}-${String(10 + Math.floor(Math.random() * 18))}`; return { row: { kind: "weekly", slug: `weekly-${id}`, period_start: day, period_end: day, title: "t", headline: "h", doc: {} }, key: ["slug", `weekly-${id}`], patch: { title: "changed" } }; }
     case "gtm_comments": return { row: { source: "poll", platform: "instagram", external_id: id, text: "t" }, key: ["external_id", id], patch: { status: "skipped" } };
     case "gtm_content_candidates": return { row: { week_start: "2001-01-01", slug: id, format: "text", lens: "regenerative", pillar: "perspective", channels: ["linkedin"], title: "t", body: "b", sources: [{ url: "https://example.com" }], agent_draft: {} }, key: ["slug", id], patch: { title: "changed" } };
     case "gtm_ideas": return { row: { slug: id, title: "t" }, key: ["slug", id], patch: { status: "parked" } };

@@ -1,7 +1,7 @@
 import { Suspense, cache } from "react";
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { BookOpen, CalendarDays, DoorOpen, Film, Home, Lightbulb, ListChecks, LogOut, Mail, MessagesSquare, PenLine, PieChart, Radar, Receipt, Sparkles, Users } from "lucide-react";
+import { BookOpen, CalendarDays, DoorOpen, FileChartColumn, Film, Home, Lightbulb, ListChecks, LogOut, Mail, MessagesSquare, PenLine, PieChart, Radar, Receipt, Sparkles, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarInset, SidebarLabel, SidebarMenu, SidebarMenuButton, SidebarProvider, SidebarTrigger, type NavBadge } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/toaster";
@@ -11,7 +11,7 @@ import { Table as UiTable, TableBody, TableCell, TableHead, TableHeader, TableRo
 import { Eyebrow, VibranaLogo } from "@/components/brand";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-// Grouped by job: what needs John today, the content workflow, the people side, then reference and admin.
+// Grouped by job: what needs John today, the content workflow, how it performed, the people side, then reference and admin.
 // Retired screens redirect (next.config.ts): /review and /stories to /content, /season to /content.
 const NAV = [
   { group: null, items: [{ href: "/", label: "Today", icon: Home }] },
@@ -22,7 +22,10 @@ const NAV = [
     { href: "/work", label: "Work", icon: ListChecks },
     { href: "/engage", label: "Engage", icon: MessagesSquare },
     { href: "/calendar", label: "Calendar", icon: CalendarDays },
+  ] },
+  { group: "Analytics", items: [
     { href: "/performance", label: "Performance", icon: PieChart },
+    { href: "/performance/reports", label: "Reports", icon: FileChartColumn },
   ] },
   { group: "Outreach", items: [
     { href: "/outreach/write", label: "Writing desk", icon: PenLine },
