@@ -8,7 +8,7 @@ import { digest } from "./story";
 import { BUCKET } from "./review";
 import { buildPost, sendLarge, peopleFor, seasonsFor } from "./publish-item";
 import { utmCampaign } from "./utm";
-import { pillarAllowed } from "./rhythm";
+import { pillarAllowed, traitPillarOf } from "./rhythm";
 import {
   uploadMedia,
   createPost,
@@ -346,7 +346,7 @@ const slotExpired = (d: Pick<PieceDelivery, "slot_date" | "slot_time" | "timezon
 
 /** The pillar a delivery's piece carries: its calendar row's, else any sibling leg's (a leg may have none). */
 export function deliveryPillar(cal: Calendar, d: Pick<PieceDelivery, "calendar_id" | "story_id">): string | null {
-  return cal.items.find((i) => i.id === d.calendar_id)?.pillar || cal.items.find((i) => i.story_id === d.story_id && i.pillar)?.pillar || null;
+  return cal.items.find((i) => i.id === d.calendar_id)?.pillar || cal.items.find((i) => i.story_id === d.story_id && i.pillar)?.pillar || traitPillarOf(d.story_id);
 }
 /** Refused before any claim: the guide's weekly rhythm never sends this pillar to this channel (rhythm.blocked). */
 export const CHANNEL_BLOCKED = /never takes .* pieces \(the guide's weekly rhythm\)/;

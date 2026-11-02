@@ -346,6 +346,15 @@ test("a Story's own planned date and title win; the slot prefix of a Story title
   const operational = pieceFor(operationalId, "linkedin", [{ ...copy("Approved text"), story_id: operationalId }], rows, undefined, { id: operationalId, title: "Example operational item" }, TODAY);
   assert.ok(!("error" in operational));
   if (!("error" in operational)) assert.equal(operational.pillar, (publishingMetadata as Record<string, {pillar:string}>)[operationalId].pillar, "classification repair does not require changing approved copy");
+  // The private traits file classifies a real Story whose approved copy has no pillar, without touching the copy.
+  const { TRAITS } = await import("../lib/rhythm");
+  TRAITS[sid] = { pillar: "perspective" };
+  try {
+    const classified = pieceFor(sid, "linkedin", [copy("Approved text")], rows, undefined, story, TODAY);
+    assert.equal("error" in classified ? classified.error : classified.pillar, "perspective");
+  } finally {
+    delete TRAITS[sid];
+  }
   const season = { storyId: sid, title: "Season name", date: "2026-11-20", pillar: "build", kind: "short" };
   assert.equal(pieceFor(sid, "linkedin", [copy("Text")], rows, season, story, TODAY), season);
 });
