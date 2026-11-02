@@ -14,6 +14,7 @@ import { guardVideoFile, guardVideoRanged, httpRangeReader, isVideo } from "./me
 import { hashingStream, LargeMedia } from "./large-media";
 import { tagLinks, utmCampaign } from "./utm";
 import { isHandPublished } from "./hand-published";
+import { pillarAllowed } from "./rhythm";
 
 const MIME: Record<string, string> = { ".mp4": "video/mp4", ".mov": "video/quicktime", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".pdf": "application/pdf" };
 
@@ -221,6 +222,12 @@ export async function sendCalendarItem(cal: Calendar, id: string, opts: SendOpts
   if (item.status !== "approved") throw new Error(`${id} is ${item.status}; only approved items can be scheduled`);
   // Checked before anything else: a malformed time once produced a NaN date that slipped past the too-soon guard.
   if (item.time != null && !isValidTime(item.time)) throw new Error(`${id}: bad time ${JSON.stringify(item.time)} (expected HH:MM); fix the calendar before scheduling`);
+  // A channel that never takes this pillar (the guide's rhythm.blocked) is refused on every path: auto-schedule, the
+  // calendar's buttons, `gtm story schedule`, send and retry. A row with no pillar takes its piece's. A Zernio draft is a
+  // preview and still allowed.
+  const pillar = item.pillar ?? cal.items.find((x) => item.story_id && x.story_id === item.story_id && x.pillar)?.pillar ?? null;
+  const blocked = item.channels.filter((c) => !pillarAllowed(pillar, c));
+  if (blocked.length && !opts.draft) throw new Error(`${id}: ${blocked.join(", ")} never takes ${pillar} pieces (the guide's weekly rhythm); skip this leg instead`);
   if (cal.source === "db") return sendDbItem(cal, item, opts);
   let storySnapshot: Awaited<ReturnType<typeof import("./story")["checkStoryApproval"]>>;
   if (item.story_id) {

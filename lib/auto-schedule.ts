@@ -403,7 +403,8 @@ export function planSlots(input: { items: Item[]; ready: Item[]; now: Date; time
     if (hold) { skipped.push({ id: item.id, reason: `held: ${holdReason(hold)}` }); continue; }
     if (item.channels.length !== 1) { skipped.push({ id: item.id, reason: "needs exactly one channel" }); continue; }
     if (manual.has(item.channels[0]) || isHandPublished(item.channels[0])) { skipped.push({ id: item.id, reason: `${item.channels[0]} is published by hand` }); continue; }
-    if (!pillarAllowed(item.pillar, item.channels[0])) { skipped.push({ id: item.id, reason: `${item.channels[0]} never takes ${item.pillar} pieces (the guide's weekly rhythm); skip this leg` }); continue; }
+    const piecePillar = item.pillar ?? items.find((x) => item.story_id && x.story_id === item.story_id && x.pillar)?.pillar ?? null;
+    if (!pillarAllowed(piecePillar, item.channels[0])) { skipped.push({ id: item.id, reason: `${item.channels[0]} never takes ${piecePillar} pieces (the guide's weekly rhythm); skip this leg` }); continue; }
     if (lastSeasonDay && item.date > lastSeasonDay) { skipped.push({ id: item.id, reason: `parked in the reserve bank (${item.date}, after the last season ends ${lastSeasonDay}); give it a slot inside a season to schedule it` }); continue; }
     eligible.push(item);
   }
