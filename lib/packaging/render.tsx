@@ -12,18 +12,22 @@ import { guardMediaBytes } from "../media-guard";
 import { SIZES, TOOLKIT_VERSION } from "./catalog";
 import { catalogHash, checkPackage, fileHash, hash, inputPaths, readBrief, type PackagingManifest } from "./model";
 import { Thumbnail, thumbnailCss } from "./Thumbnail";
-const assetsRoot = fileURLToPath(new URL("../../assets/packaging/", import.meta.url));
+import { packagingAssetRoot } from "./assets";
 const dataUrl = (path: string) => `data:${({ ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml" } as Record<string,string>)[extname(path)] ?? "application/octet-stream"};base64,${readFileSync(path).toString("base64")}`;
-export async function renderPackage(briefPath: string, options: { assetRoot?: string } = {}): Promise<{ manifest: string; cached: boolean }> {
-  const b = readBrief(briefPath), root = dirname(resolve(briefPath)), profile = packagingProfiles()[b.brand];
-  const rootAssets = options.assetRoot ?? assetsRoot;
+/** Every file a render depends on, licensed fonts and marks included, with the hashes the cache key and manifest record. */
+export function renderInputs(briefPath: string, assetRoot: string) {
+  const b = readBrief(briefPath), profile = packagingProfiles()[b.brand];
   const headline = HEADLINE_TYPES[headlineType(b)];
-  const fonts = [...profile.fonts, headline.file].map(f => resolve(rootAssets, "fonts", f));
-  for (const f of fonts) if (!existsSync(f)) throw new Error(`Missing licensed font ${f}. Restore assets/packaging/fonts before rendering; do not silently substitute.`);
+  const fonts = [...profile.fonts, headline.file].map(f => resolve(assetRoot, "fonts", f));
+  const logoPath = b.brand === "aios" ? resolve(assetRoot, `aios-wordmark-${b.theme === "dark" ? "white" : "black"}.svg`) : undefined;
+  for (const f of logoPath ? [...fonts, logoPath] : fonts) if (!existsSync(f)) throw new Error(`Missing licensed ${f === logoPath ? "mark" : "font"} ${f}. Set PACKAGING_ASSET_ROOT or --asset-root to the private packaging assets; do not silently substitute.`);
   const inputs = [...inputPaths(b, briefPath), ...fonts, fileURLToPath(new URL("./Thumbnail.tsx", import.meta.url)), fileURLToPath(new URL("./render.tsx", import.meta.url)), fileURLToPath(new URL("./styles.ts", import.meta.url)), fileURLToPath(new URL("./motion.ts", import.meta.url))];
-  const logoPath = b.brand === "aios" ? resolve(rootAssets, `aios-wordmark-${b.theme === "dark" ? "white" : "black"}.svg`) : undefined;
   if (logoPath) inputs.push(logoPath);
-  const fingerprints = inputs.map(path => ({ path, sha256: fileHash(path) }));
+  return { brief: b, profile, headline, fonts, logoPath, fingerprints: inputs.map(path => ({ path, sha256: fileHash(path) })) };
+}
+export async function renderPackage(briefPath: string, options: { assetRoot?: string } = {}): Promise<{ manifest: string; cached: boolean }> {
+  const { brief: b, profile, headline, fonts, logoPath, fingerprints } = renderInputs(briefPath, options.assetRoot ?? packagingAssetRoot());
+  const root = dirname(resolve(briefPath));
   const key = hash(JSON.stringify({ brief: fileHash(briefPath), catalog: catalogHash(), inputs: fingerprints })).slice(0, 20);
   const out = resolve(root, "renders", key), manifestPath = resolve(out, "manifest.json");
   if (existsSync(manifestPath) && checkPackage(manifestPath).length === 0) {

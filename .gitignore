@@ -17,3 +17,6 @@ content/private
 
 .content-runtime
 .content-runtime-*
+
+# Licensed packaging fonts and marks never enter the public tree (docs/content-packaging.md).
+/assets/packaging/

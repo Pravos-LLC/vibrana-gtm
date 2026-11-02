@@ -8,7 +8,7 @@ Current operating contract: October 31, 2026. [Deployment context](deployment.md
 
 Local private mode requires `CONTENT_MODE=private`, an absolute external `PRIVATE_OVERLAY_ROOT`, the overlay manifest revision/digest and a separate runtime configuration digest. The root contains nineteen declared JSON content files, `manifest.json` and `runtime.json`. The schema-1 manifest maps every required content path to its SHA256; `REQUIRED_CONTENT` in `lib/content-overlay.mjs` defines the exact set. `lib/runtime-config.mjs` separately validates the typed schema-1 operational configuration.
 
-Missing, changed, malformed, incomplete or escaped inputs fail closed. Private mode has no automatic sample fallback. Private writers require a separate external `CONTENT_WRITE_ROOT` and cannot mutate an immutable snapshot. Review a new revision and digests after content changes. Public samples do not establish the operator's real guide, strategy, accounts or recipients.
+Missing, changed, malformed, incomplete or escaped inputs fail closed. Private mode has no automatic sample fallback. Private writers require a separate external `CONTENT_WRITE_ROOT` and cannot mutate an immutable snapshot. Packaging renders read licensed fonts from a separate external `PACKAGING_ASSET_ROOT` (or `--asset-root`); see [content packaging](content-packaging.md). Review a new revision and digests after content changes. Public samples do not establish the operator's real guide, strategy, accounts or recipients.
 
 ## Operated production delivery
 

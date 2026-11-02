@@ -8,7 +8,7 @@ import { TEMPLATES } from "./catalog";
 import { readBrief, checkPackage } from "./model";
 import { renderPackage } from "./render";
 
-export async function renderGallery(briefPath: string, output: string, options: { styles?: boolean; artDir?: string } = {}) {
+export async function renderGallery(briefPath: string, output: string, options: { styles?: boolean; artDir?: string; assetRoot?: string } = {}) {
   const original = readBrief(briefPath), root = resolve(output);
   const profiles = packagingProfiles(), brands = Object.keys(profiles);
   mkdirSync(root, { recursive: true });
@@ -35,7 +35,7 @@ export async function renderGallery(briefPath: string, output: string, options: 
       selection: "Layout specimen only. Production selection must match the actual content and payoff.",
     };
     const path = resolve(dir, "brief.json"); writeFileSync(path, JSON.stringify(b, null, 2) + "\n");
-    const r = await renderPackage(path); const errors = checkPackage(r.manifest);
+    const r = await renderPackage(path, { assetRoot: options.assetRoot }); const errors = checkPackage(r.manifest);
     if (errors.length) throw new Error(errors.join("; "));
     const m = JSON.parse(readFileSync(r.manifest, "utf8"));
     const image = (shape: string) => relative(root, resolve(dirname(r.manifest), m.assets.find((a: { path: string }) => a.path === shape + ".jpg").path));
