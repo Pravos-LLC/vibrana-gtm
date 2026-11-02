@@ -562,3 +562,17 @@ test("an approved post over the limit is skipped with the channel and the count,
   // The bound Story copy is what gets sent, so it is what is measured (not a stale row body).
   assert.equal(tooLong({ ...li, body: "short" }, [{ kind: "copy", source: "kb/qr/linkedin.md", body }])?.startsWith("too long:"), true);
 });
+
+test("a channel that never takes a pillar (guide rhythm.blocked) is never scheduled for it; the other legs still are", async () => {
+  const { RHYTHM } = await import("../lib/rhythm");
+  RHYTHM.blocked = [{ channel: "instagram", pillars: ["lists"] }];
+  try {
+    const legs = [item("s1-07-top-7-linkedin", "2026-10-16", "08:30", "linkedin"), item("s1-07-top-7-instagram", "2026-10-16", "18:00", "instagram")];
+    const { slotted, skipped } = planSlots({ items: legs, ready: legs, now: NOW, timeZone: TZ, seasons: SEASON });
+    assert.deepEqual(slotted.map((s) => s.id), ["s1-07-top-7-linkedin"]);
+    assert.deepEqual(skipped.map((s) => s.id), ["s1-07-top-7-instagram"]);
+    assert.match(skipped[0].reason, /instagram never takes lists/);
+  } finally {
+    delete RHYTHM.blocked;
+  }
+});

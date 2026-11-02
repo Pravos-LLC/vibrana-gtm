@@ -634,6 +634,8 @@ function FormatPipelines() {
 
 const FORMAT_ICON: Record<string, typeof Film> = { video: Film, carousel: LayoutGrid, document: FileText, text: Type, image: ImageIcon, ig_story: ImageIcon };
 const DAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+/** The weekdays the rhythm posts on (Saturday's optional reel is not a core post). */
+const CORE_DAY = DAY.map((d) => d !== "Sat" && !!CHANNELS.rhythm.days.find((x) => x.day === d)?.primary);
 const short = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 
 const CHANNEL_ABBR: Record<string, string> = { linkedin: "LI", instagram: "IG", youtube: "YT", newsletter: "Substack", website: "Site" };
@@ -641,7 +643,7 @@ const GRID = "md:grid-cols-[4.5rem_0.55fr_1.3fr_1.3fr_1.3fr_0.8fr_0.55fr_0.55fr]
 
 export function PlanChapter({ weeks, thumbs = {}, error }: { weeks: PlanWeek[]; thumbs?: Record<string, string>; error?: string }) {
   return (
-    <Chapter id="plan" title="The next ten weeks" lead="Live from the calendar, always the ten weeks from this one. Color is the pillar, the icon is the format. Tuesday to Thursday carry the three weekly posts; one piece fanned out to several channels shows once. Review weeks are marked.">
+    <Chapter id="plan" title="The next ten weeks" lead="Live from the calendar, always the ten weeks from this one. Color is the pillar, the icon is the format. The highlighted days carry the week's core posts (the weekly rhythm); one piece fanned out to several channels shows once. Review weeks are marked.">
       <div className="mb-6 flex flex-wrap gap-4 text-xs text-ink-2">
         {PILLARS.map((p) => <span key={p.slug} className="flex items-center gap-1.5"><span className="size-2.5 rounded-sm" style={{ background: PILLAR_TONE[p.slug] }} />{p.name}</span>)}
         <a href="/calendar" className="ml-auto inline-flex items-center gap-1 text-violet-strong hover:underline">Open the calendar<ArrowUpRight className="size-3.5" /></a>
@@ -649,14 +651,14 @@ export function PlanChapter({ weeks, thumbs = {}, error }: { weeks: PlanWeek[]; 
       {error && <p className="mb-6 text-sm text-red-strong">Could not load the calendar: {error}</p>}
       <div className="space-y-2">
         <div className={cn("hidden gap-2 px-2 text-xs text-ink-3 md:grid", GRID)}>
-          <span />{DAY.map((d, i) => <span key={d} className={i >= 1 && i <= 3 ? "font-medium text-ink-2" : undefined}>{d}</span>)}
+          <span />{DAY.map((d, i) => <span key={d} className={CORE_DAY[i] ? "font-medium text-ink-2" : undefined}>{d}</span>)}
         </div>
         {weeks.map((w) => (
           <div key={w.monday} className={cn("grid gap-2 rounded-xl border border-line p-2", GRID)}>
             <p className="px-1 pt-1 text-xs text-ink-3">{short(w.monday)}<span className="block">{w.count ? `${w.count} piece${w.count === 1 ? "" : "s"}` : "nothing yet"}</span>
               {(w.monday === REVIEW.first_read || w.monday === REVIEW.full_review) && <a href="#stories" className="mt-1 block font-medium text-violet-strong">{w.monday === REVIEW.first_read ? "First read" : "Re-evaluate"}</a>}</p>
             {w.days.map((d, i) => (
-              <div key={d.date} className={cn("min-h-12 space-y-1 rounded-lg p-1", i >= 1 && i <= 3 && "md:bg-surface-overlay/50", !d.entries.length && "hidden md:block")}>
+              <div key={d.date} className={cn("min-h-12 space-y-1 rounded-lg p-1", CORE_DAY[i] && "md:bg-surface-overlay/50", !d.entries.length && "hidden md:block")}>
                 <p className="px-1 text-[0.65rem] text-ink-3 md:hidden">{DAY[i]} {short(d.date)}</p>
                 {d.entries.map((e) => {
                   const Icon = FORMAT_ICON[e.formats[0] ?? ""] ?? Type;

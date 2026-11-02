@@ -2,9 +2,9 @@ import { loadContent } from "../lib/content-overlay.mjs";
 // Approval schedules (John, 2026-10-11): once a piece is approved for a platform in /content, its calendar item
 // goes to Zernio in the best open slot. There is no second approval. A slot is the item's own planned date and
 // time when that is still ahead and free (no other piece that day); otherwise (a missed date, or the day already has a
-// piece) the next day the weekly rhythm gives its pillar (lib/rhythm.ts, John 2026-10-17: Mon Perspective, Tue Proof,
-// Wed Build, Thu Voices, Fri Lists, Sat IG and YouTube reels), then a day that takes it as a fallback, never one that
-// breaks the house rules, at the channel's guide time (content/guide/channels.json).
+// piece) the next day the weekly rhythm gives its pillar (lib/rhythm.ts; the day map, off days and the pillars a channel
+// never takes are guide data), then a day that takes it as a fallback, never one that breaks the house rules, at the
+// channel's guide time (content/guide/channels.json). A leg on a channel that never takes its pillar is never scheduled.
 // Imported, not read from disk: inside the Next.js server bundle a file URL built from import.meta.url is not a
 // path readFileSync accepts ("Received an instance of URL"), so the after-approval auto-schedule pass threw in a
 // `next build` server before it read a single row.
@@ -24,7 +24,7 @@ import { loadFixNotes } from "./approve-note-db";
 import type { FixNote } from "./approve-note";
 import { contentVisibility } from "./content-visibility-db";
 import { isHandPublished } from "./hand-published";
-import { channelAllowed, fitRank, lanesOf, lintCalendar, lookOf, pieceKeyOf, type Issue, type LintPost } from "./rhythm";
+import { channelAllowed, fitRank, lanesOf, lintCalendar, lookOf, pieceKeyOf, pillarAllowed, type Issue, type LintPost } from "./rhythm";
 import { addDays, mondayOf } from "./week";
 
 /** A held Story, or one whose third party has not approved the final, is never auto-scheduled (lib/third-party.ts). */
@@ -222,7 +222,10 @@ export function pieceFor(storyId: string, channel: string, assets: MaterialAsset
  */
 export function nextSlotDay(today: string, opts: { pillar?: string | null; channels?: string[]; seasonEnd?: string; busy?: Set<string> } = {}): string {
   const lanes = lanesOf(opts.pillar ?? null, []);
-  const channels = opts.channels?.length ? opts.channels : ["linkedin"];
+  // A channel that never takes this pillar does not decide the day: that leg is refused when it is scheduled.
+  const wanted = opts.channels?.length ? opts.channels : ["linkedin"];
+  const allowed = wanted.filter((c) => pillarAllowed(opts.pillar, c));
+  const channels = allowed.length ? allowed : wanted;
   const days = Array.from({ length: 120 }, (_, d) => addDays(today, d + 1)).filter((date) => channels.every((c) => channelAllowed(date, c)) && !opts.busy?.has(date));
   const inSeason = days.filter((date) => !opts.seasonEnd || date <= opts.seasonEnd);
   const window = inSeason.slice(0, PRIMARY_WINDOW_DAYS);
@@ -400,6 +403,7 @@ export function planSlots(input: { items: Item[]; ready: Item[]; now: Date; time
     if (hold) { skipped.push({ id: item.id, reason: `held: ${holdReason(hold)}` }); continue; }
     if (item.channels.length !== 1) { skipped.push({ id: item.id, reason: "needs exactly one channel" }); continue; }
     if (manual.has(item.channels[0]) || isHandPublished(item.channels[0])) { skipped.push({ id: item.id, reason: `${item.channels[0]} is published by hand` }); continue; }
+    if (!pillarAllowed(item.pillar, item.channels[0])) { skipped.push({ id: item.id, reason: `${item.channels[0]} never takes ${item.pillar} pieces (the guide's weekly rhythm); skip this leg` }); continue; }
     if (lastSeasonDay && item.date > lastSeasonDay) { skipped.push({ id: item.id, reason: `parked in the reserve bank (${item.date}, after the last season ends ${lastSeasonDay}); give it a slot inside a season to schedule it` }); continue; }
     eligible.push(item);
   }

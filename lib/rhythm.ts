@@ -16,7 +16,9 @@ export type RhythmDay = { day: Weekday; primary: Lane | null; fallback: Lane[]; 
 export type Look = "prism" | "voiceover" | "talking-head" | "footage" | "text";
 export type Traits = { look?: Look; topic?: string };
 
-export const RHYTHM = (channelsJson as unknown as { rhythm: { days: RhythmDay[]; rules: string[]; summary: string } }).rhythm;
+/** A channel that never takes some pillars (John, 2026-11-02: Proof, Build and Lists never go to Instagram). Optional in the guide. */
+export type ChannelBlock = { channel: string; pillars: string[] };
+export const RHYTHM = (channelsJson as unknown as { rhythm: { days: RhythmDay[]; rules: string[]; summary: string; blocked?: ChannelBlock[] } }).rhythm;
 const TRAITS = (traitsJson as { pieces: Record<string, Traits> }).pieces;
 
 export const LANE_LABEL: Record<Lane, string> = { perspective: "Perspective", proof: "Proof", build: "Build", lists: "Lists", voices: "Voices", reels: "Reels" };
@@ -91,9 +93,14 @@ export function isRealDate(raw: string): boolean {
   return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === raw;
 }
 
-/** May this channel post on that day? LinkedIn is weekdays only, Saturday is IG and YouTube, Sunday is off. */
+/** May this channel post on that day? The guide's day map lists each day's channels; an off day has none. */
 export function channelAllowed(isoOrWeekday: string, channel: string): boolean {
   return rhythmDay(isoOrWeekday).channels.includes(channel);
+}
+
+/** May a piece of this pillar go out on this channel? The guide's `rhythm.blocked` lists the pillars a channel never takes. */
+export function pillarAllowed(pillar: string | null | undefined, channel: string): boolean {
+  return !pillar || !(RHYTHM.blocked ?? []).some((b) => b.channel === channel && b.pillars.includes(pillar));
 }
 
 // ---- lint ----------------------------------------------------------------------------------------------------
@@ -104,7 +111,7 @@ export type LintPost = {
   storyId: string | null; title: string; caption?: string | null;
 };
 export type Severity = "error" | "warn";
-export type Rule = "one-piece" | "split" | "channel-day" | "pillar-fit" | "talking-heads" | "voiceover" | "look-adjacent" | "prism-cap" | "topic" | "caption";
+export type Rule = "one-piece" | "split" | "channel-day" | "pillar-fit" | "talking-heads" | "voiceover" | "look-adjacent" | "prism-cap" | "topic" | "caption" | "channel-pillar";
 export type Issue = { severity: Severity; rule: Rule; date: string; message: string; ids: string[] };
 /** One piece on one day: a Story's (or loose item's) legs that share a date. */
 export type DayPiece = { key: string; storyId: string | null; date: string; title: string; pillar: string | null; channels: string[]; looks: Look[]; topic: string | null; lanes: Lane[]; ids: string[]; published: boolean };
@@ -174,6 +181,11 @@ export function lintCalendar(posts: LintPost[], from: string, weeks = 1): WeekRe
             ? `${p.title} has ${p.pillar ? `an unknown pillar (${p.pillar})` : "no pillar"}; set one of perspective, proof, build, lists`
             : `${short(date)} is ${l.primary}${l.fallback.length ? ` (fallback ${l.fallback.join(", ")})` : ""}; ${p.title} is ${p.lanes.map((x) => LANE_LABEL[x]).join("/")}` });
         }
+      }
+      // A leg on a channel that never takes its pillar (the guide's rhythm.blocked).
+      for (const p of today.filter((x) => !x.published)) {
+        const off = posts.filter((x) => live(x) && p.ids.includes(x.id) && x.status !== "published" && x.channels.some((c) => !pillarAllowed(x.pillar, c)));
+        if (off.length) add({ severity: "error", rule: "channel-pillar", date, ids: off.map((x) => x.id), message: `${p.title}: ${[...new Set(off.flatMap((x) => x.channels.filter((c) => !pillarAllowed(x.pillar, c))))].join(", ")} never takes ${p.pillar ? LANE_LABEL[p.pillar as Lane] ?? p.pillar : "this pillar"}; skip that leg` });
       }
     }
     const storiesHere = [...new Set(inWeek.map((p) => p.storyId).filter((s): s is string => !!s))];
