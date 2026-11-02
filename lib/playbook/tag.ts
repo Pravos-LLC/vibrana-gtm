@@ -169,7 +169,8 @@ export type TagResult = {
 export async function tagPlaybook(db: SupabaseClient, opts: { all?: boolean; dryRun?: boolean; deadline?: number; limit?: number; tag?: Tagger; now?: Date } = {}): Promise<TagResult> {
   const deadline = opts.deadline ?? Infinity;
   const out: TagResult = { dryRun: !!opts.dryRun, all: !!opts.all, considered: 0, selected: 0, tagged: [], rejected: [], errors: [], deferred: [] };
-  const cols = "id,title,pillar,format,channels,status,body";
+  const { TEXT_COLUMNS, withRowText } = await import("../row-text-db");
+  const cols = `id,title,pillar,format,channels,${TEXT_COLUMNS}`;
   const read = (select: string) => db.from("gtm_content_items").select(select).in("status", [...TAGGABLE_STATUSES]).order("date");
   let res = await read(`${cols},playbook_tags`);
   let columnMissing = false;
@@ -178,7 +179,8 @@ export async function tagPlaybook(db: SupabaseClient, opts: { all?: boolean; dry
     if (!opts.dryRun) return { ...out, skipped: COLUMN_MISSING };
     res = await read(cols);
   }
-  const rows = must(res, "content items to tag") as unknown as TagRow[];
+  // A Story row's text is its Story's copy until it is sent (lib/row-text.ts), so approved pieces are tagged before they go out.
+  const rows = await withRowText(db, must(res, "content items to tag") as unknown as (TagRow & { story_id: string | null; story_assets: string[] | null; zernio_post_id: string | null })[]);
   out.considered = rows.length;
   let due = selectRowsToTag(rows, { all: opts.all });
   if (opts.limit && opts.limit > 0) due = due.slice(0, opts.limit);

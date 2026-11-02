@@ -1,4 +1,3 @@
-import publishingMetadata from '../config/publishing-metadata.json';
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -85,18 +84,6 @@ test("Saturday takes only Instagram and YouTube: a reel goes there, a LinkedIn l
   assert.deepEqual([...new Set(li.slotted.map((s) => s.date))], ["2026-10-19"], "the next Monday, its own pillar");
 });
 
-test("a moved piece never adds a second voiceover reel to a week, nor lands within a week of another Orion piece", () => {
-  const vo = item("s1-05-sample-piece-05-linkedin", "2026-10-13", "14:00", "linkedin", { status: "scheduled", zernio_post_id: "z9", format: "video", pillar: "perspective" });
-  const second = item("s1-06-sample-piece-06-linkedin", "2026-10-08", "14:00", "linkedin", { format: "video", pillar: "perspective" });
-  const { slotted } = planSlots({ items: [vo, second], ready: [second], now: NOW, timeZone: TZ, seasons: SEASON });
-  assert.ok(slotted[0].date >= "2026-10-19", `grief went to ${slotted[0].date}`);
-
-  const teaser = item("sample-extra-38-linkedin", "2026-10-13", "14:00", "linkedin", { status: "scheduled", zernio_post_id: "z8", format: "video", pillar: "proof" });
-  const deck = item("sample-extra-134-linkedin", "2026-10-08", "08:30", "linkedin", { format: "document", pillar: "proof" });
-  const orion = planSlots({ items: [teaser, deck], ready: [deck], now: NOW, timeZone: TZ, seasons: SEASON });
-  assert.equal(orion.slotted[0].date, "2026-10-20", "the next Tuesday, a week after the teaser");
-});
-
 /** Every weekday Mon 2026-10-12 to Fri 2026-12-11 held by a scheduled LinkedIn post, except the dates given. */
 const fullSeason = (free: string[] = []) => {
   const out: Item[] = [];
@@ -123,8 +110,8 @@ test("F2: primary day, then fallback day, within two weeks; then the earliest op
   const mondays = ["2026-10-12", "2026-10-19", "2026-10-26"].map((d) => item(`mon-${d}-linkedin`, d, "14:00", "linkedin", { status: "scheduled", zernio_post_id: `m-${d}`, format: "text", pillar: "proof", story_id: `mon-${d}` }));
   const missed = item("signal-y-linkedin", "2026-10-08", "08:30", "linkedin", { format: "text", pillar: "perspective" });
   const { slotted } = planSlots({ items: [...mondays, missed], ready: [missed], now: NOW, timeZone: TZ, seasons: SEASON });
-  // Tuesday would put two text posts in a row (Monday's is text too), so Wednesday: never Mon 7 December.
-  assert.deepEqual(slotted.map((s) => s.date), ["2026-10-14"]);
+  // The first open weekday after the taken Monday: Tuesday (no look rules since 2026-11-02), never Mon 7 December.
+  assert.deepEqual(slotted.map((s) => s.date), ["2026-10-13"]);
   // A Lists piece with Friday taken in the window takes Monday, its fallback, before any other day.
   const fridays = ["2026-10-16", "2026-10-23"].map((d) => item(`fri-${d}-linkedin`, d, "08:30", "linkedin", { status: "scheduled", zernio_post_id: `f-${d}`, format: "text", pillar: "proof", story_id: `fri-${d}` }));
   const list = item("list-linkedin", "2026-10-08", "08:30", "linkedin", { format: "document", pillar: "lists" });
@@ -136,8 +123,7 @@ test("F4: a piece with no pillar is never skipped forever; it takes the earliest
   const odd = item("odd-linkedin", "2026-10-08", "08:30", "linkedin", { format: "text", pillar: "community" });
   const { slotted, skipped } = planSlots({ items: [loose, odd], ready: [loose, odd], now: NOW, timeZone: TZ, seasons: SEASON });
   assert.deepEqual(skipped, []);
-  // The second skips Tuesday only because two text posts in a row break the look rule.
-  assert.deepEqual(slotted.map((s) => [s.id, s.date]), [["loose-linkedin", "2026-10-12"], ["odd-linkedin", "2026-10-14"]]);
+  assert.deepEqual(slotted.map((s) => [s.id, s.date]), [["loose-linkedin", "2026-10-12"], ["odd-linkedin", "2026-10-13"]]);
 });
 
 test("F6: legs with no story_id are one piece by their id; they keep one day together", () => {
@@ -302,7 +288,7 @@ test("an approved platform with no calendar item becomes one, bound to exactly w
   assert.equal(made.row.id, `${sid}-youtube`);
   assert.deepEqual(made.row.media, ["stories/v.mp4"], "a cover beside a video is bound, not posted");
   assert.deepEqual(made.row.story_assets, [`${sid}-youtube`, `${sid}-video-9x16`, `${sid}-cover`]);
-  assert.deepEqual([made.row.date, made.row.time, made.row.format, made.row.status, made.row.copy_path, made.row.body], ["2026-11-20", "17:00", "video", "drafted", "src/youtube", "text"]);
+  assert.deepEqual([made.row.date, made.row.time, made.row.format, made.row.status, made.row.copy_path, made.row.body], ["2026-11-20", "17:00", "video", "drafted", "src/youtube", null]);
   assert.match((materializeItem(sid, "youtube", assets, rows, undefined) as { error: string }).error, /no season entry/);
   // Slides only: a LinkedIn document, slides in order.
   const deck = [a("linkedin", "copy", null, "li"), a("slide-02", "image", "stories/2.png"), a("slide-01", "image", "stories/1.png")];
@@ -342,10 +328,6 @@ test("a Story's own planned date and title win; the slot prefix of a Story title
   assert.deepEqual("error" in planned ? planned : [planned.date, planned.title], ["2026-10-28", "Kogui mirror"]);
   // No pillar anywhere: reported, never guessed.
   assert.match((pieceFor(sid, "linkedin", [copy("Text")], rows, undefined, story, TODAY) as { error: string }).error, /no pillar/);
-  const operationalId = Object.keys(publishingMetadata)[0];
-  const operational = pieceFor(operationalId, "linkedin", [{ ...copy("Approved text"), story_id: operationalId }], rows, undefined, { id: operationalId, title: "Example operational item" }, TODAY);
-  assert.ok(!("error" in operational));
-  if (!("error" in operational)) assert.equal(operational.pillar, (publishingMetadata as Record<string, {pillar:string}>)[operationalId].pillar, "classification repair does not require changing approved copy");
   // The private traits file classifies a real Story whose approved copy has no pillar, without touching the copy.
   const { TRAITS } = await import("../lib/rhythm");
   TRAITS[sid] = { pillar: "perspective" };

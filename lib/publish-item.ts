@@ -475,7 +475,8 @@ async function sendDbItem(cal: Calendar, item: Item, opts: SendOpts) {
   const urls = Object.fromEntries((created.post.platforms ?? []).flatMap((p) => p.platformPostUrl ? [[p.platform, p.platformPostUrl]] : []));
   if (!opts.draft) {
     try {
-      await updateItemDb(db, id, { status: published ? "published" : "scheduled", zernio_post_id: created.post._id, ...(published ? { published_at: new Date().toISOString(), ...(Object.keys(urls).length ? { urls } : {}) } : {}) });
+      // A Story row records the exact approved text it sent; before this it carries none (the Story's copy is the text).
+      await updateItemDb(db, id, { status: published ? "published" : "scheduled", zernio_post_id: created.post._id, ...(item.story_id ? { body: copyText ?? null } : {}), ...(published ? { published_at: new Date().toISOString(), ...(Object.keys(urls).length ? { urls } : {}) } : {}) });
     } catch (e) {
       throw new Error(`${id}: Zernio post ${created.post._id} WAS created but calendar write-back failed (${(e as Error).message}). Set zernio_post_id: ${created.post._id} by hand.`);
     }

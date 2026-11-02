@@ -62,41 +62,17 @@ test("killed legs are not on the calendar: skipped rows never count", () => {
   assert.deepEqual(gapsFor([post("x-linkedin", "2026-10-21", "linkedin", { status: "skipped" })], "2026-10-21", "2026-10-21").map((g) => g.date), ["2026-10-21"]);
 });
 
-test("a piece on the wrong day is flagged; LinkedIn on Saturday is flagged", () => {
-  assert.ok(rules([post("e-linkedin", "2026-10-20", "linkedin", { pillar: "lists", format: "document" })]).includes("pillar-fit"));
-  assert.ok(!rules([post("e-linkedin", "2026-10-23", "linkedin", { pillar: "lists", format: "document" })]).includes("pillar-fit"));
+test("only a missing pillar is a pillar warning (the day map is not policed); LinkedIn on Saturday is flagged", () => {
+  assert.ok(!rules([post("e-linkedin", "2026-10-20", "linkedin", { pillar: "lists", format: "document" })]).includes("pillar-fit"));
+  assert.ok(rules([post("e-linkedin", "2026-10-20", "linkedin", { pillar: null, format: "document" })]).includes("pillar-fit"));
   assert.ok(rules([post("s1-03-sample-piece-03-linkedin", "2026-10-24", "linkedin", { pillar: "perspective" })]).includes("channel-day"));
 });
 
-test("at most one voiceover reel a week; two talking heads wanted", () => {
-  const two = [post("s1-03-sample-piece-03-instagram", "2026-10-20", "instagram"), post("s1-05-sample-piece-05-instagram", "2026-10-24", "instagram")];
-  const report = lintCalendar(two, "2026-10-19")[0];
-  assert.equal(report.counts.voiceoverReels, 2);
-  assert.ok(report.issues.some((i) => i.rule === "voiceover" && i.severity === "error"));
-  assert.ok(report.issues.some((i) => i.rule === "talking-heads"), "no talking head this week");
-  const heads = [post("sample-extra-114-linkedin", "2026-10-19", "linkedin"), post("s1-13-sample-piece-13-linkedin", "2026-10-22", "linkedin")];
-  assert.equal(lintCalendar(heads, "2026-10-19")[0].counts.talkingHeads, 2);
-  assert.ok(!rules(heads).includes("talking-heads"));
-});
-
-test("no two days in a row with the same look, at most two Prism Light pieces a week", () => {
+test("taste rules are gone: looks, topics, talking-head and voiceover counts never raise an issue", () => {
+  const twoReels = [post("s1-03-sample-piece-03-instagram", "2026-10-20", "instagram"), post("s1-05-sample-piece-05-instagram", "2026-10-24", "instagram")];
   const decks = ["2026-10-20", "2026-10-21"].map((d, i) => post(`deck${i}-linkedin`, d, "linkedin", { format: "document" }));
-  assert.ok(rules(decks).includes("look-adjacent"));
-  const spaced = ["2026-10-19", "2026-10-21", "2026-10-23"].map((d, i) => post(`deck${i}-linkedin`, d, "linkedin", { format: "document" }));
-  assert.ok(!rules(spaced).includes("look-adjacent"));
-  assert.ok(rules(spaced).includes("prism-cap"));
-  // YouTube is not a grid that shows covers side by side: a YouTube-only leg does not count.
-  const yt = [post("f-youtube", "2026-10-20", "youtube", { format: "document" }), post("g-linkedin", "2026-10-21", "linkedin", { format: "document" })];
-  assert.ok(!rules(yt).includes("look-adjacent"));
-});
-
-test("the same topic needs a clear day between; Orion needs a week, across week boundaries too", () => {
   const brain = [post("sample-extra-131-linkedin", "2026-10-20", "linkedin", { format: "document" }), post("sample-extra-39-linkedin", "2026-10-21", "linkedin")];
-  assert.ok(rules(brain).includes("topic"));
-  const spaced = [post("sample-extra-131-linkedin", "2026-10-19", "linkedin", { format: "document" }), post("sample-extra-39-linkedin", "2026-10-21", "linkedin")];
-  assert.ok(!rules(spaced).includes("topic"));
-  const orion = [post("sample-extra-38-linkedin", "2026-10-16", "linkedin"), post("sample-extra-134-linkedin", "2026-10-20", "linkedin", { format: "document" })];
-  assert.ok(rules(orion).includes("topic"), "4 days after the teaser, in the next week");
+  for (const week of [twoReels, decks, brain]) assert.deepEqual(rules(week).filter((r) => r !== "channel-day"), []);
 });
 
 test("LinkedIn caption: warn over 3,000, error over 4,000, published posts are history", () => {

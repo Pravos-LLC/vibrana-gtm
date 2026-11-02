@@ -3,13 +3,12 @@ import { loadContent } from "../lib/content-overlay.mjs";
 // goes to Zernio in the best open slot. There is no second approval. A slot is the item's own planned date and
 // time when that is still ahead and free (no other piece that day); otherwise (a missed date, or the day already has a
 // piece) the next day the weekly rhythm gives its pillar (lib/rhythm.ts; the day map, off days and the pillars a channel
-// never takes are guide data), then a day that takes it as a fallback, never one that breaks the house rules, at the
+// never takes are guide data), then a day that takes it as a fallback, never one that would break a post, at the
 // channel's guide time (content/guide/channels.json). A leg on a channel that never takes its pillar is never scheduled.
 // Imported, not read from disk: inside the Next.js server bundle a file URL built from import.meta.url is not a
 // path readFileSync accepts ("Received an instance of URL"), so the after-approval auto-schedule pass threw in a
 // `next build` server before it read a single row.
 const season1 = loadContent("config/season1.json") as typeof import("../content/sample/config/season1.json");
-import publishingMetadata from "../config/publishing-metadata.json";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseCopy, zonedToUtc, type Calendar, type Item } from "./calendar";
 import { calendarFromDb, loadCalendarDb, PILLARS, rowToItem, updateItemDb, validateRow, type ContentRow } from "./calendar-db";
@@ -198,10 +197,9 @@ export function pieceFor(storyId: string, channel: string, assets: MaterialAsset
   const copies = assets.filter((a) => a.story_id === storyId && a.kind === "copy");
   const own = copies.filter((a) => rows.some((r) => r.asset_id === a.id && r.channel === channel));
   const metas = [...own, ...copies.filter((a) => !own.includes(a))].map((a) => parseCopy(a.body ?? "").meta);
-  // Classification is operational metadata: repairing it must not rewrite already-approved post text. The operator's
-  // real Stories are classified in the private traits file; the public config holds samples only.
-  const configured = (publishingMetadata as Record<string, { pillar: string }>)[storyId]?.pillar;
-  const pillar = [...metas.map((m) => m.pillar?.trim()), traitPillarOf(storyId), configured].find((x) => x && (PILLARS as readonly string[]).includes(x));
+  // Classification is operational metadata: repairing it must not rewrite already-approved post text, so a Story whose
+  // copy carries no pillar is classified in the private traits file.
+  const pillar = [...metas.map((m) => m.pillar?.trim()), traitPillarOf(storyId)].find((x) => x && (PILLARS as readonly string[]).includes(x));
   if (!pillar) return { error: `approved, but its text has no pillar: add "pillar" (${PILLARS.join(", ")}) for ${storyId} in the private guide's config/piece-traits.json (no restage, approval stays), or to the ${channel} copy front matter and restage it` };
   const named = story?.title?.includes(" | ") ? story.title.split(" | ").slice(1).join(" | ") : story?.title;
   const title = metas[0]?.title?.trim() || named?.trim() || storyId;
@@ -291,7 +289,8 @@ export function materializeItem(storyId: string, channel: string, assets: Materi
     id: `${storyId}-${channel}`, week: weekOfDate(piece.date), date: piece.date, time: channelTime(channel, format), pillar: piece.pillar, title: piece.title,
     format, channels: [channel], status: "drafted", link: null, cta: null, zernio_post_id: null, published_at: null, urls: {},
     story_id: storyId, story_assets: [copies[0].id, ...mine.filter((a) => a.kind !== "copy" && a.kind !== "link").map((a) => a.id)],
-    publication: null, body: copies[0].body ?? null, media, approved_hash: null, copy_path: copies[0].source,
+    // No copy of the text: until it is sent, the Story's approved copy is the text (sending records what went out).
+    publication: null, body: null, media, approved_hash: null, copy_path: copies[0].source,
   };
   const problems = validateRow(row);
   return problems.length ? { error: problems.join("; ") } : { row };
@@ -370,7 +369,7 @@ export function seasonEndFor(seasons: Season[], today: string): string | undefin
   return (sorted.find((s) => s.starts_on <= today && today <= s.ends_on) ?? sorted.find((s) => s.starts_on > today))?.ends_on;
 }
 /** The rules a moved piece must not break (pillar fit is the ranking; caption length is the send gate's job). */
-const PLACEMENT_RULES = new Set<Issue["rule"]>(["one-piece", "voiceover", "look-adjacent", "prism-cap", "topic", "channel-day"]);
+const PLACEMENT_RULES = new Set<Issue["rule"]>(["one-piece", "channel-day", "channel-pillar"]);
 const placementIssues = (posts: LintPost[], date: string) =>
   lintCalendar(posts.filter((p) => p.date >= addDays(date, -14) && p.date <= addDays(date, 21)), mondayOf(date), 2).flatMap((w) => w.issues).filter((i) => PLACEMENT_RULES.has(i.rule)).map((i) => `${i.rule}|${i.date}|${i.message}`);
 

@@ -186,6 +186,8 @@ async function record(
 }
 async function recordPost(db: SupabaseClient, d: PieceDelivery, p: ZPost) {
   const outcome = deliveryOutcome(d, p);
+  // No text is written to the calendar row here: a queued row is frozen (gtm_piece_calendar_freeze). Readers take the
+  // Story's copy for a sent row with no text (lib/row-text-db.ts).
   return record(
     db,
     d,

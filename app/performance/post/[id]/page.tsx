@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { TEXT_COLUMNS, withRowText } from "@/lib/row-text-db";
+import type { TextRow } from "@/lib/row-text";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ArrowUpRight } from "lucide-react";
 import { Section, Shell } from "@/components/shell";
@@ -42,7 +44,7 @@ export default async function PostDetail({ params, searchParams }: { params: Pro
   const snaps = all.filter((s) => s.platform === platform);
   const m = snaps.at(-1)!;
 
-  const { data: itemRows } = await db.from("gtm_content_items").select("id,title,pillar,format,urls,body,channels,published_at");
+  const { data: itemRows } = await db.from("gtm_content_items").select(`id,title,pillar,format,urls,channels,published_at,${TEXT_COLUMNS}`);
   const items = (itemRows ?? []) as Item[];
   const item = itemLookup(items)(m) as Item | undefined;
   const pillar = item ? PILLARS.find((p) => p.slug === item.pillar) : undefined;
@@ -123,7 +125,7 @@ export default async function PostDetail({ params, searchParams }: { params: Pro
     { label: "Link clicks", value: m.clicks ? num(m.clicks) : null, note: m.clicks ? undefined : "none reported" },
   ];
   const title = item?.title ?? ((m.content_preview ?? "").replace(/\s+/g, " ").slice(0, 80) || "Untitled post");
-  const copy = item?.body || m.content_preview;
+  const copy = (item ? (await withRowText(db, [item as Item & TextRow]))[0].body : null) || m.content_preview;
 
   return (
     <Shell title="Post" active="/performance" updated={m.captured_at}>

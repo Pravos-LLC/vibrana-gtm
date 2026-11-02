@@ -773,11 +773,14 @@ const commands: Record<string, () => Promise<void>> = {
       // Post text follows the asset: list carousels are checked against the slides.json they were rendered from.
       // Story copy lives in gtm_story_assets; the deck is found beside the local slide files when this machine has them.
       const storyIds = [...new Set(cal.items.map((i) => i.story_id).filter((s): s is string => !!s))];
+      const { rowText } = await import("../lib/row-text");
+      const copyAssets = new Map<string, { id: string; kind: string; body: string | null }>();
       if (storyIds.length) {
         const { adminDb, must } = await import("../lib/db");
         const { dirname, resolve } = await import("node:path");
         const base = dirname(calendarPath());
         const rows = must(await adminDb().from("gtm_story_assets").select("id,story_id,kind,source,body").in("story_id", storyIds), "story assets") as { id: string; story_id: string; kind: string; source: string; body: string | null }[];
+        for (const r of rows) if (r.kind === "copy") copyAssets.set(r.id, r);
         let unchecked = 0;
         for (const i of cal.items) {
           if (!i.story_id || ["published", "skipped"].includes(i.status) || !["carousel", "document"].includes(i.format)) continue;
@@ -796,13 +799,15 @@ const commands: Record<string, () => Promise<void>> = {
         if (unchecked) warnings.push(`${unchecked} carousel items not checked against their slides: the slide files are not on this machine`);
       }
       for (const i of cal.items) {
-        if (i.body) problems.push(...linkRules(cal, i, i.body));
+        // A Story row's text is its Story's copy until it is sent (lib/row-text.ts); the checks read that, not a stale row copy.
+        const text = i.story_id ? rowText({ ...i, body: i.body ?? null }, copyAssets) : i.body ?? null;
+        if (text) problems.push(...linkRules(cal, i, text));
         problems.push(...validateRow({ ...i, time: i.time ?? null } as never));
         for (const ch of i.channels) if (!cal.accounts[ch] && !cal.manual.includes(ch)) problems.push(`${i.id}: no account for ${ch}`);
         if (!i.story_id && !i.body?.trim() && i.status !== "idea" && i.format !== "ig_story") problems.push(`${i.id}: no body`);
-        if (i.body?.includes("\u2014")) problems.push(`${i.id}: em dash in copy`);
-        if (i.body) for (const n of findAgentNotes(i.body)) problems.push(`${i.id}: unresolved note in copy: ${n.slice(0, 60)}`);
-        if (i.body) { const b = findBritishSpellings(i.body); if (b.length) warnings.push(`${i.id}: British spelling (John is American): ${b.join(", ")}`); }
+        if (text?.includes("\u2014")) problems.push(`${i.id}: em dash in copy`);
+        if (text) for (const n of findAgentNotes(text)) problems.push(`${i.id}: unresolved note in copy: ${n.slice(0, 60)}`);
+        if (text) { const b = findBritishSpellings(text); if (b.length) warnings.push(`${i.id}: British spelling (John is American): ${b.join(", ")}`); }
         if (i.status === "approved" && !i.story_id && i.approved_hash !== contentHash({ body: i.body, media: i.media })) problems.push(`${i.id}: approved, but the content changed after approval`);
       }
       out({ source: "db", items: cal.items.length, problems, warnings }, () => {
@@ -1013,7 +1018,7 @@ const commands: Record<string, () => Promise<void>> = {
       });
     }
     if (rest[0] === "lint") {
-      // The weekly rhythm (John, 2026-10-17): each week against the house rules, plus the weekdays still empty.
+      // Each week checked for what would break a post, plus the posting days still empty.
       const { lintCalendar, gapsFor, dayLabels, isRealDate, parseWeeks, WEEKDAYS } = await import("../lib/rhythm");
       const { loadLintPosts } = await import("../lib/rhythm-db");
       const { addDays, mondayOf } = await import("../lib/week");
@@ -1040,7 +1045,7 @@ const commands: Record<string, () => Promise<void>> = {
         console.log(`Weekly rhythm: ${WEEKDAYS.map((d) => `${d} ${dayLabels(d).primary}`).join(" · ")}`);
         for (const w of reports) {
           const errors = w.issues.filter((i) => i.severity === "error").length;
-          console.log(`\nWeek of ${w.monday}: ${w.pieces} pieces · ${w.counts.talkingHeads} talking heads · ${w.counts.voiceoverReels} voiceover reels · ${w.counts.prism} Prism Light · ${w.issues.length ? `${w.issues.length} issues (${errors} errors)` : "clean"}`);
+          console.log(`\nWeek of ${w.monday}: ${w.pieces} pieces · ${w.issues.length ? `${w.issues.length} issues (${errors} errors)` : "clean"}`);
           for (const i of w.issues) console.log(`  ${i.severity === "error" ? "ERROR" : "warn "} ${i.rule.padEnd(13)} ${i.message}`);
           for (const g of gaps.filter((x) => x.date >= w.monday && x.date <= addDays(w.monday, 6))) console.log(`  gap   ${g.day} ${g.date}: wants ${g.wants}`);
         }
@@ -1753,11 +1758,10 @@ const help = `gtm <command> [--json]
                            send it again from the current approved text at its slot
   piece kill <story-id> [--dry-run] [--reason text]   John's "kill it": every calendar row of the piece skipped (off the
                            calendar and /content), unsent Zernio posts deleted, open notes resolved
-  calendar lint [--weeks 4] [--from date] [--json]   the weekly rhythm (the guide's day map: each day's pillar,
-                           fallbacks, channels and off days) against the house rules: one piece a day,
-                           channels on one day, 2 talking heads, at most 1 voiceover reel, no look twice in a row,
-                           topic spacing, LinkedIn caption length; plus the weekdays still empty. Run it before
-                           planning a week
+  calendar lint [--weeks 4] [--from date] [--json]   what would break a post, week by week: two pieces on one day,
+                           a channel on a day it does not post, a piece's legs on different days, a channel that
+                           never takes the pillar, a missing pillar, LinkedIn caption length; plus the posting days
+                           still empty
   reviewer invite --party "<who>" [--days N] [--accounts 1-5] [--note text]   a private review link for a third party (example_approver / Example Series):
                            makes up to two logins (the reviewer and a cofounder; opening it again changes nothing, they
                            return with their email and password); they see only their pieces' finals at /shared and

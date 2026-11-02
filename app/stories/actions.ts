@@ -93,13 +93,7 @@ export async function saveStoryCopy(input: { assetId: string; prose: string; fro
     .select("story_id, sha256, revision, source")
     .maybeSingle();
   if (error || !data) return { ok: false, error: error?.message ?? "This caption changed. Refresh and edit the latest version." };
-  // Calendar items that post this copy carry the same text; their approval resets via the DB trigger.
-  const { error: itemError } = await db.from("gtm_content_items")
-    .update({ body, updated_at: new Date().toISOString() })
-    .eq("story_id", data.story_id)
-    .eq("copy_path", data.source)
-    .contains("story_assets", [input.assetId]);
-  if (itemError) return { ok: false, error: `Saved the Story copy, but the calendar item did not update: ${itemError.message}` };
+  // No copy goes into calendar rows: an unsent row reads the Story's copy, a sent one keeps what went out (lib/row-text.ts).
   revalidatePath(`/stories/${data.story_id}`);
   revalidatePath("/calendar");
   return { ok: true, sha256: data.sha256, revision: data.revision };
@@ -181,13 +175,7 @@ export async function saveSeasonCopy(input: { assetId: string; prose: string; fi
     .eq("id", input.assetId).eq("kind", "copy").eq("revision", revision)
     .select("story_id, sha256, revision, source").maybeSingle();
   if (error || !data) return { ok: false, error: error?.message ?? "This text changed again as you saved. Try once more." };
-  // Calendar items that post this copy carry the same text; their approval resets via the DB trigger.
-  const { error: itemError } = await admin.from("gtm_content_items")
-    .update({ body, updated_at: new Date().toISOString() })
-    .eq("story_id", data.story_id)
-    .eq("copy_path", data.source)
-    .contains("story_assets", [input.assetId]);
-  if (itemError) return { ok: false, error: `Saved the text, but the calendar item did not update: ${itemError.message}` };
+  // No copy goes into calendar rows: an unsent row reads the Story's copy, a sent one keeps what went out (lib/row-text.ts).
   // Nothing is revalidated: the screen commits the result in the browser, and ANY revalidatePath in an action makes Next
   // re-render the page the click came from (/content, the whole board) before answering, which is what made Save and
   // Approve take many seconds. /calendar and /stories/<id> are force-dynamic, so they read fresh when opened.

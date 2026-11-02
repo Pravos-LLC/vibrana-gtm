@@ -103,7 +103,11 @@ export async function draftNew(db: SupabaseClient, opts: {
   const readErrors = new Set<string>();
   const pageCache = new Map<string, Promise<LinkedPage | null>>();
   const bodies = new Map<string, string>();
-  if (itemIds.length) for (const i of must(await db.from("gtm_content_items").select("id,body").in("id", itemIds), "post copy") as { id: string; body: string | null }[]) if (i.body) bodies.set(i.id, i.body);
+  if (itemIds.length) {
+    const { TEXT_COLUMNS, withRowText } = await import("../row-text-db");
+    const rows = must(await db.from("gtm_content_items").select(`id,${TEXT_COLUMNS}`).in("id", itemIds), "post copy") as { id: string; body: string | null; story_id: string | null; story_assets: string[] | null; status: string; zernio_post_id: string | null }[];
+    for (const i of await withRowText(db, rows)) if (i.body) bodies.set(i.id, i.body);
+  }
 
   for (const [key, targets] of groups) {
     const left = (opts.deadline ?? Infinity) - Date.now();

@@ -1,6 +1,6 @@
 import { loadContent } from "../lib/content-overlay.mjs";
 // The weekly rhythm: each posting day has a pillar, a day takes a piece from its primary pillar or, when none is ready,
-// from its fallback, and the house rules keep the week varied. A day with no primary is off: no gaps, no channels.
+// from its fallback; the lint checks only what would break a post. A day with no primary is off: no gaps, no channels.
 // Pure and client-safe: the calendar headers, the week's lint strip, `gtm calendar lint` and auto-schedule all read it.
 // The day map lives in content/guide/channels.json ("rhythm"), so the operator's rhythm is data, not code; looks and
 // topics per Story are in config/piece-traits.json.
@@ -117,13 +117,12 @@ export type LintPost = {
   storyId: string | null; title: string; caption?: string | null;
 };
 export type Severity = "error" | "warn";
-export type Rule = "one-piece" | "split" | "channel-day" | "pillar-fit" | "talking-heads" | "voiceover" | "look-adjacent" | "prism-cap" | "topic" | "caption" | "channel-pillar";
+export type Rule = "one-piece" | "split" | "channel-day" | "pillar-fit" | "caption" | "channel-pillar";
 export type Issue = { severity: Severity; rule: Rule; date: string; message: string; ids: string[] };
 /** One piece on one day: a Story's (or loose item's) legs that share a date. */
 export type DayPiece = { key: string; storyId: string | null; date: string; title: string; pillar: string | null; channels: string[]; looks: Look[]; topic: string | null; lanes: Lane[]; ids: string[]; published: boolean };
 export type WeekReport = {
   monday: string; pieces: number; issues: Issue[];
-  counts: { talkingHeads: number; voiceoverReels: number; prism: number };
 };
 
 const live = (p: LintPost) => p.status !== "skipped";
@@ -150,15 +149,11 @@ export function piecesByDay(posts: LintPost[]): DayPiece[] {
   return [...map.values()].sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
 }
 
-/** The look a piece shows on the grids that matter (LinkedIn and Instagram), or null when it is on neither. */
-const gridLooks = (piece: DayPiece, posts: LintPost[]) => {
-  const legs = posts.filter((p) => live(p) && piece.ids.includes(p.id) && p.channels.some((c) => c === "linkedin" || c === "instagram"));
-  return [...new Set(legs.map((p) => lookOf(p.storyId, p.format)))];
-};
-
 /**
- * Lints `weeks` Monday-to-Sunday weeks from `from` (any date; snapped to its Monday) against the house rules.
- * `posts` may reach past the range: the neighbours are what the topic and adjacent-look rules compare against.
+ * Lints `weeks` Monday-to-Sunday weeks from `from` (any date; snapped to its Monday) for what would break a post: two
+ * pieces on one day, a channel on a day it does not post, a piece's legs on different days, a channel that never takes the
+ * pillar, a missing pillar, a LinkedIn caption too long. Taste rules (looks, topics, talking-head counts) were dropped
+ * (John, 2026-11-02): the weekly report judges what works. `posts` may reach past the range for the split check.
  */
 export function lintCalendar(posts: LintPost[], from: string, weeks = 1): WeekReport[] {
   const pieces = piecesByDay(posts);
@@ -179,14 +174,8 @@ export function lintCalendar(posts: LintPost[], from: string, weeks = 1): WeekRe
       for (const p of today) {
         const off = p.channels.filter((c) => !channelAllowed(date, c) && ["linkedin", "instagram", "youtube"].includes(c));
         if (off.length && !p.published) add({ severity: "warn", rule: "channel-day", date, ids: p.ids, message: `${p.title}: ${off.join(", ")} does not post on ${weekdayOf(date)}` });
-        const noPillar = !p.pillar || !["perspective", "proof", "build", "lists"].includes(p.pillar);
-        if (!p.published && (fitRank(date, p.lanes) < 0 || noPillar) && rhythmDay(date).primary) {
-          const l = dayLabels(date);
-          const missing = !p.pillar || !["perspective", "proof", "build", "lists"].includes(p.pillar);
-          add({ severity: "warn", rule: "pillar-fit", date, ids: p.ids, message: missing
-            ? `${p.title} has ${p.pillar ? `an unknown pillar (${p.pillar})` : "no pillar"}; set one of perspective, proof, build, lists`
-            : `${short(date)} is ${l.primary}${l.fallback.length ? ` (fallback ${l.fallback.join(", ")})` : ""}; ${p.title} is ${p.lanes.map((x) => LANE_LABEL[x]).join("/")}` });
-        }
+        if (!p.published && (!p.pillar || !["perspective", "proof", "build", "lists"].includes(p.pillar)))
+          add({ severity: "warn", rule: "pillar-fit", date, ids: p.ids, message: `${p.title} has ${p.pillar ? `an unknown pillar (${p.pillar})` : "no pillar"}; set one of perspective, proof, build, lists` });
       }
       // A leg on a channel that never takes its pillar (the guide's rhythm.blocked).
       for (const p of today.filter((x) => !x.published)) {
@@ -206,32 +195,7 @@ export function lintCalendar(posts: LintPost[], from: string, weeks = 1): WeekRe
       }
     }
 
-    // 2. Two talking heads a week. 3. At most one voiceover reel. 4b. At most two Prism Light pieces.
-    const talkingHeads = inWeek.filter((p) => p.looks.includes("talking-head")).length;
-    const voiceoverReels = new Set(inWeek.filter((p) => p.looks.includes("voiceover")).map((p) => p.storyId ?? p.key)).size;
-    const prism = inWeek.filter((p) => gridLooks(p, posts).includes("prism")).length;
-    if (inWeek.length && (talkingHeads < 1 || talkingHeads > 3)) add({ severity: "warn", rule: "talking-heads", date: monday, ids: [], message: `${talkingHeads} talking heads this week; the rhythm wants 2 (Mon and Thu)` });
-    if (voiceoverReels > 1) add({ severity: "error", rule: "voiceover", date: monday, ids: inWeek.filter((p) => p.looks.includes("voiceover")).flatMap((p) => p.ids), message: `${voiceoverReels} voiceover reels this week; at most 1` });
-    if (prism > 2) add({ severity: "warn", rule: "prism-cap", date: monday, ids: [], message: `${prism} Prism Light pieces this week; at most 2` });
-
-    // 4a. No two days in a row with the same look on LinkedIn or Instagram (Sunday before the week counts).
-    for (let d = 0; d < 7; d++) {
-      const date = addDays(monday, d);
-      const prev = addDays(date, -1);
-      const look = (iso: string) => pieces.filter((p) => p.date === iso).flatMap((p) => gridLooks(p, posts));
-      const shared = look(date).filter((l) => look(prev).includes(l));
-      if (shared.length) add({ severity: "warn", rule: "look-adjacent", date, ids: pieces.filter((p) => p.date === date || p.date === prev).flatMap((p) => p.ids), message: `${short(prev)} and ${short(date)} both look like ${shared.map((l) => LOOK_LABEL[l]).join(", ")}` });
-    }
-
-    // 5. Same topic: at least one clear day between; Orion a week.
-    for (const p of inWeek) {
-      if (!p.topic) continue;
-      const gap = ["orion", "sample-featured-topic"].includes(p.topic) ? 7 : 2;
-      const near = pieces.filter((q) => q.topic === p.topic && q.storyId !== p.storyId && q.date < p.date && days(q.date, p.date) < gap);
-      for (const q of near) add({ severity: "warn", rule: "topic", date: p.date, ids: [...q.ids, ...p.ids], message: `${p.title} (${short(p.date)}) is ${days(q.date, p.date)} day${days(q.date, p.date) === 1 ? "" : "s"} after ${q.title}, same topic (${p.topic}); keep ${gap === 7 ? "a week" : "a clear day"} between` });
-    }
-
-    // 6. LinkedIn caption length.
+    // LinkedIn caption length.
     for (const p of posts.filter((x) => live(x) && x.date >= monday && x.date <= sunday && x.channels.includes("linkedin") && x.status !== "published" && x.caption)) {
       const n = p.caption!.length;
       if (n > 4000) add({ severity: "error", rule: "caption", date: p.date, ids: [p.id], message: `${p.title}: LinkedIn caption is ${n} characters; LinkedIn rejects over 4,000` });
@@ -239,7 +203,7 @@ export function lintCalendar(posts: LintPost[], from: string, weeks = 1): WeekRe
     }
 
     issues.sort((a, b) => a.date.localeCompare(b.date) || (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1));
-    reports.push({ monday, pieces: inWeek.length, issues, counts: { talkingHeads, voiceoverReels, prism } });
+    reports.push({ monday, pieces: inWeek.length, issues });
   }
   return reports;
 }
