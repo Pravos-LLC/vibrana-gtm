@@ -264,6 +264,71 @@ export async function setTextApprovalAll(input: { storyId: string; channels: str
   return { ok: true };
 }
 
+/**
+ * One approval for the piece, with the channels John ticks (John, 2026-11-02: "the approval should come with a number of
+ * channels I can select; if I select several, the same post text goes everywhere"). Everything is checked before anything
+ * changes (lib/piece-channels.ts planChannels, dropPieceChannel dry runs, the bytes John saw). Then an unticked channel is
+ * taken back, its unsent post removed and the channel unbound from the piece's files (it cannot come back by a later
+ * approval); a newly ticked channel gets the piece's one text and media bound; and the text and media are approved on
+ * every ticked channel. Auto-schedule runs once.
+ */
+export async function approvePieceChannels(input: { storyId: string; on: string[]; expected: Expected[] }): Promise<Result> {
+  const { db, owner } = await requireOwner();
+  if (!owner) return { ok: false, error: "Not signed in as the cockpit owner." };
+  const admin = adminDb();
+  const pc = await import("@/lib/piece-channels");
+  const { dropPieceChannel } = await import("@/lib/kill-piece");
+  try {
+    const state = await pc.loadPieceChannels(admin, input.storyId);
+    const plan = pc.planChannels(state, input.on);
+    if (plan.errors.length) return { ok: false, error: plan.errors.join(" ") };
+    // The bytes John looked at: any file that changed since the page loaded stops the approval.
+    // A text is checked by its revision (it moves on every save, and the screen knows it after an edit); media by bytes.
+    const same = (a: { kind: string; sha256: string; revision: number }, e: Expected) => a.revision === e.revision && (a.kind === "copy" || a.sha256 === e.sha256);
+    for (const e of input.expected) {
+      const a = state.assets.find((x) => x.id === e.asset_id);
+      if (!a || !same(a, e)) return { ok: false, error: "This piece changed. Refresh the page." };
+    }
+    for (const c of plan.off) await dropPieceChannel(admin, input.storyId, c, { dryRun: true });
+    const keep = plan.on.filter((c) => !plan.add.includes(c));
+    const adding = plan.add.map((c) => ({ channel: c, files: pc.filesFor(state, c, keep) }));
+    // Every file a ticked channel will post must be one John saw; approvals below use those exact bytes.
+    const seen = new Map(input.expected.map((e) => [e.asset_id, e]));
+    const posting = [...keep.flatMap((c) => pc.filesFor(state, c, [])), ...adding.flatMap((a) => a.files)];
+    if (posting.some((a) => !seen.has(a.id))) return { ok: false, error: "This piece changed. Refresh the page." };
+    for (const c of plan.off) {
+      for (const part of ["text", "asset"] as const) {
+        const r = await decidePart(db, input.storyId, c, part, false);
+        if (!r.ok && r.error !== "Nothing to review here.") return { ok: false, error: `${c}: ${r.error}` };
+      }
+      await dropPieceChannel(admin, input.storyId, c);
+      await pc.unbindChannel(admin, state, c);
+    }
+    for (const { channel, files } of adding) await pc.bindChannel(admin, files, channel);
+    await pc.recordChannelChoice(admin, input.storyId, plan);
+    const now = await pc.loadPieceChannels(admin, input.storyId);
+    for (const c of plan.on) {
+      // The bytes John saw, so a restage landing in between is refused by the database, never approved unseen.
+      const media = pc.filesFor(now, c, []).filter((a) => a.kind !== "copy").map((a) => ({ ...a, sha256: seen.get(a.id)?.sha256 ?? "", revision: seen.get(a.id)?.revision ?? -1, channels: [c] }));
+      if (media.length) {
+        const r = await decideRows(db, media, c, "approved", "");
+        if (!r.ok) return { ok: false, error: `${c} media: ${r.error}` };
+      }
+      // The text approved is the text John saw: a change that landed since is refused, never approved unseen.
+      const copy = pc.filesFor(now, c, []).find((a) => a.kind === "copy");
+      const saw = copy && seen.get(copy.id);
+      if (!copy || !saw || !same(copy, saw)) return { ok: false, error: "The text changed while approving. Refresh the page." };
+      const t = await decidePart(db, input.storyId, c, "text", true);
+      if (!t.ok) return { ok: false, error: `${c}: ${t.error}` };
+    }
+    scheduleApproved(input.storyId);
+    revalidatePath("/calendar");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Season screen: "Request changes". Marks the part needs-changes on this platform AND records the note, so an agent reworks it. */
 /** John's change request supersedes an open "approve with note" on the same part (lib/approve-note-db.ts). */
 async function supersede(storyId: string, assetIds: string[], channels: string[], note: string): Promise<Result> {

@@ -83,3 +83,42 @@ export async function killPiece(db: SupabaseClient, storyId: string, opts: { rea
   must(await db.from("gtm_sync_state").upsert({ key: KILLED_KEY, value: { ...(state?.value ?? {}), [storyId]: { at: new Date().toISOString(), reason: opts.reason ?? "Killed" } }, updated_at: new Date().toISOString() }), "record the kill");
   return out;
 }
+
+/**
+ * Take one channel off a piece (John, 2026-11-02: approval picks the channels): its unsent calendar rows are skipped and
+ * any Zernio post that has not gone out is deleted, exactly like a kill but for one channel. A leg that already went out
+ * is left alone and reported. Refuses while a send is in flight or a shared delivery holds the row.
+ */
+export async function dropPieceChannel(db: SupabaseClient, storyId: string, channel: string, opts: { dryRun?: boolean } = {}): Promise<{ skipped: string[]; deleted: Record<string, string>; published: string[] }> {
+  if (must(await db.from("gtm_piece_reviews").select("story_id").eq("story_id", storyId).maybeSingle(), "shared review check"))
+    throw new Error(`${storyId} uses shared review: change its channels on its shared card`);
+  const rows = (must(await db.from("gtm_content_items").select("id,status,zernio_post_id,channels").eq("story_id", storyId), `rows of ${storyId}`) as (Row & { channels: string[] | null })[])
+    .filter((r) => (r.channels ?? []).includes(channel));
+  const out = { skipped: [] as string[], deleted: {} as Record<string, string>, published: rows.filter((r) => r.status === "published").map((r) => r.id) };
+  const live = rows.filter((r) => r.status !== "published" && r.status !== "skipped");
+  if (live.some((r) => r.zernio_post_id === "pending")) throw new Error(`${channel}: a send is in flight; wait for it, then try again`);
+  if (live.length && must(await db.from("gtm_piece_deliveries").select("id").in("calendar_id", live.map((r) => r.id)).limit(1), "shared delivery check")?.length)
+    throw new Error(`${channel}: this channel has a shared delivery; release it on the piece first`);
+  // Check every linked post first, so a channel that already went out is never half-dropped.
+  const gone = new Set<string>();
+  for (const r of live.filter((x) => x.zernio_post_id)) {
+    try {
+      const post = await getPost(r.zernio_post_id!);
+      if (OUT.includes(post.status)) throw new Error(`${r.id} already went out on Zernio (${r.zernio_post_id}, ${post.status}); run gtm calendar reconcile`);
+    } catch (e) {
+      if (e instanceof ZernioError && e.status === 404) { gone.add(r.id); continue; }
+      throw e;
+    }
+  }
+  if (opts.dryRun) return { ...out, skipped: live.map((r) => r.id) };
+  for (const r of live) {
+    if (r.zernio_post_id && !gone.has(r.id)) {
+      try { await zernio(`/posts/${r.zernio_post_id}`, { method: "DELETE" }); }
+      catch (e) { if (!(e instanceof ZernioError && e.status === 404)) throw e; }
+      out.deleted[r.id] = r.zernio_post_id;
+    }
+    must(await db.from("gtm_content_items").update({ status: "skipped", zernio_post_id: null, updated_at: new Date().toISOString() }).eq("id", r.id), `skip ${r.id}`);
+    out.skipped.push(r.id);
+  }
+  return out;
+}

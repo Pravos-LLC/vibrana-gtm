@@ -9,7 +9,7 @@ Object.assign(process.env, {
   ZERNIO_API_URL: "https://zernio.test/api/v1", ZERNIO_API_KEY: "zk_test",
 });
 const { adminDb } = await import("../lib/db.ts");
-const { killPiece } = await import("../lib/kill-piece.ts");
+const { dropPieceChannel, killPiece } = await import("../lib/kill-piece.ts");
 const { eventReason, failureReason, retryCalendarItem, retryKey } = await import("../lib/retry-item.ts");
 const { contentHash } = await import("../lib/calendar-db.ts");
 const { channelClashes, ClashError, movePiece, moveRefusal, planPieceMove, siblingLegs } = await import("../lib/move-piece.ts");
@@ -56,6 +56,33 @@ test("killPiece: unsent legs go to skipped, their Zernio posts are deleted, publ
   const notes = m.calls.find((c) => c.url.includes("gtm_story_feedback"))!;
   assert.equal(new URL(notes.url).searchParams.get("resolved_at"), "is.null");
   assert.match(json(notes.body).resolution, /Killed/);
+});
+
+test("dropPieceChannel: only that channel's unsent leg is skipped and its Zernio post deleted", async () => {
+  const m = use([
+    { method: "GET", url: REST + "gtm_content_items", json: [
+      { id: "p-linkedin", status: "scheduled", zernio_post_id: "z1", channels: ["linkedin"] },
+      { id: "p-instagram", status: "scheduled", zernio_post_id: "z2", channels: ["instagram"] },
+    ] },
+    { method: "GET", url: `${Z}/posts/z2`, json: { post: { _id: "z2", status: "scheduled", platforms: [] } } },
+    { method: "DELETE", url: `${Z}/posts/z2`, json: {} },
+    { method: "PATCH", url: REST + "gtm_content_items", status: 204 },
+  ]);
+  const r = await dropPieceChannel(adminDb(), "p", "instagram");
+  assert.deepEqual(r, { skipped: ["p-instagram"], deleted: { "p-instagram": "z2" }, published: [] });
+  assert.ok(!m.calls.some((c) => c.url.includes("z1")), "the LinkedIn leg is untouched");
+  const patch = m.calls.find((c) => c.method === "PATCH")!;
+  assert.equal(new URL(patch.url).searchParams.get("id"), "eq.p-instagram");
+  assert.deepEqual([json(patch.body).status, json(patch.body).zernio_post_id], ["skipped", null]);
+});
+
+test("dropPieceChannel refuses, changing nothing, when that channel already went out", async () => {
+  const m = use([
+    { method: "GET", url: REST + "gtm_content_items", json: [{ id: "p-instagram", status: "scheduled", zernio_post_id: "z2", channels: ["instagram"] }] },
+    { method: "GET", url: `${Z}/posts/z2`, json: { post: { _id: "z2", status: "published", platforms: [] } } },
+  ]);
+  await assert.rejects(dropPieceChannel(adminDb(), "p", "instagram"), /already went out on Zernio/);
+  assert.ok(!m.calls.some((c) => c.method === "DELETE" || c.method === "PATCH"));
 });
 
 test("killPiece refuses, changing nothing, when Zernio says a linked post already went out", async () => {

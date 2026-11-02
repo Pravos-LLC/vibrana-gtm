@@ -25,6 +25,7 @@ export function FixtureBoard({ fixture, season, params, latency, analysis }: { f
   const actions: ReviewActions = {
     setPartApproval: () => wait({ ok: true as const }),
     setTextApprovalAll: () => wait({ ok: true as const }),
+    approvePieceChannels: () => wait({ ok: true as const }),
     setMediaApproval: () => wait({ ok: true as const }),
     approveTextWithNote: ({ note }) => (note.includes("FAIL") ? wait({ ok: false as const, error: "The database said no." }) : wait({ ok: true as const })),
     requestTextChangesAll: ({ note }) => (note.includes("FAIL") ? wait({ ok: false as const, error: "The database said no." }) : wait({ ok: true as const })),
