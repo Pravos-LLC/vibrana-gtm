@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
 import { ANSWERED, replyCommentId, type CommentRow, type StoredComment } from "./parse";
 
-export const COMMENT_COLUMNS = "id,kind,source,platform,account_id,zernio_post_id,platform_post_id,content_item_id,external_id,parent_external_id,conversation_id,author_id,author_username,author_name,author_picture,text,post_preview,permalink,comment_url,is_own,commented_at,received_at,status,classification,draft,draft_reason,final_text,edited,reply_external_id,sent_at,note,error,stance,objection,author_crm,author_verified,author_followers,author_headline,author_company,author_website,author_profile_url,author_enriched_at,reclassified_from,lesson_set,linked,attachments";
+export const COMMENT_COLUMNS = "id,kind,source,platform,account_id,zernio_post_id,platform_post_id,content_item_id,external_id,parent_external_id,conversation_id,author_id,author_username,author_name,author_picture,text,post_preview,permalink,comment_url,is_own,commented_at,received_at,status,classification,draft,draft_reason,final_text,edited,reply_external_id,sent_at,note,error,stance,objection,author_crm,author_verified,author_followers,author_headline,author_company,author_website,author_profile_url,author_enriched_at,reclassified_from,lesson_set,linked,attachments,updated_at";
 
 /** Joins rows to the calendar item they comment on: by Zernio post id, else by the post's permalink. */
 async function withContentItems(db: SupabaseClient, rows: CommentRow[]) {

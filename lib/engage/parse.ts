@@ -37,7 +37,7 @@ export type StoredComment = CommentRow & {
   id: string; content_item_id: string | null; received_at: string; classification: Classification | null;
   draft: string | null; draft_reason: string | null; final_text: string | null; edited: boolean;
   reply_external_id: string | null; sent_at: string | null; error: string | null;
-  stance?: Stance | null; objection?: string | null; author_crm?: CrmMatch | null;
+  updated_at?: string; stance?: Stance | null; objection?: string | null; author_crm?: CrmMatch | null;
   author_headline?: string | null; author_company?: string | null; author_website?: string | null; author_profile_url?: string | null;
   author_enriched_at?: string | null; reclassified_from?: Classification | null; lesson_set?: string | null;
   /** What the comment linked to, summarized by the drafting run (lib/engage/links.ts). */
