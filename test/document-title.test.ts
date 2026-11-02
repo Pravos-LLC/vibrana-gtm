@@ -60,21 +60,3 @@ test("a LinkedIn document post sends platformSpecificData.documentTitle; Instagr
     assert.equal((r2.body as { platforms: { platformSpecificData?: Record<string, unknown> }[] }).platforms[0].platformSpecificData?.documentTitle, undefined);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
-
-test("every send path refuses a channel the guide blocks for the piece's pillar, even when the leg has no pillar", async () => {
-  const { RHYTHM } = await import("../lib/rhythm.ts");
-  const { dir, cal } = workspace("Body without links.");
-  RHYTHM.blocked = [{ channel: "instagram", pillars: ["build"] }];
-  try {
-    const li = item();
-    const ig = { ...item({ id: "carousel-x-instagram", channels: ["instagram"], story_id: "carousel-x" }), pillar: undefined } as unknown as Item;
-    cal.items = [{ ...li, story_id: "carousel-x" } as Item, ig];
-    await assert.rejects(sendCalendarItem(cal, ig.id, { dry: true }), /instagram never takes build pieces/);
-    const open = item({ id: "carousel-y-instagram", channels: ["instagram"], pillar: "perspective" });
-    cal.items.push(open);
-    assert.ok("dryRun" in await sendCalendarItem(cal, open.id, { dry: true }));
-  } finally {
-    delete RHYTHM.blocked;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});

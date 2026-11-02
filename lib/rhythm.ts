@@ -184,8 +184,8 @@ export function lintCalendar(posts: LintPost[], from: string, weeks = 1): WeekRe
       }
       // A leg on a channel that never takes its pillar (the guide's rhythm.blocked).
       for (const p of today.filter((x) => !x.published)) {
-        const off = posts.filter((x) => live(x) && p.ids.includes(x.id) && x.status !== "published" && x.channels.some((c) => !pillarAllowed(x.pillar ?? p.pillar, c)));
-        if (off.length) add({ severity: "error", rule: "channel-pillar", date, ids: off.map((x) => x.id), message: `${p.title}: ${[...new Set(off.flatMap((x) => x.channels.filter((c) => !pillarAllowed(x.pillar ?? p.pillar, c))))].join(", ")} never takes ${p.pillar ? LANE_LABEL[p.pillar as Lane] ?? p.pillar : "this pillar"}; skip that leg` });
+        const off = posts.filter((x) => live(x) && p.ids.includes(x.id) && x.status !== "published" && x.channels.some((c) => !pillarAllowed(x.pillar || p.pillar, c)));
+        if (off.length) add({ severity: "error", rule: "channel-pillar", date, ids: off.map((x) => x.id), message: `${p.title}: ${[...new Set(off.flatMap((x) => x.channels.filter((c) => !pillarAllowed(x.pillar || p.pillar, c))))].join(", ")} never takes ${p.pillar ? LANE_LABEL[p.pillar as Lane] ?? p.pillar : "this pillar"}; skip that leg` });
       }
     }
     const storiesHere = [...new Set(inWeek.map((p) => p.storyId).filter((s): s is string => !!s))];

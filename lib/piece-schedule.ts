@@ -7,6 +7,7 @@ import {
   sendPieceDelivery,
   reconcilePieceDeliveries,
   releaseUnsentDelivery,
+  CHANNEL_BLOCKED,
   PIECE_CHANGED,
 } from "./piece-delivery";
 import { readPages } from "./db-read";
@@ -83,6 +84,11 @@ export async function scheduleSharedPieces(
           } catch (e) {
             // John changed or replaced the piece while this reservation waited (a hold, a pause): release it; below,
             // the current approved versions are prepared again, or the piece's blocker is reported.
+            if (e instanceof Error && CHANNEL_BLOCKED.test(e.message)) {
+              await releaseUnsentDelivery(db, d.id);
+              result.skipped.push({ id: d.calendar_id, reason: e.message });
+              continue;
+            }
             if (!(e instanceof Error && PIECE_CHANGED.test(e.message))) throw e;
             await releaseUnsentDelivery(db, d.id);
             result.skipped.push({ id: d.calendar_id, reason: `${d.channel}: the piece changed after this slot was reserved; released it to prepare the approved version again` });

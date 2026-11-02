@@ -8,6 +8,7 @@ import { digest } from "./story";
 import { BUCKET } from "./review";
 import { buildPost, sendLarge, peopleFor, seasonsFor } from "./publish-item";
 import { utmCampaign } from "./utm";
+import { pillarAllowed } from "./rhythm";
 import {
   uploadMedia,
   createPost,
@@ -343,6 +344,17 @@ async function approvedReelCover(db: SupabaseClient, storyId: string, videoId: s
 const slotExpired = (d: Pick<PieceDelivery, "slot_date" | "slot_time" | "timezone">, zonedToUtc: (date: string, time: string, tz: string) => Date) =>
   zonedToUtc(d.slot_date, d.slot_time.slice(0, 5), d.timezone).getTime() < Date.now() + 30 * 60_000;
 
+/** The pillar a delivery's piece carries: its calendar row's, else any sibling leg's (a leg may have none). */
+export function deliveryPillar(cal: Calendar, d: Pick<PieceDelivery, "calendar_id" | "story_id">): string | null {
+  return cal.items.find((i) => i.id === d.calendar_id)?.pillar || cal.items.find((i) => i.story_id === d.story_id && i.pillar)?.pillar || null;
+}
+/** Refused before any claim: the guide's weekly rhythm never sends this pillar to this channel (rhythm.blocked). */
+export const CHANNEL_BLOCKED = /never takes .* pieces \(the guide's weekly rhythm\)/;
+export function assertChannelTakesPiece(cal: Calendar, d: Pick<PieceDelivery, "calendar_id" | "story_id" | "channel">) {
+  const pillar = deliveryPillar(cal, d);
+  if (!pillarAllowed(pillar, d.channel)) throw new Error(`${d.channel} never takes ${pillar} pieces (the guide's weekly rhythm); release this delivery and skip the leg`);
+}
+
 /** Upload work can be reclaimed; a committed outbound attempt is never blindly re-created. */
 export async function sendPieceDelivery(
   db: SupabaseClient,
@@ -351,6 +363,9 @@ export async function sendPieceDelivery(
   options: { retry?: boolean; provider?: Partial<Provider> } = {},
 ): Promise<PieceDelivery | null> {
   const p = { ...provider, ...options.provider };
+  // Every send and retry of a shared piece passes here, including reservations made before a block was added.
+  const row = must(await db.from("gtm_piece_deliveries").select("calendar_id,story_id,channel").eq("id", id).maybeSingle(), "delivery channel") as Pick<PieceDelivery, "calendar_id" | "story_id" | "channel"> | null;
+  if (row) assertChannelTakesPiece(cal, row);
   let d = must(
     await db.rpc("gtm_claim_piece_delivery", {
       p_id: id,
