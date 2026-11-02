@@ -9,7 +9,9 @@ import { ReviewProvider, type ReviewActions } from "@/components/review/review-s
 import { buildGroups, dateRange, filterPieces, parseFilters, pieceParts } from "@/lib/season-review";
 import type { Fixture } from "./fixture-data";
 import { REVIEW_CHANNELS, type ReviewChannel } from "@/lib/season";
-import { SeasonPanel } from "@/components/review/season-panel";
+import { SeasonDetails } from "@/components/review/season-panel";
+import { ContentDetail } from "@/components/review/content-details";
+import { ReviewLinks, type ReviewLinkRow } from "@/components/review/review-links";
 import type { SeasonAnalysis, SeasonRecord } from "@/lib/season-analysis";
 
 type FixtureSeason = { record: SeasonRecord; analysis: SeasonAnalysis; pillarOptions: { slug: string; name: string }[] };
@@ -50,8 +52,22 @@ export function FixtureBoard({ fixture, season, params, latency }: { fixture: Fi
     <ReviewProvider key={JSON.stringify(filters)} initial={initial} summary={summary} stages={stages} actions={actions}>
       <div className="space-y-5">
         <OverviewStrip range={dateRange(pieces.map((p) => p.date))} analysis={
-          <SeasonPanel season={season.record} analysis={season.analysis} pillarOptions={season.pillarOptions} path="/dev-fixtures/content"
+          <SeasonDetails season={season.record} analysis={season.analysis} pillarOptions={season.pillarOptions} path="/dev-fixtures/content"
             save={(input) => wait(input.title.includes("FAIL") ? { ok: false as const, error: "The database said no." } : { ok: true as const })} />
+        } externalReview={
+          <ContentDetail name="external" label="External review (3)">
+            <ReviewLinks embedded parties={[
+              { party: "Example partner with a long organization name for layout checks", pieces: ["Example final"] },
+              { party: "Awaiting partner", pieces: ["Example final"] },
+              { party: "New partner", pieces: [] },
+            ]} links={[
+              { id: "claimed", party: "Example partner with a long organization name for layout checks", state: "claimed", claimedEmail: "partner@example.com" },
+              { id: "open", party: "Awaiting partner", state: "open", claimedEmail: null },
+              { id: "expired", party: "New partner", state: "expired", claimedEmail: null },
+              { id: "revoked", party: "New partner", state: "revoked", claimedEmail: null },
+            ].map((l) => ({ ...l, expiresAt: "2099-01-01T00:00:00Z", createdAt: "2026-10-01T00:00:00Z" }) as ReviewLinkRow)}
+              share={actions.shareForReview} revoke={() => wait({ ok: false as const, error: "Fixture revoke failed." })} />
+          </ContentDetail>
         } />
         <ContentToolbar path="/dev-fixtures/content" filters={filters} pieces={pieces.map((p) => ({ id: p.storyId, label: p.name }))} pillars={["build", "perspective"]} shown={shown} total={summary.length} {...seriesOptions(pieces)} />
         <SeriesSection all={pieces} filters={filters} path="/dev-fixtures/content" />

@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { PieceList } from "@/components/review/season-piece";
 import { ReviewProvider } from "@/components/review/review-store";
 import { OverviewStrip } from "@/components/review/overview-strip";
+import { ContentDetail, SeasonDetailsStatus } from "@/components/review/content-details";
 import { ContentToolbar } from "@/components/review/content-toolbar";
 import { SeriesSection } from "@/components/review/series-section";
 import { seriesOptions } from "@/lib/season-review";
@@ -17,7 +18,7 @@ import Link from "next/link";
 import { unstable_rethrow } from "next/navigation";
 import { sessionDb } from "@/lib/supabase/server";
 import { REVIEW_CHANNELS } from "@/lib/season";
-import { SeasonPanel } from "@/components/review/season-panel";
+import { SeasonDetails } from "@/components/review/season-panel";
 import { loadSeason } from "@/lib/seasons";
 import { PILLARS } from "@/lib/guide/content";
 import { updateSeason } from "@/app/season-actions";
@@ -71,7 +72,7 @@ async function ContentReviewBody({ searchParams }: { searchParams: Promise<Recor
   const seasonIds = stories.map((s) => (s as { season_id?: string | null }).season_id).filter((x): x is string => !!x);
   const seasonId = seasonIds.sort((a, b) => seasonIds.filter((x) => x === b).length - seasonIds.filter((x) => x === a).length)[0];
   const analysis = seasonId && !filters.piece
-    ? <Suspense fallback={<p role="status" className="text-xs text-ink-3">Loading season analysis…</p>}><SeasonAnalysisPanel seasonId={seasonId} /></Suspense>
+    ? <Suspense fallback={<SeasonDetailsStatus state="loading" />}><SeasonAnalysisPanel seasonId={seasonId} /></Suspense>
     : null;
   const pillars = [...new Set(all.map((p) => p.pillar).filter((x): x is string => !!x))].sort();
   // Third parties named on any piece, and their review links (owner-readable through RLS).
@@ -92,26 +93,33 @@ async function ContentReviewBody({ searchParams }: { searchParams: Promise<Recor
   sharedProblem ??= sharedResult.problem;
   return (
     <Shell title="Content review" active="/content" wide>
-      <p className="mb-5 text-sm">{sharedSection?.delivery.ok && <><Link href="/content/shared" className="underline">Choose shared assets for video pieces</Link> · </>}<Link href="/content/delivery" className="underline">Delivery report</Link></p>
+      <nav aria-label="Content tools" className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-ink-2">
+        {work && (
+          <Link href="/work" data-testid="work-strip" className="flex flex-wrap items-center gap-2 hover:text-ink">
+            <span className={`size-2 rounded-full ${work.waiting ? "bg-amber-strong" : work.inProgress ? "bg-violet" : "bg-line"}`} aria-hidden />
+            <span>{contentStrip(work.inProgress, work.waiting)}</span>
+            <span className="underline underline-offset-4">Work board</span>
+          </Link>
+        )}
+        <Link href="/content/delivery" className="underline underline-offset-4">Delivery report</Link>
+        {sharedSection?.delivery.ok && <Link href="/content/shared" className="underline underline-offset-4">Choose shared assets</Link>}
+      </nav>
       {released && <ReleasedNotice released={released} />}
-      {sharedProblem
-        ? <p role="alert" className="mb-5 text-sm text-red-strong" data-testid="shared-unavailable">Shared pieces could not be loaded ({sharedProblem}). Pieces below are unaffected; refresh to retry.</p>
-        : sharedSection?.node}
+      {sharedProblem && <p role="alert" className="mb-4 text-sm text-red-strong" data-testid="shared-unavailable">Shared pieces could not be loaded ({sharedProblem}). Pieces below are unaffected; refresh to retry.</p>}
       {/* Keyed on the query so a new filter starts from fresh server data. */}
       <ReviewProvider key={filtersToQuery(filters)} initial={initial} summary={summary} stages={stages}>
         <div className="space-y-5">
-          {work && (
-            <Link href="/work" data-testid="work-strip" className="flex items-center gap-2 text-sm text-ink-2 hover:text-ink">
-              <span className={`size-2 rounded-full ${work.waiting ? "bg-amber-strong" : work.inProgress ? "bg-violet" : "bg-line"}`} aria-hidden />
-              <span>{contentStrip(work.inProgress, work.waiting)}</span>
-              <span className="text-ink-3 underline underline-offset-4">Work board</span>
-            </Link>
-          )}
-          {/* On a one-piece link only that piece is read, so the numbers describe it, without the season analysis. */}
-          <OverviewStrip range={dateRange(all.map((p) => p.date))} analysis={analysis} />
-          {parties.length > 0 && <ReviewLinks parties={parties.map((party) => ({ party, pieces: all.filter((p) => p.pipeline?.thirdParty?.who?.trim() === party && p.pipeline.final.staged).map((p) => p.name) }))} links={links} share={shareForReview} revoke={revokeReviewLink} />}
+          {/* One-piece links retain their scoped numbers and omit season analysis. */}
+          <OverviewStrip range={dateRange(all.map((p) => p.date))} analysis={analysis} externalReview={
+            <ContentDetail name="external" label={`External review (${parties.length})`}>
+              {parties.length > 0
+                ? <ReviewLinks embedded parties={parties.map((party) => ({ party, pieces: all.filter((p) => p.pipeline?.thirdParty?.who?.trim() === party && p.pipeline.final.staged).map((p) => p.name) }))} links={links} share={shareForReview} revoke={revokeReviewLink} />
+                : <p className="text-sm text-ink-2">No external reviews awaiting approval.</p>}
+            </ContentDetail>
+          } />
           <ContentToolbar path="/content" filters={filters} pieces={pieceOptions} pillars={pillars}
             shown={shownCards + (sharedSection?.shown ?? 0)} total={summary.length + (sharedSection?.total ?? 0)} {...seriesOptions(all)} />
+          {sharedSection?.node}
           <SeriesSection all={directed} filters={filters} path="/content" />
           <PeopleProvider people={people} add={addPerson}><PieceList pieces={visible} focus={filters.focus} status={filters.status} platform={filters.platform} open={openChannel} /></PeopleProvider>
           {linkedHidden && (
@@ -147,9 +155,9 @@ export default async function ContentReviewPage(props: { searchParams: Promise<R
 async function SeasonAnalysisPanel({ seasonId }: { seasonId: string }) {
   try {
     const { input, analysis } = await loadSeason(await sessionDb(), seasonId, todayIn());
-    return <SeasonPanel season={input.season} analysis={analysis} pillarOptions={PILLARS.map((p) => ({ slug: p.slug, name: p.name }))} save={updateSeason} />;
+    return <SeasonDetails season={input.season} analysis={analysis} pillarOptions={PILLARS.map((p) => ({ slug: p.slug, name: p.name }))} save={updateSeason} />;
   } catch (error) {
     unstable_rethrow(error);
-    return <p className="text-xs text-red-strong">Could not load the season analysis. Refresh to retry.</p>;
+    return <SeasonDetailsStatus state="unavailable" />;
   }
 }

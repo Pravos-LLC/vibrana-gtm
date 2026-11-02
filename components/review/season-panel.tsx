@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Check, SeasonAnalysis, SeasonRecord, WeekCadence } from "@/lib/season-analysis";
+import { ContentDetail } from "./content-details";
 import { findingHref } from "@/lib/finding-link";
 
 export type SeasonSave = (input: { id: string; title: string; description: string; startsOn: string; endsOn: string; pillars: string[] }) => Promise<{ ok: true } | { ok: false; error: string }>;
@@ -71,33 +72,42 @@ const sevTone: Record<Check["severity"], string> = { block: "bg-red-strong/10 te
 
 function FindingRow({ c, path }: { c: Check; path?: string }) {
   const href = findingHref(c, path);
-  const badge = <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${sevTone[c.severity]}`}>{c.status === "review" ? "review" : c.severity}</span>;
+  const badge = <span className={`self-start shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${sevTone[c.severity]}`}>{c.status === "review" ? "review" : c.severity}</span>;
   return (
-    <li className="text-xs leading-snug">
+    <li className="text-sm leading-relaxed [overflow-wrap:anywhere]">
       {href
-        ? <a href={href} className="group flex gap-2 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{badge}<span className="text-ink-2 underline-offset-2 group-hover:text-ink group-hover:underline">{c.message}</span></a>
+        ? <a href={href} className="group flex items-start gap-2 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{badge}<span className="text-ink-2 underline-offset-2 group-hover:text-ink group-hover:underline">{c.message}</span></a>
         : <span className="flex gap-2">{badge}<span className="text-ink-2">{c.message}</span></span>}
     </li>
   );
 }
 
-function Findings({ a, path }: { a: SeasonAnalysis; path?: string }) {
+export function Findings({ a, path }: { a: SeasonAnalysis; path?: string }) {
   const order = { block: 0, warn: 1, info: 2 };
   const checks = [...a.checks].sort((x, y) => order[x.severity] - order[y.severity]);
-  const first = checks.filter((c) => c.severity !== "info").slice(0, 4);
   return (
     <div className="min-w-0">
-      <h3 className="text-xs font-medium uppercase tracking-wide text-ink-3">
-        Findings: {a.summary.block} block, {a.summary.warn} warn, {a.summary.info} info
-      </h3>
-      <ul className="mt-3 space-y-1.5">{first.map((c, i) => <FindingRow key={i} c={c} path={path} />)}</ul>
-      {checks.length > first.length && (
-        <details className="mt-2">
-          <summary className="cursor-pointer text-xs text-violet-strong">All {checks.length} findings</summary>
-          <ul className="mt-2 max-h-72 space-y-1.5 overflow-auto pr-1">{checks.map((c, i) => <FindingRow key={i} c={c} path={path} />)}</ul>
-        </details>
-      )}
+      <h2 className="text-base font-semibold text-ink">Findings</h2>
+      <p className="mt-1 text-xs text-ink-2">
+        Blockers: {a.summary.block} · Warnings: {a.summary.warn} · Information: {a.summary.info}
+      </p>
+      {checks.length
+        ? <ul className="mt-3 divide-y divide-line space-y-3 [&>li+li]:pt-3">{checks.map((c, i) => <FindingRow key={`${c.id}-${i}`} c={c} path={path} />)}</ul>
+        : <p className="mt-3 text-sm text-ink-2">No findings for this season.</p>}
     </div>
+  );
+}
+
+/** Separate full-width disclosures for charts/editor and diagnostics. */
+export function SeasonDetails(props: Parameters<typeof SeasonPanel>[0] & { path?: string }) {
+  return (
+    <>
+      <ContentDetail name="season" label="Season analysis"><SeasonPanel {...props} /></ContentDetail>
+      <ContentDetail name="findings" label={`Findings (${props.analysis.checks.length})`}>
+        <Findings a={props.analysis} path={props.path} />
+      </ContentDetail>
+      {props.analysis.summary.block > 0 && <span className="order-first text-xs font-medium text-red-strong" role="status">{props.analysis.summary.block} {props.analysis.summary.block === 1 ? "blocker" : "blockers"}</span>}
+    </>
   );
 }
 
@@ -146,8 +156,8 @@ function SeasonForm({ season, pillarOptions, save, onDone }: { season: SeasonRec
   );
 }
 
-/** The season under the overview numbers: what it is, its weekly cadence, pillar mix and the analysis findings, with an editor. */
-export function SeasonPanel({ season, analysis, pillarOptions, save, path }: { season: SeasonRecord; analysis: SeasonAnalysis; pillarOptions: { slug: string; name: string }[]; save: SeasonSave; path?: string }) {
+/** Season dates, cadence and pillar mix with the existing editor. */
+export function SeasonPanel({ season, analysis, pillarOptions, save }: { season: SeasonRecord; analysis: SeasonAnalysis; pillarOptions: { slug: string; name: string }[]; save: SeasonSave }) {
   const [editing, setEditing] = useState(false);
   const names = new Map(pillarOptions.map((p) => [p.slug, p.name]));
   const week = analysis.dateRange.currentWeek;
@@ -167,10 +177,9 @@ export function SeasonPanel({ season, analysis, pillarOptions, save, path }: { s
       {editing
         ? <SeasonForm season={season} pillarOptions={pillarOptions} save={save} onDone={() => setEditing(false)} />
         : (
-          <div className="mt-4 grid gap-6 md:grid-cols-3">
+          <div className="mt-4 grid gap-6 md:grid-cols-2">
             <Cadence a={analysis} />
             <Pillars a={analysis} />
-            <Findings a={analysis} path={path} />
           </div>
         )}
     </div>
