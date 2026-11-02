@@ -283,9 +283,11 @@ export async function approvePieceChannels(input: { storyId: string; on: string[
     const plan = pc.planChannels(state, input.on);
     if (plan.errors.length) return { ok: false, error: plan.errors.join(" ") };
     // The bytes John looked at: any file that changed since the page loaded stops the approval.
+    // A text is checked by its revision (it moves on every save, and the screen knows it after an edit); media by bytes.
+    const same = (a: { kind: string; sha256: string; revision: number }, e: Expected) => a.revision === e.revision && (a.kind === "copy" || a.sha256 === e.sha256);
     for (const e of input.expected) {
       const a = state.assets.find((x) => x.id === e.asset_id);
-      if (!a || a.sha256 !== e.sha256 || a.revision !== e.revision) return { ok: false, error: "This piece changed. Refresh the page." };
+      if (!a || !same(a, e)) return { ok: false, error: "This piece changed. Refresh the page." };
     }
     for (const c of plan.off) await dropPieceChannel(admin, input.storyId, c, { dryRun: true });
     const keep = plan.on.filter((c) => !plan.add.includes(c));
@@ -303,7 +305,7 @@ export async function approvePieceChannels(input: { storyId: string; on: string[
       await pc.unbindChannel(admin, state, c);
     }
     for (const { channel, files } of adding) await pc.bindChannel(admin, files, channel);
-    await pc.recordDropped(admin, input.storyId, plan.off, plan.on);
+    await pc.recordChannelChoice(admin, input.storyId, plan);
     const now = await pc.loadPieceChannels(admin, input.storyId);
     for (const c of plan.on) {
       // The bytes John saw, so a restage landing in between is refused by the database, never approved unseen.
@@ -312,6 +314,10 @@ export async function approvePieceChannels(input: { storyId: string; on: string[
         const r = await decideRows(db, media, c, "approved", "");
         if (!r.ok) return { ok: false, error: `${c} media: ${r.error}` };
       }
+      // The text approved is the text John saw: a change that landed since is refused, never approved unseen.
+      const copy = pc.filesFor(now, c, []).find((a) => a.kind === "copy");
+      const saw = copy && seen.get(copy.id);
+      if (!copy || !saw || !same(copy, saw)) return { ok: false, error: "The text changed while approving. Refresh the page." };
       const t = await decidePart(db, input.storyId, c, "text", true);
       if (!t.ok) return { ok: false, error: `${c}: ${t.error}` };
     }

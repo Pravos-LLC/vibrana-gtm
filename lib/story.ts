@@ -337,9 +337,10 @@ export async function writeStory(db: SupabaseClient, story: StoryHead, assets: P
   const stale = existing.filter((a) => !assets.some((next) => next.id === a.id));
   if (stale.length && !shared) throw new Error(`story ${story.id} has assets missing from the manifest: ${stale.map((a) => a.id).join(", ")}. Resolve them explicitly before staging.`);
   const channelRows = must(await db.from("gtm_story_asset_channels").select("asset_id,channel").in("asset_id", assets.map((a) => a.id)), "existing channel assignments") as { asset_id: string; channel: string }[];
-  const dropped = await (await import("./piece-channels")).droppedChannels(db, story.id);
+  // John's channel ticks (lib/piece-channels.ts): a dropped channel is never bound again, an added one is accepted as bound.
+  const { dropped, added } = await (await import("./piece-channels")).channelChoice(db, story.id);
   for (const a of assets) {
-    const removed = channelRows.filter((row) => row.asset_id === a.id && !a.channels.includes(row.channel));
+    const removed = channelRows.filter((row) => row.asset_id === a.id && !a.channels.includes(row.channel) && !added.includes(row.channel));
     if (removed.length && !shared) throw new Error(`${a.id} has channel assignments missing from the manifest: ${removed.map((c) => c.channel).join(", ")}. Resolve them explicitly.`);
   }
   // The stage each media asset ends at: named on the asset, or the run's stage for new or changed bytes; else unchanged.

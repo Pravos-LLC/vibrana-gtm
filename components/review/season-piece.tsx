@@ -419,8 +419,9 @@ function ChannelApproval({ storyId, cards, groups }: { storyId: string; cards: P
   const done = approved && !adds.length && !removes.length;
   const approve = () => startTransition(async () => {
     setError(null);
-    const seen = [...new Map([...cards.map((c) => c.copy), ...media].map((a) => [a.id, a])).values()];
-    const r = await actions.approvePieceChannels({ storyId, on, expected: expectedOf(seen) });
+    // The texts at the revision on screen (a save in this session moves it), the media at its bytes.
+    const texts = [...new Map(cards.map((c) => [c.copy.id, { asset_id: c.copy.id, sha256: "", revision: states[partKey("text", storyId, c.channel)]?.revision ?? c.copy.revision }])).values()];
+    const r = await actions.approvePieceChannels({ storyId, on, expected: [...texts, ...expectedOf([...new Map(media.map((a) => [a.id, a])).values()])] });
     if (!r.ok) setError(r.error);
     // The review store is seeded once per page; a channel change adds or removes whole cards, so reload the board.
     else window.location.reload();

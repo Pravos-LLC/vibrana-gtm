@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { boundChannels, filesFor, planChannels, type PieceChannelState } from "../lib/piece-channels";
+import { boundChannels, filesFor, mergeChoice, planChannels, type PieceChannelState } from "../lib/piece-channels";
 import { RHYTHM } from "../lib/rhythm";
 
 const asset = (id: string, kind: string, stage: string | null = null) => ({ id, kind, sha256: "x".repeat(64), revision: 1, body: kind === "copy" ? "Text" : null, stage });
@@ -60,4 +60,10 @@ test("a pillar kept only in the copy's front matter still blocks Instagram", () 
     const s = piece({ assets: [{ ...asset("p-copy", "copy"), body: "---\npillar: build\n---\nText" }, asset("p-video", "video"), asset("p-cover", "image")] });
     assert.match(planChannels(s, ["linkedin", "instagram"]).errors.join(" "), /never takes build/);
   } finally { delete RHYTHM.blocked; }
+});
+
+test("channel choices: a dropped channel stays dropped until ticked again; an added one stays until unticked", () => {
+  const a = mergeChoice(undefined, { on: ["linkedin", "youtube"], add: ["youtube"], off: ["instagram"] });
+  assert.deepEqual(a, { dropped: ["instagram"], added: ["youtube"] });
+  assert.deepEqual(mergeChoice(a, { on: ["linkedin", "instagram"], add: ["instagram"], off: ["youtube"] }), { dropped: ["youtube"], added: ["instagram"] });
 });

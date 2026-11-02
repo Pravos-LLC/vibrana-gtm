@@ -100,16 +100,31 @@ export async function unbindChannel(db: SupabaseClient, s: PieceChannelState, ch
   if (ids.length) must(await db.from("gtm_story_asset_channels").delete().in("asset_id", ids).eq("channel", channel), `unbind ${channel}`);
 }
 
-/** Channels John unticked on a piece (gtm_sync_state): staging never binds them again until he ticks them back. */
-export const DROPPED_KEY = "pieces.dropped_channels";
-export async function droppedChannels(db: SupabaseClient, storyId: string): Promise<string[]> {
-  const rows = (must(await db.from("gtm_sync_state").select("value").eq("key", DROPPED_KEY), "dropped channels") ?? []) as { value: Record<string, string[]> }[];
-  return rows[0]?.value?.[storyId] ?? [];
+/**
+ * John's channel choices on a piece (gtm_sync_state "pieces.channels"): `dropped` channels staging never binds again until
+ * he ticks them back, and `added` channels he ticked beyond the staging manifest, which staging accepts as bound.
+ */
+export const CHANNELS_KEY = "pieces.channels";
+export type ChannelChoice = { dropped: string[]; added: string[] };
+async function readChoices(db: SupabaseClient): Promise<Record<string, ChannelChoice>> {
+  const rows = (must(await db.from("gtm_sync_state").select("value").eq("key", CHANNELS_KEY), "channel choices") ?? []) as { value: Record<string, ChannelChoice> }[];
+  return rows[0]?.value ?? {};
 }
-export async function recordDropped(db: SupabaseClient, storyId: string, off: string[], on: string[]): Promise<void> {
-  const row = must(await db.from("gtm_sync_state").select("value").eq("key", DROPPED_KEY).maybeSingle(), "dropped channels") as { value: Record<string, string[]> } | null;
-  const value = { ...(row?.value ?? {}) };
-  const next = [...new Set([...(value[storyId] ?? []), ...off])].filter((c) => !on.includes(c)).sort();
-  if (next.length) value[storyId] = next; else delete value[storyId];
-  must(await db.from("gtm_sync_state").upsert({ key: DROPPED_KEY, value, updated_at: new Date().toISOString() }), "record dropped channels");
+export async function channelChoice(db: SupabaseClient, storyId: string): Promise<ChannelChoice> {
+  const c = (await readChoices(db))[storyId];
+  return { dropped: c?.dropped ?? [], added: c?.added ?? [] };
+}
+/** The choice after a tick: dropped channels stay dropped until ticked again; added ones stay added until unticked. Pure. */
+export function mergeChoice(prev: ChannelChoice | undefined, plan: Pick<ChannelPlan, "on" | "add" | "off">): ChannelChoice {
+  const p = prev ?? { dropped: [], added: [] };
+  return {
+    dropped: [...new Set([...p.dropped, ...plan.off])].filter((c) => !(plan.on as string[]).includes(c)).sort(),
+    added: [...new Set([...p.added, ...plan.add])].filter((c) => !(plan.off as string[]).includes(c)).sort(),
+  };
+}
+export async function recordChannelChoice(db: SupabaseClient, storyId: string, plan: Pick<ChannelPlan, "on" | "add" | "off">): Promise<void> {
+  const all = await readChoices(db);
+  const next = mergeChoice(all[storyId], plan);
+  if (next.dropped.length || next.added.length) all[storyId] = next; else delete all[storyId];
+  must(await db.from("gtm_sync_state").upsert({ key: CHANNELS_KEY, value: all, updated_at: new Date().toISOString() }), "record channel choices");
 }
