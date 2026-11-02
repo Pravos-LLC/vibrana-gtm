@@ -37,7 +37,7 @@ const flag = (name: string) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const positional = argv.filter((a, i) => !a.startsWith("--") && !(argv[i - 1] ?? "").match(/^--(week|iso-week|track|season|days|since|only|round|series|title|description|starts|ends|pillars|batch|assets|asset|note|linkedin|instagram|youtube|kind|tags|tag|why|pillar|out|by|status|lane|limit|format|story|to|from|account|who|stage|changes|summary|effort|impact|source|owner|lens|slug|addresses|replies|motion-sha|motion-path|credits|balance-after|job|skill|from|category|rule|do-not-use|only|party|sha|render|keys|notes|eta|agent|storyboard|manifest|brand|theme|brief|prompt-file|reference|art-dir|shape|weeks|email|file|reason|url)$/));
+const positional = argv.filter((a, i) => !a.startsWith("--") && !(argv[i - 1] ?? "").match(/^--(week|iso-week|track|season|days|since|only|round|series|title|description|starts|ends|pillars|batch|assets|asset|note|linkedin|instagram|youtube|kind|tags|tag|why|pillar|out|by|status|lane|limit|format|story|to|from|account|who|stage|changes|summary|effort|impact|source|owner|lens|slug|addresses|replies|motion-sha|motion-path|credits|balance-after|job|skill|from|category|rule|do-not-use|only|party|sha|render|keys|notes|eta|agent|storyboard|manifest|brand|theme|brief|prompt-file|reference|art-dir|asset-root|shape|weeks|email|file|reason|url)$/));
 const [cmd, ...rest] = positional;
 
 // In `gtm sync`, commands hand their result to a sink instead of printing.
@@ -122,7 +122,7 @@ const commands: Record<string, () => Promise<void>> = {
       if (!flag("--prompt-file") || !flag("--out")) throw new Error("usage: gtm packaging plate --prompt-file path --out plate.png [--reference source.png]");
       return out(await (await import("../lib/packaging/plate")).generatePlate(readFileSync(flag("--prompt-file")!, "utf8"), flag("--reference"), flag("--out")!));
     }
-    if (!id) throw new Error("usage: gtm packaging brief|render|check|revise|gallery|motion|stage-review <story-id> [--manifest path] [--brand sample-author|vibrana|aios] [--theme light|dark] [--brief path] [--notes ids]");
+    if (!id) throw new Error("usage: gtm packaging brief|render|check|revise|gallery|motion|stage-review <story-id> [--manifest path] [--brand sample-author|vibrana|aios] [--theme light|dark] [--brief path] [--notes ids] [--asset-root path]");
     if (sub === "brief") return out(ops.deriveBrief(id, { manifest: flag("--manifest"), brand: flag("--brand") as import("../lib/packaging/catalog").Brand | undefined, theme: flag("--theme") as import("../lib/packaging/catalog").Theme | undefined, out: flag("--out") }));
     if (sub === "stage-review") {
       if (!flag("--manifest")) throw new Error("stage-review needs --manifest <gallery/index.json>");
@@ -130,19 +130,21 @@ const commands: Record<string, () => Promise<void>> = {
       return out(await (await import("../lib/packaging/review")).stageReviewGallery(adminDb(), id, flag("--manifest")!, dry));
     }
     const bp = flag("--brief") ?? ops.briefPathFor(id, flag("--manifest"));
+    // Licensed fonts live outside the public tree: --asset-root, else PACKAGING_ASSET_ROOT. Validated; fails closed.
+    const assetRoot = async () => (await import("../lib/packaging/assets")).packagingAssetRoot({ flag: argv.includes("--asset-root") ? flag("--asset-root") ?? "" : undefined });
     const raw = JSON.parse(readFileSync(bp, "utf8"));
     if (raw.story !== id) throw new Error("--brief belongs to another Story");
     if (sub === "motion") {
       if (!flag("--out")) throw new Error("motion needs --out title.mp4|title.webm");
       const shape = flag("--shape") ?? "landscape";
       if (!["landscape","portrait","square","feed"].includes(shape)) throw new Error("Invalid motion shape");
-      const rendered = await (await import("../lib/packaging/render")).renderPackage(bp);
+      const rendered = await (await import("../lib/packaging/render")).renderPackage(bp, { assetRoot: await assetRoot() });
       return out(await (await import("../lib/packaging/motion-export")).exportMotion(rendered.manifest,flag("--out")!,shape as import("../lib/packaging/catalog").Shape));
     }
-    if (sub === "render") return out(await (await import("../lib/packaging/render")).renderPackage(bp));
+    if (sub === "render") return out(await (await import("../lib/packaging/render")).renderPackage(bp, { assetRoot: await assetRoot() }));
     if (sub === "gallery") {
       if (!flag("--out")) throw new Error("gallery needs --out <directory>");
-      return out(await (await import("../lib/packaging/gallery")).renderGallery(bp, flag("--out")!, { styles: argv.includes("--styles"), artDir: flag("--art-dir") }));
+      return out(await (await import("../lib/packaging/gallery")).renderGallery(bp, flag("--out")!, { styles: argv.includes("--styles"), artDir: flag("--art-dir"), assetRoot: await assetRoot() }));
     }
     if (sub === "check") {
       const result = ops.checkStoryPackage(bp); out(result);

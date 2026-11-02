@@ -902,3 +902,30 @@ test("gtm outreach import-profile --track guest writes the guest track's profile
   assert.equal(bad.code, 1);
   assert.match(bad.stderr, /templates must be an object of strings/);
 });
+
+test("packaging render takes licensed assets from --asset-root or PACKAGING_ASSET_ROOT, never the public tree", () => {
+  const brief = { schema: 1, story: "test-story", brand: "sample-author", theme: "dark", template: "clear-conversation", ready: true,
+    audience: "Builders", promise: "A source-backed account", thumbnail: "Their language. Their model.",
+    opening: { text: "Give us microphones", spoken: "Give us microphones", source: "transcript.json" },
+    payoff: { source: "transcript.json", seconds: 49, explanation: "The community records its own language" },
+    title: "Who owns the recordings?", description: "A conversation.", sources: [{ path: "transcript.json", role: "transcript" }],
+    portraits: [], shapes: ["landscape"], selection: "Question and human account" };
+  const files = { "packaging/brief.json": JSON.stringify(brief), "packaging/transcript.json": "spoken account", "licensed/fonts/.keep": "" };
+  const render = ["packaging", "render", "test-story", "--brief", "{dir}/packaging/brief.json"];
+  // The flag selects the external root (and wins over the env); an empty font directory is refused, not substituted.
+  const flagged = gtm([...render, "--asset-root", "{dir}/licensed"], { files, env: { PACKAGING_ASSET_ROOT: "relative/ignored" } });
+  assert.equal(flagged.code, 1);
+  assert.match(flagged.stderr, /Missing licensed font \S*\/licensed\/fonts\/clash-display\.woff2\. Set PACKAGING_ASSET_ROOT or --asset-root/);
+  const external = mkdtempSync(join(tmpdir(), "gtm-assets-"));
+  mkdirSync(join(external, "fonts"));
+  try {
+    const env = gtm(render, { files, env: { PACKAGING_ASSET_ROOT: external } });
+    assert.equal(env.code, 1);
+    assert.ok(env.stderr.includes(`fonts/clash-display.woff2`) && env.stderr.includes(external.split("/").pop()!), env.stderr);
+  } finally { rmSync(external, { recursive: true, force: true }); }
+  const relative = gtm(render, { files, env: { PACKAGING_ASSET_ROOT: "relative/assets" } });
+  assert.equal(relative.code, 1);
+  assert.match(relative.stderr, /PACKAGING_ASSET_ROOT must be an absolute path/);
+  const inside = gtm([...render, "--asset-root", ROOT], { files });
+  assert.match(inside.stderr, /--asset-root must be outside this checkout/);
+});

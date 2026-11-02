@@ -1,9 +1,10 @@
 import { runInNewContext } from "node:vm";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { PROFILES, TEMPLATES, TOOLKIT_VERSION, SIZES } from "../lib/packaging/catalog";
@@ -12,7 +13,8 @@ import { Thumbnail } from "../lib/packaging/Thumbnail";
 import { briefProblems, catalogHash, checkPackage, fileHash, packagingGate, legacyPackagingRecord, type PackagingBrief, type PackagingManifest } from "../lib/packaging/model";
 import { deriveBrief, reviseBrief } from "../lib/packaging/ops";
 import { generatePlate } from "../lib/packaging/plate";
-import { renderPackage } from "../lib/packaging/render";
+import { renderInputs, renderPackage } from "../lib/packaging/render";
+import { BUNDLED_ASSET_ROOT, packagingAssetRoot } from "../lib/packaging/assets";
 import { COVER_STYLES, HEADLINE_TYPES, headlineType } from "../lib/packaging/styles";
 import { motionState, motionDocument } from "../lib/packaging/motion";
 
@@ -134,6 +136,46 @@ test("a missing brand font refuses rendering instead of substituting a different
   const f = fixture();
   try { await assert.rejects(renderPackage(join(f.dir, "brief.json"), { assetRoot: join(f.dir, "missing") }), /Missing licensed font/); }
   finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("PACKAGING_ASSET_ROOT and --asset-root select external licensed assets and fail closed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "packaging-assets-")), root = join(dir, "licensed");
+  mkdirSync(join(root, "fonts"), { recursive: true });
+  try {
+    assert.equal(packagingAssetRoot({ env: {} }), BUNDLED_ASSET_ROOT);
+    assert.equal(packagingAssetRoot({ env: { PACKAGING_ASSET_ROOT: "" } }), BUNDLED_ASSET_ROOT);
+    assert.equal(packagingAssetRoot({ env: { PACKAGING_ASSET_ROOT: root } }), realpathSync(root));
+    assert.equal(packagingAssetRoot({ flag: root, env: { PACKAGING_ASSET_ROOT: join(dir, "elsewhere") } }), realpathSync(root));
+    assert.throws(() => packagingAssetRoot({ env: { PACKAGING_ASSET_ROOT: "licensed" } }), /PACKAGING_ASSET_ROOT must be an absolute path/);
+    assert.throws(() => packagingAssetRoot({ flag: "", env: { PACKAGING_ASSET_ROOT: root } }), /--asset-root must be an absolute path/);
+    assert.throws(() => packagingAssetRoot({ flag: join(dir, "missing") }), /is not a directory.*do not silently substitute/);
+    assert.throws(() => packagingAssetRoot({ env: { PACKAGING_ASSET_ROOT: dir } }), /no fonts\/ directory/);
+    // Licensed fonts never live in the public checkout, directly or through a link.
+    const inside = fileURLToPath(new URL("../lib/packaging/", import.meta.url));
+    assert.throws(() => packagingAssetRoot({ env: { PACKAGING_ASSET_ROOT: inside } }), /outside this checkout/);
+    symlinkSync(inside, join(dir, "link"));
+    assert.throws(() => packagingAssetRoot({ flag: join(dir, "link") }), /outside this checkout/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an external asset root feeds the renderer and its fonts are hashed as render inputs", async () => {
+  const f = fixture(), root = join(f.dir, "..", `${f.dir.split("/").pop()}-licensed`), saved = process.env.PACKAGING_ASSET_ROOT;
+  mkdirSync(join(root, "fonts"), { recursive: true });
+  try {
+    process.env.PACKAGING_ASSET_ROOT = root;
+    const external = join(realpathSync(root), "fonts", "clash-display.woff2");
+    // The env root reaches renderPackage with no option, and a missing font there is never substituted.
+    await assert.rejects(renderPackage(join(f.dir, "brief.json")), (e: Error) => e.message.includes(`Missing licensed font ${external}`));
+    for (const font of ["clash-display.woff2", "satoshi.woff2", HEADLINE_TYPES[headlineType(brief())].file]) writeFileSync(join(root, "fonts", font), `licensed ${font}`);
+    const { fonts, fingerprints } = renderInputs(join(f.dir, "brief.json"), packagingAssetRoot());
+    assert.equal(fonts[0], external);
+    for (const font of fonts) assert.deepEqual(fingerprints.find(i => i.path === font), { path: font, sha256: fileHash(font) });
+    writeFileSync(external, "different licensed bytes");
+    assert.notEqual(renderInputs(join(f.dir, "brief.json"), packagingAssetRoot()).fingerprints.find(i => i.path === external)?.sha256, fingerprints.find(i => i.path === external)?.sha256);
+  } finally {
+    if (saved === undefined) delete process.env.PACKAGING_ASSET_ROOT; else process.env.PACKAGING_ASSET_ROOT = saved;
+    rmSync(f.dir, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("plate generation resumes a failed poll, caches completed bytes, and never rebills on a rerun", async () => {
