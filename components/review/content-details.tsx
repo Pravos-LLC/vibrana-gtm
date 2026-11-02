@@ -1,17 +1,23 @@
 "use client";
 
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-const DetailsContext = createContext<{ open: string | null; toggle: (id: string) => void } | null>(null);
+const DetailsContext = createContext<{ open: string | null; toggle: (id: string) => void; host: HTMLDivElement | null } | null>(null);
 
-/** Streamed server slots share one local disclosure state without changing the filter query. */
+/** Streamed server slots share one local disclosure state without changing the filter query.
+ * Panel portals follow every trigger in the DOM, keeping keyboard order aligned with the layout. */
 export function ContentDetails({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [host, setHost] = useState<HTMLDivElement | null>(null);
   return (
-    <DetailsContext.Provider value={{ open, toggle: (id) => setOpen((current) => current === id ? null : id) }}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-3">{children}</div>
+    <DetailsContext.Provider value={{ open, toggle: (id) => setOpen((current) => current === id ? null : id), host }}>
+      <div>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-3">{children}</div>
+        <div ref={setHost} />
+      </div>
     </DetailsContext.Provider>
   );
 }
@@ -22,17 +28,17 @@ export function ContentDetail({ name, label, children }: { name: string; label: 
   if (!context) throw new Error("ContentDetail needs ContentDetails");
   const expanded = context.open === name;
   return (
-    <div className="contents">
+    <>
       <Button id={`${id}-trigger`} size="sm" variant={expanded ? "secondary" : "ghost"}
-        className="order-first max-w-full" aria-expanded={expanded} aria-controls={`${id}-panel`}
+        className="max-w-full" aria-expanded={expanded} aria-controls={`${id}-panel`}
         onClick={() => context.toggle(name)}>
         {label}<ChevronDown className={expanded ? "rotate-180" : ""} aria-hidden="true" />
       </Button>
-      <section id={`${id}-panel`} aria-labelledby={`${id}-trigger`} hidden={!expanded}
-        className="order-last min-w-0 basis-full border-t border-line pt-4">
+      {context.host && createPortal(<section id={`${id}-panel`} aria-labelledby={`${id}-trigger`} hidden={!expanded}
+        className="mt-3 min-w-0 border-t border-line pt-4">
         {expanded ? children : null}
-      </section>
-    </div>
+      </section>, context.host)}
+    </>
   );
 }
 

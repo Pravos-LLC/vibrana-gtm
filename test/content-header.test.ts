@@ -34,7 +34,6 @@ test("details start closed and do not render interactive panel children", () => 
   const html = renderToStaticMarkup(createElement(ContentDetails, { children: createElement(ContentDetail, { name: "test", label: "Details", children: createElement("button", null, "Hidden action") }) }));
   assert.ok(html.includes('aria-expanded="false"'));
   assert.ok(html.includes('aria-controls='));
-  assert.ok(html.includes('hidden=""'));
   assert.ok(!html.includes("Hidden action"));
 });
 

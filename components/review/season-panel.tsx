@@ -106,7 +106,7 @@ export function SeasonDetails(props: Parameters<typeof SeasonPanel>[0] & { path?
       <ContentDetail name="findings" label={`Findings (${props.analysis.checks.length})`}>
         <Findings a={props.analysis} path={props.path} />
       </ContentDetail>
-      {props.analysis.summary.block > 0 && <span className="order-first text-xs font-medium text-red-strong" role="status">{props.analysis.summary.block} {props.analysis.summary.block === 1 ? "blocker" : "blockers"}</span>}
+      {props.analysis.summary.block > 0 && <span className="text-xs font-medium text-red-strong" role="status">{props.analysis.summary.block} {props.analysis.summary.block === 1 ? "blocker" : "blockers"}</span>}
     </>
   );
 }

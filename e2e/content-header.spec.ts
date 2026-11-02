@@ -19,6 +19,13 @@ test("compact content overview opens one accessible panel at a time without chan
   await page.keyboard.press("Enter");
   await expect(season).toHaveAttribute("aria-expanded", "true");
   await expect(overview.getByRole("button", { name: "Edit season" })).toBeVisible();
+  // All top-row controls precede the open panel's controls in keyboard order.
+  await page.keyboard.press("Tab");
+  await expect(findings).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(external).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(overview.getByRole("button", { name: "Edit season" })).toBeFocused();
   await findings.click();
   await expect(season).toHaveAttribute("aria-expanded", "false");
   await expect(findings).toHaveAttribute("aria-expanded", "true");
