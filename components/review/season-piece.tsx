@@ -484,7 +484,7 @@ function PlatformTabs({ storyId, cards, groups, all, mode, pipeline, decisions, 
   if (cards.length > 1) {
     // One text for every platform; media only one platform posts (rare now: one 9:16 video for all) sits beside it.
     return (
-      <>
+      <div className="min-w-0">
       <ChannelApproval storyId={storyId} cards={cards} groups={groups} />
       <div className={cn("grid min-w-0 scroll-mt-20 gap-8", groups.length > 0 && "lg:grid-cols-[minmax(0,auto)_minmax(24rem,1fr)]")} ref={box} id={`${storyId}-platforms`}>
         {groups.length > 0 && (
@@ -494,7 +494,7 @@ function PlatformTabs({ storyId, cards, groups, all, mode, pipeline, decisions, 
         )}
         <SharedText storyId={storyId} cards={cards} />
       </div>
-      </>
+      </div>
     );
   }
   const ownOf = (c: PlatformCard) => groups.filter((g) => g.channels[0] === c.channel);
@@ -504,7 +504,7 @@ function PlatformTabs({ storyId, cards, groups, all, mode, pipeline, decisions, 
   };
   const firstOwn = cards.map(ownOf).find((own) => own.length)?.[0];
   return (
-    <>
+    <div className="min-w-0">
     <ChannelApproval storyId={storyId} cards={cards} groups={groups} />
     <div className={cn("grid min-w-0 scroll-mt-20 gap-8", firstOwn && "lg:grid-cols-[minmax(0,auto)_minmax(24rem,1fr)]")} ref={box} id={`${storyId}-platforms`}>
       {firstOwn && (
@@ -545,7 +545,7 @@ function PlatformTabs({ storyId, cards, groups, all, mode, pipeline, decisions, 
       ))}
       </div>
     </div>
-    </>
+    </div>
   );
 }
 
