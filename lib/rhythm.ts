@@ -1,10 +1,9 @@
 import { loadContent } from "../lib/content-overlay.mjs";
-// The weekly rhythm (John, 2026-10-17): every weekday has a pillar, a day takes a piece from its primary pillar or,
-// when none is ready, from its fallback, and the house rules keep the week varied. Pure and client-safe: the
-// calendar headers, the week's lint strip, `gtm calendar lint` and auto-schedule all read it.
-//   Mon Perspective (fb Lists)  Tue Proof (fb Build)  Wed Build (fb Proof)  Thu Voices (fb Proof)
-//   Fri Lists (fb Build, Proof)  Sat Reels, IG and YouTube only  Sun off
-// The day map lives in content/guide/channels.json ("rhythm"); looks and topics per Story in config/piece-traits.json.
+// The weekly rhythm: each posting day has a pillar, a day takes a piece from its primary pillar or, when none is ready,
+// from its fallback, and the house rules keep the week varied. A day with no primary is off: no gaps, no channels.
+// Pure and client-safe: the calendar headers, the week's lint strip, `gtm calendar lint` and auto-schedule all read it.
+// The day map lives in content/guide/channels.json ("rhythm"), so the operator's rhythm is data, not code; looks and
+// topics per Story are in config/piece-traits.json.
 const channelsJson = loadContent("guide/channels.json") as typeof import("../content/sample/guide/channels.json");
 const traitsJson = loadContent("config/piece-traits.json") as typeof import("../content/sample/config/piece-traits.json");
 import { addDays, mondayOf } from "./week";
@@ -17,7 +16,9 @@ export type RhythmDay = { day: Weekday; primary: Lane | null; fallback: Lane[]; 
 export type Look = "prism" | "voiceover" | "talking-head" | "footage" | "text";
 export type Traits = { look?: Look; topic?: string };
 
-export const RHYTHM = (channelsJson as unknown as { rhythm: { days: RhythmDay[]; rules: string[]; summary: string } }).rhythm;
+/** A channel that never takes some pillars (John, 2026-11-02: Proof, Build and Lists never go to Instagram). Optional in the guide. */
+export type ChannelBlock = { channel: string; pillars: string[] };
+export const RHYTHM = (channelsJson as unknown as { rhythm: { days: RhythmDay[]; rules: string[]; summary: string; blocked?: ChannelBlock[] } }).rhythm;
 const TRAITS = (traitsJson as { pieces: Record<string, Traits> }).pieces;
 
 export const LANE_LABEL: Record<Lane, string> = { perspective: "Perspective", proof: "Proof", build: "Build", lists: "Lists", voices: "Voices", reels: "Reels" };
@@ -92,9 +93,14 @@ export function isRealDate(raw: string): boolean {
   return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === raw;
 }
 
-/** May this channel post on that day? LinkedIn is weekdays only, Saturday is IG and YouTube, Sunday is off. */
+/** May this channel post on that day? The guide's day map lists each day's channels; an off day has none. */
 export function channelAllowed(isoOrWeekday: string, channel: string): boolean {
   return rhythmDay(isoOrWeekday).channels.includes(channel);
+}
+
+/** May a piece of this pillar go out on this channel? The guide's `rhythm.blocked` lists the pillars a channel never takes. */
+export function pillarAllowed(pillar: string | null | undefined, channel: string): boolean {
+  return !pillar || !(RHYTHM.blocked ?? []).some((b) => b.channel === channel && b.pillars.includes(pillar));
 }
 
 // ---- lint ----------------------------------------------------------------------------------------------------
@@ -105,7 +111,7 @@ export type LintPost = {
   storyId: string | null; title: string; caption?: string | null;
 };
 export type Severity = "error" | "warn";
-export type Rule = "one-piece" | "split" | "channel-day" | "pillar-fit" | "talking-heads" | "voiceover" | "look-adjacent" | "prism-cap" | "topic" | "caption";
+export type Rule = "one-piece" | "split" | "channel-day" | "pillar-fit" | "talking-heads" | "voiceover" | "look-adjacent" | "prism-cap" | "topic" | "caption" | "channel-pillar";
 export type Issue = { severity: Severity; rule: Rule; date: string; message: string; ids: string[] };
 /** One piece on one day: a Story's (or loose item's) legs that share a date. */
 export type DayPiece = { key: string; storyId: string | null; date: string; title: string; pillar: string | null; channels: string[]; looks: Look[]; topic: string | null; lanes: Lane[]; ids: string[]; published: boolean };
@@ -176,6 +182,11 @@ export function lintCalendar(posts: LintPost[], from: string, weeks = 1): WeekRe
             : `${short(date)} is ${l.primary}${l.fallback.length ? ` (fallback ${l.fallback.join(", ")})` : ""}; ${p.title} is ${p.lanes.map((x) => LANE_LABEL[x]).join("/")}` });
         }
       }
+      // A leg on a channel that never takes its pillar (the guide's rhythm.blocked).
+      for (const p of today.filter((x) => !x.published)) {
+        const off = posts.filter((x) => live(x) && p.ids.includes(x.id) && x.status !== "published" && x.channels.some((c) => !pillarAllowed(x.pillar || p.pillar, c)));
+        if (off.length) add({ severity: "error", rule: "channel-pillar", date, ids: off.map((x) => x.id), message: `${p.title}: ${[...new Set(off.flatMap((x) => x.channels.filter((c) => !pillarAllowed(x.pillar || p.pillar, c))))].join(", ")} never takes ${p.pillar ? LANE_LABEL[p.pillar as Lane] ?? p.pillar : "this pillar"}; skip that leg` });
+      }
     }
     const storiesHere = [...new Set(inWeek.map((p) => p.storyId).filter((s): s is string => !!s))];
     for (const s of storiesHere) {
@@ -227,13 +238,13 @@ export function lintCalendar(posts: LintPost[], from: string, weeks = 1): WeekRe
   return reports;
 }
 
-/** Weekdays in [from, to] with nothing on them, and what each one wants. Saturday is optional and Sunday is off. */
+/** Rhythm days in [from, to] with nothing on them, and what each one wants. Saturday is optional; an off day (no primary) never counts. */
 export function gapsFor(posts: LintPost[], from: string, to: string): Array<{ date: string; day: Weekday; wants: string }> {
   const taken = new Set(posts.filter(live).map((p) => p.date));
   const out: Array<{ date: string; day: Weekday; wants: string }> = [];
   for (let date = from; date <= to; date = addDays(date, 1)) {
     const day = weekdayOf(date);
-    if (day === "Sat" || day === "Sun" || taken.has(date)) continue;
+    if (day === "Sat" || !rhythmDay(date).primary || taken.has(date)) continue;
     const l = dayLabels(date);
     out.push({ date, day, wants: [l.primary, ...l.fallback].join(", then ") });
   }

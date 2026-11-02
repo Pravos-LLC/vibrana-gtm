@@ -1,5 +1,5 @@
 // Suggested publish slots per network, in the calendar timezone. Suggestions only: the owner edits them.
-// Days follow the weekly rhythm (lib/rhythm.ts): LinkedIn Mon to Fri, Instagram and YouTube Mon to Sat, nothing Sunday.
+// Days follow the weekly rhythm (lib/rhythm.ts): each channel posts only on the days the guide's day map gives it.
 import { zonedToUtc } from "./calendar";
 import { channelAllowed } from "./rhythm";
 

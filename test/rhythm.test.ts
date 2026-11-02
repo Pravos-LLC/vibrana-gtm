@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { channelAllowed, dayLabels, fitRank, gapsFor, isRealDate, lanesOf, lintCalendar, lookOf, parseWeeks, pieceKeyOf, RHYTHM, weekdayOf, type LintPost } from "../lib/rhythm";
+import { channelAllowed, dayLabels, fitRank, gapsFor, isRealDate, lanesOf, lintCalendar, lookOf, parseWeeks, pieceKeyOf, pillarAllowed, RHYTHM, weekdayOf, type LintPost } from "../lib/rhythm";
 
 // The week of Mon 2026-10-19.
 const post = (id: string, date: string, channel: string, extra: Partial<LintPost> = {}): LintPost => ({
@@ -109,6 +109,39 @@ test("LinkedIn caption: warn over 3,000, error over 4,000, published posts are h
 test("gaps are empty weekdays and say what the day wants; Saturday and Sunday are never gaps", () => {
   const gaps = gapsFor([post("a-linkedin", "2026-10-19", "linkedin")], "2026-10-19", "2026-10-25");
   assert.deepEqual(gaps.map((g) => [g.day, g.wants]), [["Tue", "Proof, then Build"], ["Wed", "Build, then Proof"], ["Thu", "Voices, then Proof"], ["Fri", "Lists, then Build, then Proof"]]);
+});
+
+test("an off day in the guide (no primary) is never a gap and takes no channel", () => {
+  const wed = RHYTHM.days.find((d) => d.day === "Wed")!;
+  const saved = { ...wed };
+  Object.assign(wed, { primary: null, fallback: [], channels: [], note: "Off" });
+  try {
+    const gaps = gapsFor([post("a-linkedin", "2026-10-19", "linkedin")], "2026-10-19", "2026-10-25");
+    assert.deepEqual(gaps.map((g) => g.day), ["Tue", "Thu", "Fri"]);
+    assert.equal(channelAllowed("2026-10-21", "linkedin"), false);
+    assert.equal(fitRank("2026-10-21", ["build"]), -1);
+  } finally {
+    Object.assign(wed, saved);
+  }
+});
+
+test("a leg on a channel that never takes its pillar is an error; with no block in the guide nothing changes", () => {
+  const legs = [post("p-linkedin", "2026-10-20", "linkedin"), post("p-instagram", "2026-10-20", "instagram")];
+  assert.equal(pillarAllowed("proof", "instagram"), true);
+  assert.ok(!rules(legs).includes("channel-pillar"));
+  RHYTHM.blocked = [{ channel: "instagram", pillars: ["proof", "build", "lists"] }];
+  try {
+    assert.equal(pillarAllowed("proof", "instagram"), false);
+    assert.equal(pillarAllowed("perspective", "instagram"), true);
+    assert.equal(pillarAllowed("proof", "linkedin"), true);
+    const issue = lintCalendar(legs, "2026-10-19")[0].issues.find((i) => i.rule === "channel-pillar");
+    assert.equal(issue?.severity, "error");
+    assert.deepEqual(issue?.ids, ["p-instagram"]);
+    assert.match(issue!.message, /instagram never takes Proof/);
+    assert.ok(!rules(legs.map((l) => ({ ...l, status: "published" }))).includes("channel-pillar"));
+  } finally {
+    delete RHYTHM.blocked;
+  }
 });
 
 test("F4: a piece with no pillar, or one outside the four, is flagged by name", () => {
