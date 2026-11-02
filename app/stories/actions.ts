@@ -290,6 +290,10 @@ export async function approvePieceChannels(input: { storyId: string; on: string[
     for (const c of plan.off) await dropPieceChannel(admin, input.storyId, c, { dryRun: true });
     const keep = plan.on.filter((c) => !plan.add.includes(c));
     const adding = plan.add.map((c) => ({ channel: c, files: pc.filesFor(state, c, keep) }));
+    // Every file a ticked channel will post must be one John saw; approvals below use those exact bytes.
+    const seen = new Map(input.expected.map((e) => [e.asset_id, e]));
+    const posting = [...keep.flatMap((c) => pc.filesFor(state, c, [])), ...adding.flatMap((a) => a.files)];
+    if (posting.some((a) => !seen.has(a.id))) return { ok: false, error: "This piece changed. Refresh the page." };
     for (const c of plan.off) {
       for (const part of ["text", "asset"] as const) {
         const r = await decidePart(db, input.storyId, c, part, false);
@@ -299,9 +303,11 @@ export async function approvePieceChannels(input: { storyId: string; on: string[
       await pc.unbindChannel(admin, state, c);
     }
     for (const { channel, files } of adding) await pc.bindChannel(admin, files, channel);
+    await pc.recordDropped(admin, input.storyId, plan.off, plan.on);
     const now = await pc.loadPieceChannels(admin, input.storyId);
     for (const c of plan.on) {
-      const media = pc.filesFor(now, c, []).filter((a) => a.kind !== "copy").map((a) => ({ ...a, channels: [c] }));
+      // The bytes John saw, so a restage landing in between is refused by the database, never approved unseen.
+      const media = pc.filesFor(now, c, []).filter((a) => a.kind !== "copy").map((a) => ({ ...a, sha256: seen.get(a.id)?.sha256 ?? "", revision: seen.get(a.id)?.revision ?? -1, channels: [c] }));
       if (media.length) {
         const r = await decideRows(db, media, c, "approved", "");
         if (!r.ok) return { ok: false, error: `${c} media: ${r.error}` };

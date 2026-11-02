@@ -35,3 +35,29 @@ test("refusals: no channel, a channel the media cannot feed, a blocked pillar, a
   const rough = piece({ assets: [asset("p-copy", "copy"), asset("p-video", "video", "rough-cut"), asset("p-cover", "image")] });
   assert.match(planChannels(rough, ["linkedin", "youtube"]).errors.join(" "), /rough cut/);
 });
+
+test("YouTube needs the copy's YouTube title; a copy that has one is preferred", () => {
+  const two = piece({
+    assets: [asset("p-li", "copy"), { ...asset("p-yt", "copy"), body: "---\nyoutube_title: A title\n---\nText" }, asset("p-video", "video")],
+    bindings: [{ asset_id: "p-li", channel: "linkedin", status: "pending" }, { asset_id: "p-yt", channel: "instagram", status: "pending" }, ...["linkedin", "instagram"].map((c) => ({ asset_id: "p-video", channel: c, status: "pending" }))],
+  });
+  assert.deepEqual(filesFor(two, "youtube", ["linkedin", "instagram"]).map((a) => a.id), ["p-yt", "p-video"]);
+  assert.deepEqual(planChannels(two, ["linkedin", "instagram", "youtube"]).errors, []);
+  const none = piece({ bindings: ["p-copy", "p-video"].map((a) => ({ asset_id: a, channel: "linkedin", status: "pending" })) });
+  assert.match(planChannels(none, ["linkedin", "youtube"]).errors.join(" "), /YouTube needs a title/);
+});
+
+test("the text is checked before anything changes: an open note to John or LinkedIn over 4,000 characters refuses", () => {
+  const noted = piece({ assets: [{ ...asset("p-copy", "copy"), body: "Hello [JOHN: add the number]" }, asset("p-video", "video"), asset("p-cover", "image")] });
+  assert.match(planChannels(noted, ["linkedin", "youtube"]).errors.join(" "), /note to John/);
+  const long = piece({ assets: [{ ...asset("p-copy", "copy"), body: "x".repeat(4100) }, asset("p-video", "video"), asset("p-cover", "image")] });
+  assert.ok(planChannels(long, ["linkedin", "youtube"]).errors.some((e) => /4,000|too long/i.test(e)));
+});
+
+test("a pillar kept only in the copy's front matter still blocks Instagram", () => {
+  RHYTHM.blocked = [{ channel: "instagram", pillars: ["build"] }];
+  try {
+    const s = piece({ assets: [{ ...asset("p-copy", "copy"), body: "---\npillar: build\n---\nText" }, asset("p-video", "video"), asset("p-cover", "image")] });
+    assert.match(planChannels(s, ["linkedin", "instagram"]).errors.join(" "), /never takes build/);
+  } finally { delete RHYTHM.blocked; }
+});

@@ -337,6 +337,7 @@ export async function writeStory(db: SupabaseClient, story: StoryHead, assets: P
   const stale = existing.filter((a) => !assets.some((next) => next.id === a.id));
   if (stale.length && !shared) throw new Error(`story ${story.id} has assets missing from the manifest: ${stale.map((a) => a.id).join(", ")}. Resolve them explicitly before staging.`);
   const channelRows = must(await db.from("gtm_story_asset_channels").select("asset_id,channel").in("asset_id", assets.map((a) => a.id)), "existing channel assignments") as { asset_id: string; channel: string }[];
+  const dropped = await (await import("./piece-channels")).droppedChannels(db, story.id);
   for (const a of assets) {
     const removed = channelRows.filter((row) => row.asset_id === a.id && !a.channels.includes(row.channel));
     if (removed.length && !shared) throw new Error(`${a.id} has channel assignments missing from the manifest: ${removed.map((c) => c.channel).join(", ")}. Resolve them explicitly.`);
@@ -417,6 +418,8 @@ export async function writeStory(db: SupabaseClient, story: StoryHead, assets: P
     } else must(await db.from("gtm_story_assets").insert(row), `insert asset ${a.id}`);
     const channels = channelRows.filter((row) => row.asset_id === a.id);
     for (const channel of shared ? [] : a.channels) {
+      // A channel John unticked on the piece stays off until he ticks it back (lib/piece-channels.ts).
+      if (dropped.includes(channel)) continue;
       if (!channels.some((c) => c.channel === channel)) {
         must(await db.from("gtm_story_asset_channels").insert({ asset_id: a.id, channel, status: "pending" }), `assign ${a.id} to ${channel}`);
       }
