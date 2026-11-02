@@ -38,7 +38,14 @@ const flag = (name: string) => {
   return i >= 0 ? argv[i + 1] : undefined;
 };
 // Whose owner account an approval or fix is recorded under, when the cockpit has more than one owner (lib/story-ops pickOwner).
-if (flag("--as")) process.env.GTM_OWNER_EMAIL = flag("--as");
+{
+  const eq = argv.find((a) => a.startsWith("--as="));
+  const as = eq ? eq.slice(5) : argv.includes("--as") ? (flag("--as") ?? "") : undefined;
+  if (as !== undefined) {
+    if (!as || as.startsWith("--")) throw new Error("--as needs an owner email: --as you@example.com");
+    process.env.GTM_OWNER_EMAIL = as;
+  }
+}
 const positional = argv.filter((a, i) => !a.startsWith("--") && !(argv[i - 1] ?? "").match(/^--(as|week|iso-week|track|season|days|since|only|round|series|title|description|starts|ends|pillars|batch|assets|asset|note|linkedin|instagram|youtube|kind|tags|tag|why|pillar|out|by|status|lane|limit|format|story|to|from|account|who|stage|changes|summary|effort|impact|source|owner|lens|slug|addresses|replies|motion-sha|motion-path|credits|balance-after|job|skill|from|category|rule|do-not-use|only|party|sha|render|keys|notes|eta|agent|storyboard|manifest|brand|theme|brief|prompt-file|reference|art-dir|asset-root|shape|weeks|email|file|reason|url)$/));
 const [cmd, ...rest] = positional;
 
