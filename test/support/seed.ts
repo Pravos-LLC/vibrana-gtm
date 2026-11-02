@@ -164,7 +164,7 @@ export const TABLES = [
   "gtm_content_items", "gtm_post_metrics", "gtm_channel_daily", "gtm_crm_snapshots", "gtm_enrichment_runs", "gtm_spend",
   "gtm_zernio_events", "gtm_seasons", "gtm_stories", "gtm_story_assets", "gtm_story_asset_channels", "gtm_story_feedback", "gtm_story_asset_versions", "gtm_story_stages", "gtm_story_stage_decisions", "gtm_inspiration",
   "gtm_signal_stories", "gtm_signal_items", "gtm_signal_feedback", "gtm_signal_runs",
-  "gtm_manual_metrics", "gtm_content_reports", "gtm_report_actions", "gtm_sync_state",
+  "gtm_manual_metrics", "gtm_content_reports", "gtm_report_actions", "gtm_sync_state", "gtm_analytics_reports",
   "gtm_comments", "gtm_comment_runs", "gtm_red_flag_alerts", "gtm_engage_lessons", "gtm_content_candidates", "gtm_ideas",
   "gtm_storyboards", "gtm_storyboard_versions", "gtm_storyboard_rules", "gtm_storyboard_comments", "gtm_storyboard_scene_decisions",
   "gtm_storyboard_spend", "gtm_broll_shots", "gtm_reviewer_invites", "gtm_reviewer_invite_accounts", "gtm_reviewer_asset_decisions", "gtm_work_items", "gtm_people",
@@ -286,6 +286,9 @@ export async function seed() {
   must(await db.from("gtm_content_reports").insert({ id: FIXTURE_REPORT, kind: "weekly", week: 1, period_start: monday, period_end: day(6), status: "done", headline: "Fixture report", report: {} }), "report");
   must(await db.from("gtm_report_actions").insert({ report_id: FIXTURE_REPORT, type: "move", item_id: "fx-upcoming-idea", change: { date: day(6) }, proposal: "Fixture move" }), "report action");
   must(await db.from("gtm_sync_state").insert({ key: "fixture.cursor", value: { cursor: "c0" } }), "sync state");
+  // Analytics > Reports: one published weekly review (the synthetic document in test/fixtures), already emailed.
+  const review = JSON.parse(fixture("analytics-report.json").toString("utf8"));
+  must(await db.from("gtm_analytics_reports").insert({ kind: "weekly", slug: "weekly-2026-10-26", period_start: review.period.start, period_end: review.period.end, title: review.title, headline: review.headline, doc: review, author: review.author, emailed_at: "2026-11-02T01:40:00Z", email_id: "fixture-email" }), "analytics report");
 
   // Sunday candidates (VIB-420): next week's two drafts waiting for John, a carousel and a text post on the fixture signal.
   const nextMonday = day(7 - ((new Date().getUTCDay() + 6) % 7));

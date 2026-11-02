@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "kind": "weekly",
+  "period": { "start": "2026-10-26", "end": "2026-11-01" },
+  "title": "Week 4 review",
+  "headline": "Sample: conversation clips carried Instagram while list carousels stalled",
+  "summary": [
+    "Sample data only. Conversation clips reached ten times the median of other Instagram posts.",
+    "LinkedIn impressions fell week over week; text posts still beat documents and video."
+  ],
+  "author": "weekly-report skill",
+  "blocks": [
+    { "type": "kpis", "title": "The week in numbers", "items": [
+      { "label": "LinkedIn impressions", "value": 1280, "delta": { "value": -1638, "label": "vs last week", "good": "up" }, "spark": [900, 2918, 1280] },
+      { "label": "Instagram followers", "value": 8396, "delta": { "value": -43, "label": "this week", "good": "up" }, "tone": "warn" },
+      { "label": "YouTube views", "value": 436, "delta": { "value": 276, "label": "vs last week", "good": "up" } },
+      { "label": "Report email", "value": null, "note": "Not verified" }
+    ] },
+    { "type": "bars", "title": "Instagram median reach by kind", "unit": "accounts", "items": [
+      { "label": "Conversation clips", "value": 419, "tone": "good" },
+      { "label": "Everything else", "value": 40 }
+    ] },
+    { "type": "line", "title": "LinkedIn impressions by week", "x": ["Oct 5", "Oct 12", "Oct 19", "Oct 26"], "series": [
+      { "name": "Impressions", "values": [1400, 900, 2918, 1280] }
+    ] },
+    { "type": "table", "title": "Top posts", "columns": [{ "label": "Post" }, { "label": "Channel" }, { "label": "Reach", "align": "r" }], "rows": [
+      [{ "text": "Sample clip", "url": "https://example.com/post" }, "Instagram", 1512],
+      ["Sample text post", "LinkedIn", 2828]
+    ] },
+    { "type": "findings", "tone": "good", "title": "Doing well", "items": [
+      { "title": "Sample clip", "body": "Earned shares and saves well above the median.", "channel": "instagram", "metrics": ["1,512 reach", "12 shares"] }
+    ] },
+    { "type": "recommendations", "title": "What to change next week", "items": [
+      { "title": "Make conversation clips the Instagram core", "body": "Post them as the main Instagram format.", "confidence": "high", "why_confidence": "Four posts, consistent gap.", "kind": "keep" },
+      { "title": "Try one news post a week", "body": "A fixed slot for timely stories.", "confidence": "low", "kind": "new" }
+    ] },
+    { "type": "plan", "title": "Next week", "items": [
+      { "date": "2026-11-02", "title": "Sample perspective post", "status": "planned", "channels": ["linkedin", "instagram"] },
+      { "date": "2026-11-04", "title": "Sample news post", "status": "suggested", "format": "LinkedIn text", "sources": [{ "label": "Sample source", "url": "https://example.com/news" }] }
+    ] },
+    { "type": "callout", "tone": "warn", "title": "Pipeline", "body": "Sample: one feed was down for ten days.", "items": ["Fixed on Nov 1"] },
+    { "type": "text", "title": "Notes", "body": "Sample paragraph one.\n\nSample paragraph two." }
+  ],
+  "sources": [{ "label": "Cockpit metrics", "url": "https://example.com/metrics" }]
+}
