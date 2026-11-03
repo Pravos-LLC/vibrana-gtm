@@ -36,7 +36,7 @@ export function rhythmProblems(v: unknown): string[] {
 
 /** Puts a rhythm in place of the one every reader uses (lib/rhythm.ts RHYTHM is shared, so it is changed in place). */
 export function applyRhythm(v: RhythmSetting): void {
-  RHYTHM.days.splice(0, RHYTHM.days.length, ...JSON.parse(JSON.stringify(v.days)));
+  RHYTHM.days.splice(0, RHYTHM.days.length, ...(JSON.parse(JSON.stringify(v.days)) as RhythmDay[]).map((d) => ({ ...d, note: d.note ?? "" })));
   RHYTHM.blocked = JSON.parse(JSON.stringify(v.blocked));
   if (Array.isArray(v.rules)) RHYTHM.rules.splice(0, RHYTHM.rules.length, ...v.rules);
   if (typeof v.summary === "string") RHYTHM.summary = v.summary;
@@ -47,9 +47,17 @@ let loadedAt = 0;
  * Applies the saved rhythm (or the guide's, when none is saved or the saved one is not valid). Read at most every 30
  * seconds per server process; `fresh` reads now (after a save). A failed read keeps what is in place.
  */
-export async function loadRhythm(db: SupabaseClient, opts: { fresh?: boolean } = {}): Promise<{ source: "setting" | "guide"; problems: string[] }> {
+export async function loadRhythm(db?: SupabaseClient, opts: { fresh?: boolean } = {}): Promise<{ source: "setting" | "guide"; problems: string[] }> {
   if (!opts.fresh && Date.now() - loadedAt < 30_000) return { source: current.source, problems: current.problems };
-  const { data, error } = await db.from("gtm_settings").select("value").eq("key", RHYTHM_KEY).maybeSingle();
+  // Always the service client unless a test passes one: a signed-in non-owner reads no row under row security, and
+  // that must never put the guide's rhythm in place for everyone in this process.
+  let data: unknown, error: { message: string } | null;
+  try {
+    const client = db ?? (await import("./db")).adminDb();
+    ({ data, error } = await client.from("gtm_settings").select("value").eq("key", RHYTHM_KEY).maybeSingle());
+  } catch (e) {
+    error = { message: e instanceof Error ? e.message : String(e) };
+  }
   if (error) return { source: current.source, problems: [`settings: ${error.message}`] };
   loadedAt = Date.now();
   const value = (data as { value?: unknown } | null)?.value;

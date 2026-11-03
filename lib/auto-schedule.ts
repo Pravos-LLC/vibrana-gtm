@@ -504,7 +504,7 @@ export async function autoSchedule(db: SupabaseClient, opts: { storyId?: string;
   if (!calendarFromDb()) throw new Error("auto-scheduling needs the database calendar (GTM_CALENDAR_SOURCE=db)");
   const now = opts.now ?? new Date();
   // The rhythm John saved in the cockpit, else the guide's (lib/rhythm-settings.ts).
-  await (await import("./rhythm-settings")).loadRhythm(db);
+  await (await import("./rhythm-settings")).loadRhythm();
   const {sharedPieceIds,scheduleSharedPieces}=await import("./piece-schedule");
   const sharedIds=await sharedPieceIds(db),sharedSet=new Set(sharedIds);
   const shared=await scheduleSharedPieces(db,{...opts,ids:sharedIds});

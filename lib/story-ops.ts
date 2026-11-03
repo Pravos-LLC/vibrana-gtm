@@ -171,6 +171,7 @@ export function defaultSlots(cal: Calendar, storyId: string, now = new Date()): 
 
 /** Schedules every unscheduled calendar item bound to a fully approved Story. Returns one proof line per item. */
 export async function scheduleStoryItems(admin: SupabaseClient, storyId: string, slots: SlotMap, opts: { dryRun?: boolean } = {}) {
+  await (await import("./rhythm-settings")).loadRhythm();
   const state = await storyState(admin, storyId);
   if (!state.allApproved) throw new Error("Approve every asset for every channel first (a current approval for the staged bytes).");
   return calendarFromDb() ? scheduleDbItems(admin, storyId, slots, opts) : scheduleFileItems(admin, storyId, slots, opts);

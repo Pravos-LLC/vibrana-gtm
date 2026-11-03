@@ -51,6 +51,7 @@ export async function scheduleSharedPieces(
     ids?: string[];
   } = {},
 ): Promise<AutoScheduleResult> {
+  await (await import("./rhythm-settings")).loadRhythm();
   const ids = (options.ids ?? (await sharedPieceIds(db))).filter(
       (id) => !options.storyId || id === options.storyId,
     ),
@@ -223,6 +224,7 @@ export async function retryPieceDelivery(
   deliveryId: string,
   options: { provider?: NonNullable<Parameters<typeof sendPieceDelivery>[3]>["provider"] } = {},
 ) {
+  await (await import("./rhythm-settings")).loadRhythm();
   let d = (await loadPieceDeliveries(db)).find((row) => row.id === deliveryId);
   if (!d) throw new Error("Delivery not found");
   if (d.state !== "failed")

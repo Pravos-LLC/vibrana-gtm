@@ -12,7 +12,7 @@ export const metadata = { title: "Settings" };
 
 export default async function Settings() {
   const db = await sessionDb();
-  const { source, problems } = await loadRhythm(db, { fresh: true });
+  const { source, problems } = await loadRhythm(undefined, { fresh: true });
   const initial: RhythmSetting = JSON.parse(JSON.stringify({ days: RHYTHM.days, blocked: RHYTHM.blocked ?? [], rules: RHYTHM.rules, summary: RHYTHM.summary }));
   const { data: history } = await db.from("gtm_settings_history").select("id,changed_at,changed_by").eq("key", RHYTHM_KEY).order("changed_at", { ascending: false }).limit(10);
   return (

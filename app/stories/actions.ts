@@ -277,7 +277,7 @@ export async function approvePieceChannels(input: { storyId: string; on: string[
   if (!owner) return { ok: false, error: "Not signed in as the cockpit owner." };
   const admin = adminDb();
   const pc = await import("@/lib/piece-channels");
-  await (await import("@/lib/rhythm-settings")).loadRhythm(admin);
+  await (await import("@/lib/rhythm-settings")).loadRhythm();
   const { dropPieceChannel } = await import("@/lib/kill-piece");
   try {
     const state = await pc.loadPieceChannels(admin, input.storyId);

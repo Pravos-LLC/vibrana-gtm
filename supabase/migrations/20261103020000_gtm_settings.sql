@@ -19,8 +19,9 @@ create table public.gtm_settings_history (
 );
 create index gtm_settings_history_key_idx on public.gtm_settings_history (key, changed_at desc);
 
--- Every saved version lands in the history, written by the database so no writer can skip it.
-create function public.gtm_settings_log() returns trigger language plpgsql security definer set search_path = '' as $$
+-- Every saved version lands in the history, written by the database so no writer can skip it. Security invoker: the only
+-- writer is the service role, which may write the history itself; owners only read.
+create function public.gtm_settings_log() returns trigger language plpgsql security invoker set search_path = '' as $$
 begin
   insert into public.gtm_settings_history (key, value, changed_at, changed_by) values (new.key, new.value, now(), new.updated_by);
   return new;

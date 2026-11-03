@@ -21,7 +21,7 @@ export async function saveRhythm(value: RhythmSetting): Promise<{ ok: true } | {
   const db = adminDb();
   const { error } = await db.from("gtm_settings").upsert({ key: RHYTHM_KEY, value, updated_at: new Date().toISOString(), updated_by: who });
   if (error) return { ok: false, error: error.message };
-  await loadRhythm(db, { fresh: true });
+  await loadRhythm(undefined, { fresh: true });
   for (const p of ["/settings", "/calendar", "/guide", "/content"]) revalidatePath(p);
   return { ok: true };
 }
@@ -32,7 +32,7 @@ export async function resetRhythm(): Promise<{ ok: true } | { ok: false; error: 
   const db = adminDb();
   const { error } = await db.from("gtm_settings").delete().eq("key", RHYTHM_KEY);
   if (error) return { ok: false, error: error.message };
-  await loadRhythm(db, { fresh: true });
+  await loadRhythm(undefined, { fresh: true });
   for (const p of ["/settings", "/calendar", "/guide", "/content"]) revalidatePath(p);
   return { ok: true };
 }

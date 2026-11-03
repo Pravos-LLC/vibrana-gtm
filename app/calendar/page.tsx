@@ -27,7 +27,7 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
   const { timezone } = calendarConfig();
   const today = todayIn(timezone);
   const db = await sessionDb();
-  await loadRhythm(db);
+  await loadRhythm();
   const plural = (n: number) => `${n} ${n === 1 ? "post" : "posts"}`;
 
   if (view === "list") {
