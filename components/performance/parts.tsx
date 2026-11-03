@@ -79,10 +79,10 @@ export function SyncLine({ sync, now }: { sync: { metrics: string | null; follow
 }
 
 /** The weekly report's headline and how many changes wait for John. */
-export function ReportStrip({ report }: { report: { week: number; headline: string | null; toDecide: number } | null }) {
+export function ReportStrip({ report }: { report: { week: number; headline: string | null; toDecide: number; period_start: string } | null }) {
   if (!report) return null;
   return (
-    <Link href={`/performance/report/${report.week}`} className="group flex flex-wrap items-baseline gap-x-3 gap-y-1 border-y border-line py-3 text-sm" data-testid="report-strip">
+    <Link href={`/performance/report/${report.period_start}`} className="group flex flex-wrap items-baseline gap-x-3 gap-y-1 border-y border-line py-3 text-sm" data-testid="report-strip">
       <span className="text-xs font-medium text-ink-3">Week {report.week} report</span>
       <span className="font-medium text-ink">{report.headline ?? "Written"}</span>
       {report.toDecide > 0 && <span className="text-blue-strong">{report.toDecide} {report.toDecide === 1 ? "change" : "changes"} to decide</span>}

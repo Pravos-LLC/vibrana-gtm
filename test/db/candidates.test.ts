@@ -12,7 +12,7 @@ const { loadSelectInput, selectCandidates } = await import("../../lib/candidates
 type CandidateInput = import("../../lib/candidates/validate.ts").CandidateInput;
 
 const SIGNAL = "00000000-0000-4000-8000-0000000000f1";
-// A season that covers the fixture candidates' week: Send to Review refuses a week no season covers.
+// A season that covers the fixture candidates' week (Stories of a covered week keep its season prefix).
 const SEASON = { id: "season-9", title: "Fixture candidates season", starts_on: new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10), ends_on: new Date(Date.now() + 120 * 86400_000).toISOString().slice(0, 10) };
 before(async () => {
   await seed();
@@ -103,12 +103,14 @@ test("Send to Review on a signal's candidate marks the signal drafted and links 
   await assert.rejects(rejectCandidate(db, FIXTURE_CANDIDATE_TEXT, "angle", null, "owner@gtm.test"), /Already accepted/);
 });
 
-test("Send to Review refuses a week no season covers, and leaves the candidate waiting", async () => {
+test("Send to Review works for a week no season covers: the Story has no season and no season prefix", async () => {
   const db = admin();
   await putCandidates(db, "2031-06-02", [input("no-season")]);
   const [row] = await listCandidates(db, { week_start: "2031-06-02" });
-  await assert.rejects(sendToReview(db, row.id, "owner@gtm.test"), /No season covers the week of 2031-06-02/);
-  assert.equal((await listCandidates(db, { week_start: "2031-06-02" }))[0].status, "candidate");
+  await sendToReview(db, row.id, "owner@gtm.test");
+  assert.equal((await listCandidates(db, { week_start: "2031-06-02" }))[0].status, "accepted");
+  const { data } = await db.from("gtm_stories").select("id,season_id").eq("id", "c310602-no-season").maybeSingle();
+  assert.deepEqual(data, { id: "c310602-no-season", season_id: null });
 });
 
 test("Reject records the reason on the candidate and as a taste label on its signal", async () => {

@@ -259,15 +259,15 @@ export function defaultWeekStart(now = new Date()): string {
   return addDays(mondayOf(localDate(now)), 7);
 }
 
-/** `--week`: a date (its Monday) or season week N of the current season. */
-export async function resolveCandidateWeek(db: SupabaseClient, arg: string | undefined, now = new Date()): Promise<string> {
+/** `--week`: a date (its Monday), or ISO week N of this year in Bali (no seasons since 2026-11-02). */
+export async function resolveCandidateWeek(_db: SupabaseClient, arg: string | undefined, now = new Date()): Promise<string> {
   if (!arg) return defaultWeekStart(now);
   if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) return mondayOf(arg);
-  if (!/^\d{1,2}$/.test(arg)) throw new Error("--week takes a season week number or a date (YYYY-MM-DD)");
-  const { resolveSeason } = await import("../seasons");
-  const { seasonWeekStart } = await import("../week");
-  const season = await resolveSeason(db, undefined, localDate(now));
-  return seasonWeekStart(season.starts_on, Number(arg));
+  if (!/^\d{1,2}$/.test(arg) || Number(arg) < 1 || Number(arg) > 53) throw new Error("--week takes an ISO week number (1 to 53) or a date (YYYY-MM-DD)");
+  // The Monday of ISO week N: week 1 holds January 4.
+  const year = Number(localDate(now).slice(0, 4));
+  const week1 = mondayOf(`${year}-01-04`);
+  return addDays(week1, (Number(arg) - 1) * 7);
 }
 
 const SIGNAL_COLUMNS = "id,title,lanes,score,status,requested_format,brief,last_seen,acted_at";

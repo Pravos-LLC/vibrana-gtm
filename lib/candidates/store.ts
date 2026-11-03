@@ -164,10 +164,10 @@ export async function rejectCandidate(db: SupabaseClient, id: string, reason: Re
 }
 
 /** The Story and calendar rows a candidate becomes. Pure, so the shape is unit tested. */
-export function candidateStory(c: CandidateRow, seasonId: string) {
-  const storyId = `${seasonStoryPrefix(seasonId)}c${c.week_start.replaceAll("-", "").slice(2)}-${c.slug}`.slice(0, 80).replace(/-$/, "");
+export function candidateStory(c: CandidateRow, seasonId: string | null) {
+  const storyId = `${seasonId ? seasonStoryPrefix(seasonId) : ""}c${c.week_start.replaceAll("-", "").slice(2)}-${c.slug}`.slice(0, 80).replace(/-$/, "");
   const label = new Date(`${c.week_start}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
-  const story = { id: storyId, title: `Candidate wk ${label} | ${c.title}`, link: loadRuntimeConfig().brand.websiteUrl, season_id: seasonId };
+  const story = { id: storyId, title: `Candidate wk ${label} | ${c.title}`, link: loadRuntimeConfig().brand.websiteUrl, ...(seasonId ? { season_id: seasonId } : {}) };
   // Tue, Wed, Thu of the week by position: a starting point John moves in the calendar.
   const date = addDays(c.week_start, 1 + (c.position % 3));
   const meta = { candidate_id: c.id, format: c.format, lens: c.lens, ...(c.slides ? { slides: c.slides } : {}), ...(c.video ? { video: c.video } : {}), sources: c.sources };
@@ -198,9 +198,9 @@ export async function sendToReview(db: SupabaseClient, id: string, actor: string
     const problems = candidateProblems({ ...c, instagram: c.instagram ?? undefined } as CandidateInput);
     const blocking = problems.errors.filter((e) => !/dash|banned/.test(e)); // John's own edits may keep his wording
     if (blocking.length) throw new Error(blocking.join("; "));
+    // No seasons (John, 2026-11-02): a candidate's Story carries the season that covers its week if one does, else none.
     const season = must(await db.from("gtm_seasons").select("id").lte("starts_on", c.week_start).gte("ends_on", c.week_start).order("starts_on", { ascending: false }).limit(1).maybeSingle(), "season") as { id: string } | null;
-    if (!season) throw new Error(`No season covers the week of ${c.week_start}; create it with \`gtm season set\` (or a brand.example.com migration) before sending candidates to review.`);
-    const plan = candidateStory(c, season.id);
+    const plan = candidateStory(c, (season as { id: string } | null)?.id ?? null);
     await writeStory(db, plan.story, plan.assets);
     must(await db.from("gtm_content_items").upsert(plan.items.map((i) => ({ ...i, updated_at: now })), { onConflict: "id", ignoreDuplicates: true }), "drafted calendar items");
     if (c.signal_id) {

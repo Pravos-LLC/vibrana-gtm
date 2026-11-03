@@ -6,7 +6,6 @@ import { Eyebrow } from "@/components/brand";
 import { SocialMark } from "@/components/guide/social-mark";
 import { ChangeDecision } from "@/components/reports/change-decision";
 import { Card } from "@/components/ui/card";
-import { currentSeason } from "@/lib/seasons";
 import { sessionDb } from "@/lib/supabase/server";
 import type { Evidence, Report, Verdict } from "@/lib/reports/guard";
 import type { Pack, PackPost } from "@/lib/reports/pack";
@@ -112,15 +111,15 @@ export const metadata = { title: "Weekly report" };
 
 export default async function WeeklyReportPage({ params }: { params: Promise<{ week: string }> }) {
   const { week: raw } = await params;
-  const week = Number(raw);
-  if (!Number.isInteger(week) || week < 1) notFound();
+  // A report is addressed by its Monday (/performance/report/2026-11-02). A bare number is an old link (a season week, or
+  // an ISO week): it opens the newest report with that number.
+  const monday = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
+  const week = monday ? 0 : Number(raw);
+  if (!monday && (!Number.isInteger(week) || week < 1)) notFound();
   const db = await sessionDb();
-  const { data: seasons } = await db.from("gtm_seasons").select("id,starts_on,ends_on").order("starts_on");
-  const today = new Date().toISOString().slice(0, 10);
-  const season = currentSeason((seasons ?? []) as { id: string; starts_on: string; ends_on: string }[], today);
-
-  let q = db.from("gtm_content_reports").select("id,season_id,week,period_start,period_end,status,headline,model,input,report,guard,finished_at,errors").eq("kind", "weekly").eq("week", week);
-  if (season) q = q.eq("season_id", season.id);
+  // Reports cover calendar weeks (ISO week numbers) since 2026-11-02; the newest report with this number is the one shown.
+  const base = db.from("gtm_content_reports").select("id,season_id,week,period_start,period_end,status,headline,model,input,report,guard,finished_at,errors").eq("kind", "weekly");
+  const q = monday ? base.eq("period_start", monday) : base.eq("week", week);
   const [{ data: rows }, { data: history }] = await Promise.all([
     q.order("period_start", { ascending: false }).limit(1),
     db.from("gtm_content_reports").select("id,week,period_start,headline,status").eq("kind", "weekly").order("period_start", { ascending: false }).limit(20),
@@ -134,7 +133,7 @@ export default async function WeeklyReportPage({ params }: { params: Promise<{ w
         <ol className="mt-3 space-y-2 text-sm">
           {(history ?? []).map((h: { id: string; week: number; period_start: string; headline: string | null; status: string }) => (
             <li key={h.id}>
-              <Link href={`/performance/report/${h.week}`} className={h.week === week ? "font-medium text-ink" : "text-ink-2 hover:text-ink"}>
+              <Link href={`/performance/report/${h.period_start}`} className={(monday ? h.period_start === monday : h.week === week) ? "font-medium text-ink" : "text-ink-2 hover:text-ink"}>
                 <span className="tabular-nums">Week {h.week}</span> <span className="text-ink-3">· {day(h.period_start)}</span>
               </Link>
               {h.headline && <p className="line-clamp-2 text-xs text-ink-3">{h.headline}</p>}
@@ -157,10 +156,10 @@ export default async function WeeklyReportPage({ params }: { params: Promise<{ w
       <Shell title="Weekly report" active="/performance">
         <div className="grid gap-12 xl:grid-cols-[minmax(0,1fr)_14rem]">
           <div>
-            <Eyebrow>Week {week}</Eyebrow>
+            <Eyebrow>{monday ? `Week of ${monday}` : `Week ${week}`}</Eyebrow>
             <h1 className="mt-3 font-display text-pl-3xl font-semibold tracking-tight text-ink">{rep?.status === "running" ? "This report is being written." : rep?.status === "failed" ? "This report failed." : "No report for this week yet."}</h1>
             <p className="mt-4 max-w-[62ch] text-pl-base leading-relaxed text-ink-2">
-              {rep?.status === "failed" ? rep.errors?.[0]?.error : "The report runs on Sunday at 08:00 Bali time. To write it now: gtm report weekly --week " + week + "."}
+              {rep?.status === "failed" ? rep.errors?.[0]?.error : `The report runs on Sunday at 08:00 Bali time. To write it now: gtm report weekly${monday ? ` --monday ${monday}` : ""}.`}
             </p>
           </div>
           {aside}

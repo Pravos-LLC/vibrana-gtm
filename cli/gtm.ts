@@ -1531,11 +1531,11 @@ const commands: Record<string, () => Promise<void>> = {
       const { resolveReportWeek } = await import("../lib/reports/week");
       if (sub === "pack") {
         const { buildPack, loadPackInputs } = await import("../lib/reports/pack");
-        const wk = await resolveReportWeek(adminDb(), { week, seasonId: flag("--season") });
+        const wk = await resolveReportWeek(adminDb(), { week, seasonId: flag("--season"), monday: flag("--monday") });
         return out(buildPack(await loadPackInputs(adminDb(), wk), wk, new Date()));
       }
       const { runWeeklyReport } = await import("../lib/reports/run");
-      const r = await runWeeklyReport(adminDb(), { week, seasonId: flag("--season"), dryRun: dry, force: argv.includes("--force"), to: flag("--to") });
+      const r = await runWeeklyReport(adminDb(), { week, seasonId: flag("--season"), monday: flag("--monday"), dryRun: dry, force: argv.includes("--force"), to: flag("--to") });
       const { reportText } = await import("../lib/reports/email");
       return out(r, () => {
         if (r.skipped) return console.log(`skipped: ${r.skipped}`);
@@ -1566,7 +1566,7 @@ const commands: Record<string, () => Promise<void>> = {
       const rows = must(await adminDb().from("gtm_content_reports").select("id,kind,week,period_start,period_end,status,headline,finished_at").order("period_start", { ascending: false }).limit(Number(flag("--limit") ?? 12)), "reports") as { id: string; kind: string; week: number | null; period_start: string; status: string; headline: string | null }[];
       return out(rows, () => { for (const x of rows) console.log(`${x.period_start} ${x.kind.padEnd(8)} ${x.week ? `W${x.week}`.padEnd(4) : "    "} ${x.status.padEnd(7)} ${x.headline ?? ""}`); });
     }
-    throw new Error("usage: gtm report weekly [--week N] [--season id] [--dry-run] [--force] [--to email] | pack [--week N] | baseline [--dry-run] | list [--limit N]");
+    throw new Error("usage: gtm report weekly [--monday YYYY-MM-DD | --week N --season id] [--dry-run] [--force] [--to email] | pack [--monday YYYY-MM-DD | --week N --season id] | baseline [--dry-run] | list [--limit N]");
   },
 
   async analytics() {

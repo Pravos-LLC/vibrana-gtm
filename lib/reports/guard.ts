@@ -9,7 +9,7 @@
 // format, channel and pillar. They never approve, schedule or publish anything.
 import { findBritishSpellings } from "../copy-guard";
 import { VOICE } from "../guide/content";
-import { addDays } from "../week";
+import { addDays, isoWeek } from "../week";
 import { CTAS, HOOKS, STORYLINES } from "../playbook/taxonomy";
 import { SLOT_CHANNELS, SLOT_FORMATS, type Pack } from "./pack";
 
@@ -73,8 +73,8 @@ export function unsupportedNumbers(text: string, pack: Pack, allowed = allowedNu
   t = t.replace(new RegExp(`\\b(?:${MONTHS})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`, "gi"), " ");
   t = t.replace(new RegExp(`\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?(?:${MONTHS})\\b`, "gi"), " ");
   t = t.replace(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/g, " ");
-  // "W2", "week 2", "Week 3": season weeks of the pack and the two weeks after it.
-  const weeks = new Set([pack.week.number, pack.week.previous.number, pack.week.number + 1, pack.week.number + 2].map(String));
+  // "W45", "week 45": the pack's week, the one before and the two after (ISO weeks wrap at the year's end).
+  const weeks = new Set([pack.week.number, pack.week.previous.number, isoWeek(addDays(pack.week.from, 7)).week, isoWeek(addDays(pack.week.from, 14)).week].map(String));
   t = t.replace(/\b(?:w|week\s+)(\d{1,2})\b/gi, (m, n: string) => (weeks.has(n) ? " " : m));
   const bad: string[] = [];
   // Scaled numbers ("1.2K", "12k", "3M", "1.2 thousand"): the expanded value must be in the pack, never just the prefix.
