@@ -15,11 +15,11 @@ import { localDate, resolveReportWeek } from "./week";
 import { openRouterReportWriter, reportModel, type ReportWriter } from "./writer";
 
 export type WeeklyOpts = {
-  week?: number; seasonId?: string; dryRun?: boolean; force?: boolean; now?: Date; deadline?: number;
+  week?: number; seasonId?: string; monday?: string; dryRun?: boolean; force?: boolean; now?: Date; deadline?: number;
   write?: ReportWriter; to?: string; live?: boolean; send?: boolean;
 };
 export type WeeklyResult = {
-  week: { season_id: string; number: number; from: string; to: string };
+  week: { season_id: string | null; number: number; from: string; to: string };
   dryRun: boolean; skipped?: string; id?: string; model?: string;
   pack?: Pack; guard?: Omit<GuardResult, "report">; report?: Report; email_id?: string | null; actions?: number;
 };
@@ -35,14 +35,14 @@ export function actionRows(reportId: string, r: Report) {
 
 export async function runWeeklyReport(db: SupabaseClient, opts: WeeklyOpts = {}): Promise<WeeklyResult> {
   const now = opts.now ?? new Date();
-  const wk = await resolveReportWeek(db, { week: opts.week, seasonId: opts.seasonId, now });
-  const week = { season_id: wk.season.id, number: wk.week, from: wk.from, to: wk.to };
+  const wk = await resolveReportWeek(db, { week: opts.week, seasonId: opts.seasonId, monday: opts.monday, now });
+  const week = { season_id: wk.season?.id ?? null, number: wk.week, from: wk.from, to: wk.to };
   let runId: string | null = null;
   if (!opts.dryRun) {
     const existing = must(await db.from("gtm_content_reports").select("id,status").eq("kind", "weekly").eq("period_start", wk.from).maybeSingle(), "existing report") as { id: string; status: string } | null;
     if (existing?.status === "done" && !opts.force) return { week, dryRun: false, skipped: `week ${wk.week} already has a report (use --force to write it again)`, id: existing.id };
     // A rerun clears the previous report, so the page shows "being written" rather than last run's text as current.
-    const row = { kind: "weekly", season_id: wk.season.id, week: wk.week, period_start: wk.from, period_end: wk.to, status: "running", started_at: now.toISOString(), finished_at: null, errors: [], report: null, headline: null, input: {}, guard: {}, email_id: null };
+    const row = { kind: "weekly", season_id: wk.season?.id ?? null, week: wk.week, period_start: wk.from, period_end: wk.to, status: "running", started_at: now.toISOString(), finished_at: null, errors: [], report: null, headline: null, input: {}, guard: {}, email_id: null };
     if (existing) {
       must(await db.from("gtm_content_reports").update(row).eq("id", existing.id), "restart report");
       // A rerun replaces the undecided proposals; decided ones stay as history.

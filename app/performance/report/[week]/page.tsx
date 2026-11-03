@@ -6,7 +6,6 @@ import { Eyebrow } from "@/components/brand";
 import { SocialMark } from "@/components/guide/social-mark";
 import { ChangeDecision } from "@/components/reports/change-decision";
 import { Card } from "@/components/ui/card";
-import { currentSeason } from "@/lib/seasons";
 import { sessionDb } from "@/lib/supabase/server";
 import type { Evidence, Report, Verdict } from "@/lib/reports/guard";
 import type { Pack, PackPost } from "@/lib/reports/pack";
@@ -115,12 +114,8 @@ export default async function WeeklyReportPage({ params }: { params: Promise<{ w
   const week = Number(raw);
   if (!Number.isInteger(week) || week < 1) notFound();
   const db = await sessionDb();
-  const { data: seasons } = await db.from("gtm_seasons").select("id,starts_on,ends_on").order("starts_on");
-  const today = new Date().toISOString().slice(0, 10);
-  const season = currentSeason((seasons ?? []) as { id: string; starts_on: string; ends_on: string }[], today);
-
-  let q = db.from("gtm_content_reports").select("id,season_id,week,period_start,period_end,status,headline,model,input,report,guard,finished_at,errors").eq("kind", "weekly").eq("week", week);
-  if (season) q = q.eq("season_id", season.id);
+  // Reports cover calendar weeks (ISO week numbers) since 2026-11-02; the newest report with this number is the one shown.
+  const q = db.from("gtm_content_reports").select("id,season_id,week,period_start,period_end,status,headline,model,input,report,guard,finished_at,errors").eq("kind", "weekly").eq("week", week);
   const [{ data: rows }, { data: history }] = await Promise.all([
     q.order("period_start", { ascending: false }).limit(1),
     db.from("gtm_content_reports").select("id,week,period_start,headline,status").eq("kind", "weekly").order("period_start", { ascending: false }).limit(20),

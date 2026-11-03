@@ -35,7 +35,8 @@ test("content-report cron: with the secret it runs the week's report; an already
 
 test("content-report cron: a failure is a 500 with the reason", async () => {
   process.env.CRON_SECRET = "s3cret-value";
-  use([{ method: "GET", url: REST + "gtm_seasons", status: 500, json: { message: "db down" } }]);
+  // No seasons: the first read is the existing report for the calendar week.
+  use([{ method: "GET", url: REST + "gtm_content_reports", status: 500, json: { message: "db down" } }]);
   const res = await route.GET(req("Bearer s3cret-value"));
   assert.equal(res.status, 500);
   assert.match((await res.json()).error, /db down/);

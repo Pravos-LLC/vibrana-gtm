@@ -54,7 +54,7 @@ const INPUTS = (): PackInputs => ({
     item({ id: "essay-substack", date: "2026-10-09", pillar: "proof", format: "text", channels: ["newsletter"], status: "published", published_at: "2026-10-09T01:00:00Z", title: "Regenera essay" }),
     item({ id: "top-7-linkedin", date: "2026-10-14", pillar: "lists", format: "document", title: "Example campaign title 7" }),
     item({ id: "wave-linkedin", date: "2026-10-15", pillar: "perspective", format: "video", status: "scheduled", zernio_post_id: "zz", title: "The Wave" }),
-    item({ id: "loop-linkedin", date: "2027-01-05", pillar: "perspective", format: "video", title: "Loop engineering" }),
+    item({ id: "loop-linkedin", date: "2027-01-05", pillar: "perspective", format: "video", title: "Loop engineering", status: "banked" }),
   ],
   followers: [
     { account_id: "a-li", platform: "linkedin", date: "2026-10-04", followers: 3766 },
@@ -437,4 +437,11 @@ test("email: escapes model text", () => {
   const r = { ...EMPTY, headline: "<b>4</b> comments" };
   assert.match(reportHtml(pack, r, "https://c.test"), /&lt;b&gt;4&lt;\/b&gt; comments/);
   assert.equal(reportSubject(pack, r), "Week 1 report: <b>4</b> comments");
+});
+
+test("a report covers a calendar week, numbered by its ISO week, with no season", async () => {
+  const { calendarReportWeek } = await import("../lib/reports/week.ts");
+  const wk = calendarReportWeek("2026-12-16", "2026-12-16");
+  assert.deepEqual([wk.season, wk.week, wk.from, wk.to, wk.prev.week, wk.prev.from, wk.next.from, wk.next.to], [null, 51, "2026-12-14", "2026-12-20", 50, "2026-12-07", "2026-12-21", "2027-01-03"]);
+  assert.equal(calendarReportWeek("2027-01-01", "2027-01-01").week, 53);
 });

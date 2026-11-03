@@ -89,7 +89,7 @@ export type SlotItem = Pick<ItemRow, "id" | "date" | "time" | "pillar" | "format
 
 export type Pack = {
   version: 1;
-  week: { season_id: string; number: number; from: string; to: string; today: string; previous: { number: number; from: string; to: string } };
+  week: { season_id: string | null; number: number; from: string; to: string; today: string; previous: { number: number; from: string; to: string } };
   phase: { label: string; success: string[]; tracked_not_judged: string[] };
   rules: typeof RULES; targets: typeof TARGETS;
   pillars: { slug: PillarSlug; name: string; share: number; funnel_role: string; awareness_job: string; leading_metric: LeadingMetric }[];
@@ -242,7 +242,8 @@ export function buildPack(inp: PackInputs, wk: ReportWeek, now: Date): Pack {
   };
   const slot = (i: ItemRow): SlotItem => ({ id: i.id, date: i.date, time: i.time, pillar: i.pillar, format: i.format, channels: i.channels, status: i.status, title: i.title, ...("lens" in i ? { lens: i.lens ?? null } : {}) });
   const upcoming = inp.items.filter((i) => i.date >= wk.next.from && i.date <= wk.next.to && !["published", "skipped", "banked"].includes(i.status)).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).map(slot);
-  const reserve = inp.items.filter((i) => i.date > wk.season.ends_on && ["idea", "drafted", "approved"].includes(i.status)).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).slice(0, 20).map(slot);
+  // The bank: pieces John set aside with no day (status banked, no seasons since 2026-11-02).
+  const reserve = inp.items.filter((i) => i.status === "banked").sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).slice(0, 20).map(slot);
 
   let conversations: Pack["conversations"] = null;
   if (inp.comments) {
@@ -254,7 +255,7 @@ export function buildPack(inp: PackInputs, wk: ReportWeek, now: Date): Pack {
 
   const pack: Pack = {
     version: 1,
-    week: { season_id: wk.season.id, number: wk.week, from: wk.from, to: wk.to, today: wk.today, previous: { number: wk.prev.week, from: wk.prev.from, to: wk.prev.to } },
+    week: { season_id: wk.season?.id ?? null, number: wk.week, from: wk.from, to: wk.to, today: wk.today, previous: { number: wk.prev.week, from: wk.prev.from, to: wk.prev.to } },
     phase: { label: PHASE.label, success: PHASE.success.map((s) => s.label), tracked_not_judged: PHASE.tracked_not_judged },
     rules: RULES, targets: TARGETS,
     pillars: PILLARS.map((p) => ({ slug: p.slug, name: p.name, share: p.share, funnel_role: p.funnel_role, awareness_job: p.awareness_job, leading_metric: p.leading_metric })),
