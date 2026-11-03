@@ -217,6 +217,7 @@ async function mediaItems(cal: Calendar, paths: string[] = [], upload: boolean, 
 /** Create the Zernio post for one approved item. `now` publishes immediately; `schedule` uses the calendar time. */
 export async function sendCalendarItem(cal: Calendar, id: string, opts: SendOpts = {}) {
   const mode = opts.mode ?? "schedule";
+  if (cal.source === "db") { const { adminDb } = await import("./db"); await (await import("./rhythm-settings")).loadRhythm(opts.db ?? adminDb()); }
   const item = cal.items.find((entry) => entry.id === id);
   if (!item) throw new Error(`no calendar item ${id}`);
   if (item.status !== "approved") throw new Error(`${id} is ${item.status}; only approved items can be scheduled`);

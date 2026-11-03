@@ -503,6 +503,8 @@ export async function addMissingCalendarItem(db: SupabaseClient, row: ContentRow
 export async function autoSchedule(db: SupabaseClient, opts: { storyId?: string; dryRun?: boolean; now?: Date; holds?: Hold[]; pieces?: SeasonPiece[] } = {}): Promise<AutoScheduleResult> {
   if (!calendarFromDb()) throw new Error("auto-scheduling needs the database calendar (GTM_CALENDAR_SOURCE=db)");
   const now = opts.now ?? new Date();
+  // The rhythm John saved in the cockpit, else the guide's (lib/rhythm-settings.ts).
+  await (await import("./rhythm-settings")).loadRhythm(db);
   const {sharedPieceIds,scheduleSharedPieces}=await import("./piece-schedule");
   const sharedIds=await sharedPieceIds(db),sharedSet=new Set(sharedIds);
   const shared=await scheduleSharedPieces(db,{...opts,ids:sharedIds});
