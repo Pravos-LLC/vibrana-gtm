@@ -42,6 +42,7 @@ export default async function StoryPage({ params }: { params: Promise<{ storyId:
   const { storyId } = await params;
   if (!/^[a-z0-9][a-z0-9-]*$/.test(storyId)) notFound();
   const db = await sessionDb();
+  await (await import("@/lib/rhythm-settings")).loadRhythm();
   const { data: story } = await db.from("gtm_stories").select("*").eq("id", storyId).maybeSingle();
   if (!story) notFound();
   const [{ data: assetRows }, { data: itemRows }] = await Promise.all([

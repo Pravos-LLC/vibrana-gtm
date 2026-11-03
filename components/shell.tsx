@@ -1,7 +1,7 @@
 import { Suspense, cache } from "react";
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { BookOpen, CalendarDays, DoorOpen, FileChartColumn, Film, Home, Lightbulb, ListChecks, LogOut, Mail, MessagesSquare, PenLine, PieChart, Radar, Receipt, Sparkles, Users } from "lucide-react";
+import { BookOpen, CalendarDays, DoorOpen, FileChartColumn, Film, Home, Lightbulb, ListChecks, LogOut, Mail, MessagesSquare, PenLine, PieChart, Radar, Receipt, Settings2, Sparkles, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarInset, SidebarLabel, SidebarMenu, SidebarMenuButton, SidebarProvider, SidebarTrigger, type NavBadge } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/toaster";
@@ -38,7 +38,7 @@ const NAV = [
     { href: "/guide", label: "Content Guide", icon: BookOpen },
     { href: "/inspiration", label: "Inspiration", icon: Sparkles },
   ] },
-  { group: "Admin", items: [{ href: "/costs", label: "Costs", icon: Receipt }] },
+  { group: "Admin", items: [{ href: "/settings", label: "Settings", icon: Settings2 }, { href: "/costs", label: "Costs", icon: Receipt }] },
 ];
 
 export async function Shell({ title, active, children, updated, wide, team }: { title: string; active: string; children: React.ReactNode; updated?: string | null; wide?: boolean; team?: boolean }) {

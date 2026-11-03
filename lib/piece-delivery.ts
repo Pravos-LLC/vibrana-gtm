@@ -364,6 +364,7 @@ export async function sendPieceDelivery(
   cal: Calendar,
   options: { retry?: boolean; provider?: Partial<Provider> } = {},
 ): Promise<PieceDelivery | null> {
+  await (await import("./rhythm-settings")).loadRhythm();
   const p = { ...provider, ...options.provider };
   // Every send and retry of a shared piece passes here, including reservations made before a block was added.
   const row = must(await db.from("gtm_piece_deliveries").select("calendar_id,story_id,channel").eq("id", id).maybeSingle(), "delivery channel") as Pick<PieceDelivery, "calendar_id" | "story_id" | "channel"> | null;

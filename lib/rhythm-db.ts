@@ -9,6 +9,7 @@ import { rowText, type CopyAsset } from "./row-text";
 type Row = { id: string; date: string; channels: string[] | null; status: string; pillar: string | null; format: string; story_id: string | null; title: string; body: string | null; story_assets: string[] | null; zernio_post_id: string | null };
 
 export async function loadLintPosts(db: SupabaseClient, from: string, to: string): Promise<LintPost[]> {
+  await (await import("./rhythm-settings")).loadRhythm();
   const rows = must(await db.from("gtm_content_items").select("id,date,channels,status,pillar,format,story_id,title,body,story_assets,zernio_post_id")
     .gte("date", from).lte("date", to).order("date").order("id"), "calendar rows for the rhythm lint") as Row[];
   // A Story row with no text yet reads its Story's copy (lib/row-text.ts).

@@ -43,6 +43,7 @@ export const metadata = { title: "Guide" };
 
 export default async function GuidePage() {
   const db = await sessionDb();
+  await (await import("@/lib/rhythm-settings")).loadRhythm();
   const { data: identity, error: identityError } = await db.auth.getClaims();
   if (identityError || (identity?.claims?.app_metadata as { gtm_owner?: boolean } | undefined)?.gtm_owner !== true) notFound();
   const today = new Date().toLocaleDateString("en-CA", { timeZone: CALENDAR.timezone });

@@ -49,6 +49,7 @@
   "supabase/migrations/20261102010000_gtm_analytics_reports.sql": "a65c1899fbe0c80034ed659eaacd9de1af4f84ec15638744efdc94782c0e8ce5",
   "supabase/migrations/20261102030000_gtm_comment_final_source.sql": "56440f41ad505975cc4e1c09707ffa0228e226cf9e404730eadfaf930d04f817",
   "supabase/migrations/20261103010000_gtm_banked_status.sql": "7b50aa7931cc60e2ba520d5994e52f971d572202f5926523fc36e3c73059098e",
+  "supabase/migrations/20261103020000_gtm_settings.sql": "daebf5e2e576cc1763c0cbe464eb64c4d1e3adf6b9f9a845cf1b45ccbda4cd13",
   "supabase/tests/01_schema_security.test.sql": "2dce170e9481f4088c9dabc3fb59e5a9492d1f971b2eb7341e1038414dee1ce9",
   "supabase/tests/content_review.sql": "2ef1303add804bac23efb5a2f2eac0286b4cee5109670c4cca93c41fe7bfb032",
   "supabase/tests/gtm_analytics_reports.sql": "0b5ef6c1d34870c43aaac6b47f6f6492c3f9c1804ef2e7cd96c6cac2dbd56829",
