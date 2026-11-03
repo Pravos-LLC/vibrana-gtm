@@ -438,8 +438,7 @@ export function planSlots(input: { items: Item[]; ready: Item[]; now: Date; time
   // Planned slots that are still ahead claim their days before anything is moved.
   const toMove: Item[][] = [];
   for (const group of ordered) {
-    // A date John set further out than eight weeks waits: it is queued once it comes within the horizon.
-    if (group[0].date > seasonEnd) { for (const i of group) skipped.push({ id: i.id, reason: `dated ${i.date}, more than eight weeks out: it is scheduled once it is within eight weeks` }); continue; }
+    // A date John set is kept however far out (the design: a dated piece goes out that day); the horizon bounds moves only.
     const keeps = group.every((i) => ahead(i.date, i.time ?? channelTime(i.channels[0], i.format)) && !taken.has(`${i.channels[0]}|${i.date}`));
     if (keeps) claim(group, group[0].date, false);
     else toMove.push(group);
