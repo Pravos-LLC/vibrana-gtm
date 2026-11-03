@@ -63,16 +63,7 @@ export async function scheduleSharedPieces(
       notFinal: [],
     };
   if (!ids.length) return result;
-  const seasons = await readPages<Season>(
-      (from, to) =>
-        db
-          .from("gtm_seasons")
-          .select("id,starts_on,ends_on")
-          .order("id")
-          .range(from, to),
-      "publishing season rules",
-    ),
-    pieces = loadSeasonPieces();
+  const pieces = loadSeasonPieces();
   for (const storyId of ids) {
     try {
       if (!options.dryRun) await reconcilePieceDeliveries(db, { storyId });
@@ -154,7 +145,6 @@ export async function scheduleSharedPieces(
         ready,
         now: options.now ?? new Date(),
         timeZone: cal.timezone,
-        seasons,
         manual: cal.manual,
       });
       result.skipped.push(...plan.skipped);
@@ -187,7 +177,6 @@ export async function scheduleSharedPieces(
             ready,
             now: options.now ?? new Date(),
             timeZone: cal.timezone,
-            seasons,
             manual: cal.manual,
           });
           if (!plan.slotted.length)
@@ -254,21 +243,11 @@ export async function retryPieceDelivery(
       channels: [d.channel],
       status: "approved",
     } as Item;
-    const seasons = await readPages<Season>(
-      (from, to) =>
-        db
-          .from("gtm_seasons")
-          .select("id,starts_on,ends_on")
-          .order("id")
-          .range(from, to),
-      "publishing season rules",
-    );
     const plan = planSlots({
       items: cal.items.filter((i) => i.id !== d!.calendar_id),
       ready: [ready],
       now: new Date(),
       timeZone: cal.timezone,
-      seasons,
       manual: cal.manual,
     });
     if (!plan.slotted[0])

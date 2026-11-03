@@ -47,6 +47,8 @@
   "supabase/migrations/20261029000000_client_feedback.sql": "3c60872de4d9a0322d9cd216ce1f7abe439749a93e84d43312d93aad7b291e0e",
   "supabase/migrations/20261030010736_publication_internal_helper_grants.sql": "dffcb3243e52b81fad53fc7ece0d5df3ca5b10d65730d38dc034d534bc44a191",
   "supabase/migrations/20261102010000_gtm_analytics_reports.sql": "a65c1899fbe0c80034ed659eaacd9de1af4f84ec15638744efdc94782c0e8ce5",
+  "supabase/migrations/20261102030000_gtm_comment_final_source.sql": "56440f41ad505975cc4e1c09707ffa0228e226cf9e404730eadfaf930d04f817",
+  "supabase/migrations/20261103010000_gtm_banked_status.sql": "7b50aa7931cc60e2ba520d5994e52f971d572202f5926523fc36e3c73059098e",
   "supabase/tests/01_schema_security.test.sql": "2dce170e9481f4088c9dabc3fb59e5a9492d1f971b2eb7341e1038414dee1ce9",
   "supabase/tests/content_review.sql": "2ef1303add804bac23efb5a2f2eac0286b4cee5109670c4cca93c41fe7bfb032",
   "supabase/tests/gtm_analytics_reports.sql": "0b5ef6c1d34870c43aaac6b47f6f6492c3f9c1804ef2e7cd96c6cac2dbd56829",
@@ -82,6 +84,5 @@
   "supabase/tests/gtm_storyboard_agent_notes_never_block.sql": "8fdf945d8eebf5453b33f632141115291db4bdcdf3d6f5a23b8072afa4cbb338",
   "supabase/tests/gtm_storyboard_approve_with_notes.sql": "ef2e95b706ebb0badf2705135d0465eec785a11063c39e707a6ea83cb5cc5474",
   "supabase/tests/gtm_storyboards.sql": "3723e55e35e31693ea853e65e044513b54d37a7a40ee81e3c93078cfad81632b",
-  "supabase/tests/gtm_work_items.sql": "17d580c26ec298ba65f6cebbca943a059c46de1ba7e5a735e15a619e0e37edd9",
-  "supabase/migrations/20261102030000_gtm_comment_final_source.sql": "56440f41ad505975cc4e1c09707ffa0228e226cf9e404730eadfaf930d04f817"
+  "supabase/tests/gtm_work_items.sql": "17d580c26ec298ba65f6cebbca943a059c46de1ba7e5a735e15a619e0e37edd9"
 }

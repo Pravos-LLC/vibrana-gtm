@@ -55,6 +55,7 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
           summary={`${range(monday, end)} · ${timezone} · ${plural(shown.length)} · drag a post to another day`}
           nav={{ param: "week", labels: ["This week", "Previous week", "Next week"], today: "", previous: addDays(monday, -7), next: addDays(monday, 7) }} />
         {around && <WeekLint report={lintCalendar(around, monday)[0]} gaps={gapsFor(around, monday < today ? today : monday, end)} />}
+        <BankLink />
         <CalendarBoard rhythmLabels={Object.fromEntries([...WEEKDAYS, ...shown.map(p => p.date)].map(d => [d, dayLabels(d)]))} view="week" posts={shown} monday={monday} today={today} />
       </Shell>
     );
@@ -76,6 +77,11 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
       <CalendarBoard rhythmLabels={Object.fromEntries([...WEEKDAYS, ...shown.map(p => p.date)].map(d => [d, dayLabels(d)]))} view="month" posts={shown} month={current} today={today} />
     </Shell>
   );
+}
+
+/** The bank: approved pieces with no day yet ("not now"). They live in the list view, filtered to Banked. */
+function BankLink() {
+  return <p className="mb-3 text-xs text-ink-3"><a className="text-violet-strong underline-offset-2 hover:underline" href="/calendar?view=list&status=banked">The bank</a>: pieces put aside for later. Open one to schedule it.</p>;
 }
 
 function monthName(month: string) {

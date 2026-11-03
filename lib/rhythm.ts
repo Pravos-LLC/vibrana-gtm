@@ -125,7 +125,7 @@ export type WeekReport = {
   monday: string; pieces: number; issues: Issue[];
 };
 
-const live = (p: LintPost) => p.status !== "skipped";
+const live = (p: LintPost) => p.status !== "skipped" && p.status !== "banked";
 const days = (a: string, b: string) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 86_400_000);
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const short = (iso: string) => `${weekdayOf(iso)} ${Number(iso.slice(8))} ${MONTHS[Number(iso.slice(5, 7)) - 1]}`;

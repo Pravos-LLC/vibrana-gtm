@@ -96,7 +96,7 @@ const isMedia = (a: StoryAsset) => a.kind === "video" || a.kind === "image";
 export function buildSeasonInput(raw: SeasonRaw): SeasonInput {
   const { season } = raw;
   const seasonStories = new Map(raw.stories.map((s) => [s.id, s]));
-  const live = raw.items.filter((i) => i.status !== "skipped" && ((i.date >= season.starts_on && i.date <= season.ends_on) || (i.story_id && seasonStories.has(i.story_id))));
+  const live = raw.items.filter((i) => i.status !== "skipped" && i.status !== "banked" && ((i.date >= season.starts_on && i.date <= season.ends_on) || (i.story_id && seasonStories.has(i.story_id))));
   const groups = new Map<string, Item[]>();
   for (const item of live) {
     const own = item.story_id && seasonStories.has(item.story_id);

@@ -241,7 +241,7 @@ export function buildPack(inp: PackInputs, wk: ReportWeek, now: Date): Pack {
     with_cta: new Set(weekItems.filter((i) => i.cta).map(pieceOf)).size,
   };
   const slot = (i: ItemRow): SlotItem => ({ id: i.id, date: i.date, time: i.time, pillar: i.pillar, format: i.format, channels: i.channels, status: i.status, title: i.title, ...("lens" in i ? { lens: i.lens ?? null } : {}) });
-  const upcoming = inp.items.filter((i) => i.date >= wk.next.from && i.date <= wk.next.to && !["published", "skipped"].includes(i.status)).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).map(slot);
+  const upcoming = inp.items.filter((i) => i.date >= wk.next.from && i.date <= wk.next.to && !["published", "skipped", "banked"].includes(i.status)).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).map(slot);
   const reserve = inp.items.filter((i) => i.date > wk.season.ends_on && ["idea", "drafted", "approved"].includes(i.status)).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).slice(0, 20).map(slot);
 
   let conversations: Pack["conversations"] = null;

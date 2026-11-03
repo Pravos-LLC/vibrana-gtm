@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { assetIdFromKey, channelApproved, channelTime, heldBy, holdFor, holdReason, loadHolds, planSlots, rebindStoryItem, seasonEndFor } from "../lib/auto-schedule";
+import { assetIdFromKey, channelApproved, channelTime, heldBy, holdFor, holdReason, loadHolds, planSlots, rebindStoryItem, horizonEnd } from "../lib/auto-schedule";
 import type { Item } from "../lib/calendar";
 import { blockedUntil, storyHolds, thirdPartyApproved } from "../lib/third-party";
 
@@ -24,7 +24,7 @@ test("channel times follow the guide: LinkedIn 08:30 (14:00 for video), YouTube 
 
 test("a planned slot that is still ahead and free is kept as is", () => {
   const li = item("s1-01-sample-piece-01-linkedin", "2026-10-13", "14:00", "linkedin", { format: "video" });
-  const { slotted, skipped } = planSlots({ items: [li], ready: [li], now: NOW, timeZone: TZ, seasons: SEASON });
+  const { slotted, skipped } = planSlots({ items: [li], ready: [li], now: NOW, timeZone: TZ });
   assert.deepEqual(skipped, []);
   assert.deepEqual(slotted.map((s) => [s.id, s.date, s.time, s.moved]), [["s1-01-sample-piece-01-linkedin", "2026-10-13", "14:00", false]]);
 });
@@ -33,7 +33,7 @@ test("a missed piece moves, with its channels together, to the next day whose pr
   const top7 = [item("s1-07-top-7-linkedin", "2026-10-08", "08:30", "linkedin"), item("s1-07-top-7-instagram", "2026-10-08", "18:00", "instagram")];
   // A list carousel: Friday is Lists, so the pair skips Monday (Lists is only its fallback) and lands on Friday.
   const tuesday = item("other-linkedin", "2026-10-13", "14:00", "linkedin", { status: "scheduled", zernio_post_id: "z1" });
-  const { slotted } = planSlots({ items: [...top7, tuesday], ready: top7, now: NOW, timeZone: TZ, seasons: SEASON });
+  const { slotted } = planSlots({ items: [...top7, tuesday], ready: top7, now: NOW, timeZone: TZ });
   assert.deepEqual(slotted.map((s) => [s.id, s.date, s.time, s.moved, s.from.date]), [
     ["s1-07-top-7-linkedin", "2026-10-16", "08:30", true, "2026-10-08"],
     ["s1-07-top-7-instagram", "2026-10-16", "18:00", true, "2026-10-08"],
@@ -43,7 +43,7 @@ test("a missed piece moves, with its channels together, to the next day whose pr
 test("pieces planned for a day claim it first; a missed piece takes its next rhythm day", () => {
   const planned = item("wed-linkedin", "2026-10-14", "08:30", "linkedin");
   const missed = item("missed-linkedin", "2026-10-08", "08:30", "linkedin");
-  const { slotted } = planSlots({ items: [planned, missed], ready: [missed, planned], now: NOW, timeZone: TZ, seasons: SEASON });
+  const { slotted } = planSlots({ items: [planned, missed], ready: [missed, planned], now: NOW, timeZone: TZ });
   assert.deepEqual(slotted.map((s) => [s.id, s.date]), [["wed-linkedin", "2026-10-14"], ["missed-linkedin", "2026-10-16"]]);
 });
 
@@ -51,11 +51,11 @@ test("a hand-placed piece keeps its day even when another piece holds it; only i
   // Review F3: John placed both; the lint warns about two pieces on Wednesday instead of the scheduler moving one.
   const a = item("a-linkedin", "2026-10-14", "08:30", "linkedin");
   const b = item("b-instagram", "2026-10-14", "18:00", "instagram");
-  assert.deepEqual(planSlots({ items: [a, b], ready: [a, b], now: NOW, timeZone: TZ, seasons: SEASON }).slotted.map((s) => [s.id, s.date, s.moved]),
+  assert.deepEqual(planSlots({ items: [a, b], ready: [a, b], now: NOW, timeZone: TZ }).slotted.map((s) => [s.id, s.date, s.moved]),
     [["a-linkedin", "2026-10-14", false], ["b-instagram", "2026-10-14", false]]);
   // Two posts on one channel and day: the second moves instead of double-posting.
   const c = item("c-linkedin", "2026-10-14", "14:00", "linkedin", { format: "video" });
-  const moved = planSlots({ items: [a, c], ready: [a, c], now: NOW, timeZone: TZ, seasons: SEASON }).slotted;
+  const moved = planSlots({ items: [a, c], ready: [a, c], now: NOW, timeZone: TZ }).slotted;
   assert.deepEqual(moved.find((s) => s.id === "c-linkedin")!.moved, true);
   assert.notEqual(moved.find((s) => s.id === "c-linkedin")!.date, "2026-10-14");
 });
@@ -65,7 +65,7 @@ test("nothing is ever slotted in the past or under 30 minutes away", () => {
   // (a primary day inside PRIMARY_WINDOW_DAYS beats Monday, where Lists is only the fallback).
   const now = new Date("2026-10-16T06:10:00Z");
   const missed = item("late-linkedin", "2026-10-13", "08:30", "linkedin");
-  const { slotted } = planSlots({ items: [missed], ready: [missed], now, timeZone: TZ, seasons: SEASON });
+  const { slotted } = planSlots({ items: [missed], ready: [missed], now, timeZone: TZ });
   assert.deepEqual(slotted.map((s) => [s.date, s.time]), [["2026-10-23", "08:30"]]);
   for (const s of slotted) assert.ok(new Date(`${s.date}T${s.time}:00+02:00`).getTime() > now.getTime());
 });
@@ -78,9 +78,9 @@ test("Saturday takes only Instagram and YouTube: a reel goes there, a LinkedIn l
   const reel = [item("s1-03-sample-piece-03-youtube", "2026-10-08", "17:00", "youtube", { format: "video", pillar: "perspective" }),
     item("s1-03-sample-piece-03-instagram", "2026-10-08", "18:00", "instagram", { format: "video", pillar: "perspective" })];
   const withLi = [...reel, item("s1-03-sample-piece-03-linkedin", "2026-10-08", "14:00", "linkedin", { format: "video", pillar: "perspective" })];
-  const open = planSlots({ items: [...busyWeek, ...reel], ready: reel, now: NOW, timeZone: TZ, seasons: SEASON });
+  const open = planSlots({ items: [...busyWeek, ...reel], ready: reel, now: NOW, timeZone: TZ });
   assert.deepEqual([...new Set(open.slotted.map((s) => s.date))], ["2026-10-17"]);
-  const li = planSlots({ items: [...busyWeek, ...withLi], ready: withLi, now: NOW, timeZone: TZ, seasons: SEASON });
+  const li = planSlots({ items: [...busyWeek, ...withLi], ready: withLi, now: NOW, timeZone: TZ });
   assert.deepEqual([...new Set(li.slotted.map((s) => s.date))], ["2026-10-19"], "the next Monday, its own pillar");
 });
 
@@ -96,32 +96,31 @@ const fullSeason = (free: string[] = []) => {
   return out;
 };
 
-test("F1: a move never lands after the current season ends; a piece with no open day stays put and says it doesn't fit", () => {
+test("F1: a move never lands more than eight weeks out; a piece with no open day stays put and says it doesn't fit", () => {
   const missed = item("signal-x-linkedin", "2026-10-08", "08:30", "linkedin", { format: "text", pillar: "perspective" });
-  const { slotted, skipped } = planSlots({ items: [...fullSeason(), missed], ready: [missed], now: NOW, timeZone: TZ, seasons: SEASON });
+  const { slotted, skipped } = planSlots({ items: [...fullSeason(), missed], ready: [missed], now: NOW, timeZone: TZ });
   assert.deepEqual(slotted, []);
-  assert.match(skipped[0].reason, /^doesn't fit this season: no open day before it ends on 2026-12-11/);
-  assert.equal(seasonEndFor(SEASON, "2026-10-17"), "2026-12-11");
-  assert.equal(seasonEndFor([...SEASON, { id: "s2", starts_on: "2027-01-12", ends_on: "2027-03-20" }], "2026-12-20"), "2027-03-20", "between seasons: the next one");
+  assert.match(skipped[0].reason, /^doesn't fit: no open posting day in the next eight weeks \(to 2026-12-07\)/);
+  assert.equal(horizonEnd("2026-12-20"), "2027-02-14", "no seasons: always eight weeks from today");
 });
 
 test("F2: primary day, then fallback day, within two weeks; then the earliest open day ('drops back to whatever is available')", () => {
   // Perspective is Monday only, and no day's fallback. Every Monday is taken, so it takes the first open weekday.
   const mondays = ["2026-10-12", "2026-10-19", "2026-10-26"].map((d) => item(`mon-${d}-linkedin`, d, "14:00", "linkedin", { status: "scheduled", zernio_post_id: `m-${d}`, format: "text", pillar: "proof", story_id: `mon-${d}` }));
   const missed = item("signal-y-linkedin", "2026-10-08", "08:30", "linkedin", { format: "text", pillar: "perspective" });
-  const { slotted } = planSlots({ items: [...mondays, missed], ready: [missed], now: NOW, timeZone: TZ, seasons: SEASON });
+  const { slotted } = planSlots({ items: [...mondays, missed], ready: [missed], now: NOW, timeZone: TZ });
   // The first open weekday after the taken Monday: Tuesday (no look rules since 2026-11-02), never Mon 7 December.
   assert.deepEqual(slotted.map((s) => s.date), ["2026-10-13"]);
   // A Lists piece with Friday taken in the window takes Monday, its fallback, before any other day.
   const fridays = ["2026-10-16", "2026-10-23"].map((d) => item(`fri-${d}-linkedin`, d, "08:30", "linkedin", { status: "scheduled", zernio_post_id: `f-${d}`, format: "text", pillar: "proof", story_id: `fri-${d}` }));
   const list = item("list-linkedin", "2026-10-08", "08:30", "linkedin", { format: "document", pillar: "lists" });
-  assert.deepEqual(planSlots({ items: [...fridays, list], ready: [list], now: NOW, timeZone: TZ, seasons: SEASON }).slotted.map((s) => s.date), ["2026-10-12"]);
+  assert.deepEqual(planSlots({ items: [...fridays, list], ready: [list], now: NOW, timeZone: TZ }).slotted.map((s) => s.date), ["2026-10-12"]);
 });
 
 test("F4: a piece with no pillar is never skipped forever; it takes the earliest open weekday", () => {
   const loose = item("loose-linkedin", "2026-10-08", "08:30", "linkedin", { format: "text", pillar: null as unknown as string });
   const odd = item("odd-linkedin", "2026-10-08", "08:30", "linkedin", { format: "text", pillar: "community" });
-  const { slotted, skipped } = planSlots({ items: [loose, odd], ready: [loose, odd], now: NOW, timeZone: TZ, seasons: SEASON });
+  const { slotted, skipped } = planSlots({ items: [loose, odd], ready: [loose, odd], now: NOW, timeZone: TZ });
   assert.deepEqual(skipped, []);
   assert.deepEqual(slotted.map((s) => [s.id, s.date]), [["loose-linkedin", "2026-10-12"], ["odd-linkedin", "2026-10-13"]]);
 });
@@ -130,7 +129,7 @@ test("F6: legs with no story_id are one piece by their id; they keep one day tog
   const li = item("orphan-piece-linkedin", "2026-10-14", "08:30", "linkedin", { story_id: undefined });
   const ig = item("orphan-piece-instagram", "2026-10-14", "18:00", "instagram", { story_id: undefined });
   const missed = [item("lost-piece-linkedin", "2026-10-08", "08:30", "linkedin", { story_id: undefined }), item("lost-piece-instagram", "2026-10-08", "18:00", "instagram", { story_id: undefined })];
-  const { slotted } = planSlots({ items: [li, ig, ...missed], ready: [li, ig, ...missed], now: NOW, timeZone: TZ, seasons: SEASON });
+  const { slotted } = planSlots({ items: [li, ig, ...missed], ready: [li, ig, ...missed], now: NOW, timeZone: TZ });
   assert.deepEqual(slotted.filter((s) => s.id.startsWith("orphan")).map((s) => [s.date, s.moved]), [["2026-10-14", false], ["2026-10-14", false]]);
   const lost = slotted.filter((s) => s.id.startsWith("lost"));
   assert.equal(lost.length, 2);
@@ -139,14 +138,14 @@ test("F6: legs with no story_id are one piece by their id; they keep one day tog
 
 const SN_HOLD = { storyId: "s1-13-sample-piece-13", who: "example_approver / Example Series", note: "Waiting on example_approver's approval of the v4 cut", heldAt: "2026-10-12T09:00:00Z", kind: "third_party" as const, finalStaged: false };
 
-test("holds, reserve-bank dates and hand-published channels are skipped with a reason", () => {
+test("holds, banked pieces and hand-published channels are skipped with a reason", () => {
   const sn = item("s1-13-sample-piece-13-youtube", "2026-11-13", "17:00", "youtube");
-  const reserve = item("s1-05-sample-piece-05-linkedin", "2027-01-05", "14:00", "linkedin");
+  const reserve = item("s1-05-sample-piece-05-linkedin", "2027-01-05", "14:00", "linkedin", { status: "banked" });
   const letter = item("essay-newsletter", "2026-10-16", "09:00", "newsletter");
-  const { slotted, skipped } = planSlots({ items: [sn, reserve, letter], ready: [sn, reserve, letter], now: NOW, timeZone: TZ, seasons: SEASON, holds: [SN_HOLD], manual: ["newsletter"] });
+  const { slotted, skipped } = planSlots({ items: [sn, reserve, letter], ready: [sn, reserve, letter], now: NOW, timeZone: TZ, holds: [SN_HOLD], manual: ["newsletter"] });
   assert.deepEqual(slotted, []);
   assert.equal(skipped.find((s) => s.id === sn.id)!.reason, "held: publishing blocked until example_approver / Example Series approves the final: Waiting on example_approver's approval of the v4 cut");
-  assert.match(skipped.find((s) => s.id === reserve.id)!.reason, /reserve bank/);
+  assert.match(skipped.find((s) => s.id === reserve.id)!.reason, /in the bank/);
   assert.match(skipped.find((s) => s.id === letter.id)!.reason, /by hand/);
 });
 
@@ -155,11 +154,11 @@ test("a held piece is never slotted even when it is approved and its slot is fre
   const heldLi = item("s1-13-sample-piece-13-linkedin", "2026-10-14", "14:00", "linkedin", { status: "approved" });
   const heldYt = item("s1-13-sample-piece-13-youtube", "2026-10-14", "17:00", "youtube", { status: "approved" });
   const other = item("s1-07-sample-piece-07-linkedin", "2026-10-15", "08:30", "linkedin");
-  const { slotted, skipped } = planSlots({ items: [heldLi, heldYt, other], ready: [heldLi, heldYt, other], now: NOW, timeZone: TZ, seasons: SEASON, holds: [SN_HOLD] });
+  const { slotted, skipped } = planSlots({ items: [heldLi, heldYt, other], ready: [heldLi, heldYt, other], now: NOW, timeZone: TZ, holds: [SN_HOLD] });
   assert.deepEqual(slotted.map((s) => s.id), [other.id]);
   assert.deepEqual(skipped.map((s) => s.id).sort(), [heldLi.id, heldYt.id]);
   // Released (no holds), the same approved items are slotted.
-  assert.equal(planSlots({ items: [heldLi, heldYt, other], ready: [heldLi, heldYt, other], now: NOW, timeZone: TZ, seasons: SEASON, holds: [] }).slotted.length, 3);
+  assert.equal(planSlots({ items: [heldLi, heldYt, other], ready: [heldLi, heldYt, other], now: NOW, timeZone: TZ, holds: [] }).slotted.length, 3);
 });
 
 test("heldBy matches the item's Story, or the Story id prefix when an item has no story_id", () => {
@@ -443,7 +442,7 @@ test("a fix note on the newsletter header does not hold the LinkedIn post (kb-to
   assert.deepEqual(r.skipped.map((s) => [s.id, s.reason]), [[`${sid}-newsletter`, "newsletter is published by hand"]]);
   // And once it has a calendar item, the planner slots it too.
   const li = item(`${sid}-linkedin`, "2026-10-14", "08:30", "linkedin", { story_id: sid, format: "text" });
-  assert.equal(planSlots({ items: [li], ready: [li], now: NOW, timeZone: TZ, seasons: SEASON, holds: [hold] }).slotted.length, 1);
+  assert.equal(planSlots({ items: [li], ready: [li], now: NOW, timeZone: TZ, holds: [hold] }).slotted.length, 1);
 });
 
 test("a fix note on the LinkedIn text holds LinkedIn, and only LinkedIn", async () => {
@@ -451,7 +450,7 @@ test("a fix note on the LinkedIn text holds LinkedIn, and only LinkedIn", async 
   const hold = await noteHold(sid, "text", ["linkedin"], [`${sid}-linkedin`]);
   const li = item(`${sid}-linkedin`, "2026-10-14", "08:30", "linkedin");
   const ig = item(`${sid}-instagram`, "2026-10-14", "18:00", "instagram");
-  const r = planSlots({ items: [li, ig], ready: [li, ig], now: NOW, timeZone: TZ, seasons: SEASON, holds: [hold] });
+  const r = planSlots({ items: [li, ig], ready: [li, ig], now: NOW, timeZone: TZ, holds: [hold] });
   assert.deepEqual(r.slotted.map((s) => s.id), [`${sid}-instagram`]);
   assert.deepEqual(r.skipped.map((s) => s.id), [`${sid}-linkedin`]);
   assert.match(r.skipped[0].reason, /^held: waiting for the fix \(linkedin\): John approved it with a note \(n1\)/);
@@ -462,7 +461,7 @@ test("a fix note on the shared text holds every platform that text goes to; whol
   const sid = "s1-20-sample-piece-20";
   const hold = await noteHold(sid, "text", ["linkedin", "instagram", "youtube"], [`${sid}-linkedin`, `${sid}-instagram`, `${sid}-youtube`]);
   const items = ["linkedin", "instagram", "youtube"].map((ch) => item(`${sid}-${ch}`, "2026-10-14", channelTime(ch, "video"), ch, { format: "video" }));
-  const r = planSlots({ items, ready: items, now: NOW, timeZone: TZ, seasons: SEASON, holds: [hold] });
+  const r = planSlots({ items, ready: items, now: NOW, timeZone: TZ, holds: [hold] });
   assert.deepEqual([r.slotted, r.skipped.map((s) => s.id).sort()], [[], items.map((i) => i.id).sort()]);
   // A withdrawn final (rework) and a third party's gate hold the whole Story, whatever the channel.
   const rework = { storyId: sid, who: "", note: "withdrawn", heldAt: null, kind: "rework" as const, finalStaged: true };
@@ -514,7 +513,7 @@ test("approved on a Saturday before the guide time (04:00 Berlin): the new item 
   // Perspective: Monday the 19th, both platforms the same day.
   assert.deepEqual(r.rows.map((x) => x.date), ["2026-10-19", "2026-10-19"]);
   const items = r.rows.map(rowToItem);
-  const plan = planSlots({ items, ready: items, now, timeZone: TZ, seasons: SEASON });
+  const plan = planSlots({ items, ready: items, now, timeZone: TZ });
   assert.deepEqual(plan.skipped, []);
   assert.deepEqual(plan.slotted.map((s) => [s.id, s.date, s.time]), [[`${sid}-linkedin`, "2026-10-19", "08:30"], [`${sid}-instagram`, "2026-10-19", "18:00"]]);
 });
@@ -559,7 +558,7 @@ test("a channel that never takes a pillar (guide rhythm.blocked) is never schedu
   RHYTHM.blocked = [{ channel: "instagram", pillars: ["lists"] }];
   try {
     const legs = [item("s1-07-top-7-linkedin", "2026-10-16", "08:30", "linkedin"), item("s1-07-top-7-instagram", "2026-10-16", "18:00", "instagram")];
-    const { slotted, skipped } = planSlots({ items: legs, ready: legs, now: NOW, timeZone: TZ, seasons: SEASON });
+    const { slotted, skipped } = planSlots({ items: legs, ready: legs, now: NOW, timeZone: TZ });
     assert.deepEqual(slotted.map((s) => s.id), ["s1-07-top-7-linkedin"]);
     assert.deepEqual(skipped.map((s) => s.id), ["s1-07-top-7-instagram"]);
     assert.match(skipped[0].reason, /instagram never takes lists/);
