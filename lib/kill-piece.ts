@@ -122,3 +122,47 @@ export async function dropPieceChannel(db: SupabaseClient, storyId: string, chan
   }
   return out;
 }
+
+/**
+ * The bank (John, 2026-11-02: no seasons): "not now" for a piece. Every unsent leg leaves the calendar as `banked` and any
+ * Zernio post that has not gone out is deleted; nothing schedules it until John schedules it from the bank. Checks every
+ * linked post before changing anything, like a kill.
+ */
+export async function bankPiece(db: SupabaseClient, storyId: string): Promise<{ banked: string[]; deleted: Record<string, string> }> {
+  if (must(await db.from("gtm_piece_reviews").select("story_id").eq("story_id", storyId).maybeSingle(), "shared review check"))
+    throw new Error(`${storyId} uses shared review: release its deliveries on its shared card first`);
+  const rows = must(await db.from("gtm_content_items").select("id,status,zernio_post_id").eq("story_id", storyId), `rows of ${storyId}`) as Row[];
+  const live = rows.filter((r) => !["published", "skipped", "banked"].includes(r.status));
+  if (!live.length) throw new Error(`${storyId} has nothing on the calendar to bank`);
+  if (live.some((r) => r.zernio_post_id === "pending")) throw new Error(`${storyId} has a send in flight; wait for it, then bank it`);
+  const gone = new Set<string>();
+  for (const r of live.filter((x) => x.zernio_post_id)) {
+    try {
+      const post = await getPost(r.zernio_post_id!);
+      if (OUT.includes(post.status)) throw new Error(`${r.id} already went out on Zernio (${r.zernio_post_id}, ${post.status}); run gtm calendar reconcile`);
+    } catch (e) {
+      if (e instanceof ZernioError && e.status === 404) { gone.add(r.id); continue; }
+      throw e;
+    }
+  }
+  const out = { banked: [] as string[], deleted: {} as Record<string, string> };
+  for (const r of live) {
+    if (r.zernio_post_id && !gone.has(r.id)) {
+      try { await zernio(`/posts/${r.zernio_post_id}`, { method: "DELETE" }); }
+      catch (e) { if (!(e instanceof ZernioError && e.status === 404)) throw e; }
+      out.deleted[r.id] = r.zernio_post_id;
+    }
+    must(await db.from("gtm_content_items").update({ status: "banked", zernio_post_id: null, updated_at: new Date().toISOString() }).eq("id", r.id), `bank ${r.id}`);
+    out.banked.push(r.id);
+  }
+  return out;
+}
+
+/** Out of the bank: its legs go back to approved with today's date, so the scheduler gives them the next open day. */
+export async function unbankPiece(db: SupabaseClient, storyId: string, today: string): Promise<string[]> {
+  const rows = must(await db.from("gtm_content_items").select("id").eq("story_id", storyId).eq("status", "banked"), `banked rows of ${storyId}`) as { id: string }[];
+  if (!rows.length) throw new Error(`${storyId} has nothing in the bank`);
+  const week = (await import("./calendar")).weekOfDate(today);
+  must(await db.from("gtm_content_items").update({ status: "approved", date: today, week, updated_at: new Date().toISOString() }).in("id", rows.map((r) => r.id)).eq("status", "banked"), `unbank ${storyId}`);
+  return rows.map((r) => r.id);
+}

@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { loadCalendarDb } from "@/lib/calendar-db";
 import { adminDb } from "@/lib/db";
 import { sendCalendarItem, type PublishMode } from "@/lib/publish-item";
-import { killPiece } from "@/lib/kill-piece";
+import { bankPiece, killPiece, unbankPiece } from "@/lib/kill-piece";
+import { scheduleApproved } from "@/lib/schedule-approved";
+import { todayIn } from "@/lib/posts-db";
 import { movePiece, moveRefusal, pieceLegsDb, siblingLegs } from "@/lib/move-piece";
 import { failureReason, retryCalendarItem } from "@/lib/retry-item";
 import { sessionDb } from "@/lib/supabase/server";
@@ -84,6 +86,31 @@ export async function killCalendarPiece(storyId: string): Promise<{ ok: true; sk
     return { ok: true, skipped: r.skipped.length, deleted: Object.keys(r.deleted).length };
   } catch (error) {
     return { ok: false, error: message(error, "Could not kill the piece.") };
+  }
+}
+
+/** "Move to bank": the piece leaves the calendar with no day, its unsent Zernio posts deleted, until John schedules it. */
+export async function bankCalendarPiece(storyId: string): Promise<{ ok: true; banked: number } | { ok: false; error: string }> {
+  if (!(await isOwner())) return { ok: false, error: "Not signed in as the cockpit owner." };
+  try {
+    const r = await bankPiece(adminDb(), storyId);
+    refresh();
+    return { ok: true, banked: r.banked.length };
+  } catch (error) {
+    return { ok: false, error: message(error, "Could not bank the piece.") };
+  }
+}
+
+/** "Schedule it" on a banked piece: back to approved; the scheduler gives it the next open day that fits. */
+export async function unbankCalendarPiece(storyId: string): Promise<{ ok: true; legs: number } | { ok: false; error: string }> {
+  if (!(await isOwner())) return { ok: false, error: "Not signed in as the cockpit owner." };
+  try {
+    const legs = await unbankPiece(adminDb(), storyId, todayIn());
+    scheduleApproved(storyId);
+    refresh();
+    return { ok: true, legs: legs.length };
+  } catch (error) {
+    return { ok: false, error: message(error, "Could not take the piece out of the bank.") };
   }
 }
 

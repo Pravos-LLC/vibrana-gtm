@@ -6,8 +6,10 @@ import { parseDocument } from "yaml";
 import { isoWeek } from "./week";
 import { frontmatterMeta, splitFrontmatterRaw } from "./frontmatter";
 
-export const STATUSES = ["idea", "drafted", "approved", "scheduled", "published", "failed", "skipped"] as const;
+export const STATUSES = ["idea", "drafted", "approved", "scheduled", "published", "failed", "skipped", "banked"] as const;
 export type Status = (typeof STATUSES)[number];
+/** Not on the calendar: killed or dropped legs (skipped) and pieces John put in the bank (banked, no day yet). */
+export const OFF_CALENDAR: readonly string[] = ["skipped", "banked"];
 
 export type Item = {
   id: string;

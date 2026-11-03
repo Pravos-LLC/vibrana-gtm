@@ -736,7 +736,7 @@ const commands: Record<string, () => Promise<void>> = {
     const sel = await weekSelector();
     const { inWeek, mondayOf, seasonWeek } = await import("../lib/week");
     const items = cal.items.filter((i) => (sel ? inWeek(sel, i.date) : true));
-    const overdue = items.filter((i) => i.date < today() && !["published", "skipped"].includes(i.status));
+    const overdue = items.filter((i) => i.date < today() && !["published", "skipped", "banked"].includes(i.status));
     out({ timezone: cal.timezone, ...(sel ? { week: sel } : {}), items, overdue: overdue.map((i) => i.id) }, () => {
       let w = "";
       for (const i of items) {
@@ -1035,12 +1035,11 @@ const commands: Record<string, () => Promise<void>> = {
       const reports = lintCalendar(posts, monday, weeks);
       const gaps = gapsFor(posts, monday, end).filter((g) => g.date >= todayIn());
       // What auto-schedule would do with every piece not on Zernio yet if it were approved now: the ones with no open
-      // day before the season ends are listed, so John can place them by hand.
+      // posting day in the next eight weeks are listed, so John can place them by hand or bank them.
       const cal = await loadCalendarDb(db);
-      const { data: seasons } = await db.from("gtm_seasons").select("id,starts_on,ends_on");
       const unsent = cal.items.filter((i) => !i.zernio_post_id && (i.status === "drafted" || i.status === "approved"));
-      const doesNotFit = planSlots({ items: cal.items, ready: unsent, now: new Date(), timeZone: cal.timezone, seasons: seasons ?? [], manual: cal.manual })
-        .skipped.filter((x) => x.reason.startsWith("doesn't fit this season"));
+      const doesNotFit = planSlots({ items: cal.items, ready: unsent, now: new Date(), timeZone: cal.timezone, manual: cal.manual })
+        .skipped.filter((x) => x.reason.startsWith("doesn't fit"));
       return out({ weeks: reports, gaps, doesNotFit }, () => {
         console.log(`Weekly rhythm: ${WEEKDAYS.map((d) => `${d} ${dayLabels(d).primary}`).join(" · ")}`);
         for (const w of reports) {
@@ -1050,7 +1049,7 @@ const commands: Record<string, () => Promise<void>> = {
           for (const g of gaps.filter((x) => x.date >= w.monday && x.date <= addDays(w.monday, 6))) console.log(`  gap   ${g.day} ${g.date}: wants ${g.wants}`);
         }
         if (doesNotFit.length) {
-          console.log("\nDoesn't fit this season (auto-schedule leaves these where they are; place them by hand):");
+          console.log("\nDoesn't fit in the next eight weeks (auto-schedule leaves these where they are; place them by hand or bank them):");
           for (const x of doesNotFit) console.log(`  ${x.id}: ${x.reason}`);
         }
       });

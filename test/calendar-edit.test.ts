@@ -9,7 +9,7 @@ Object.assign(process.env, {
   ZERNIO_API_URL: "https://zernio.test/api/v1", ZERNIO_API_KEY: "zk_test",
 });
 const { adminDb } = await import("../lib/db.ts");
-const { dropPieceChannel, killPiece } = await import("../lib/kill-piece.ts");
+const { bankPiece, dropPieceChannel, killPiece, unbankPiece } = await import("../lib/kill-piece.ts");
 const { eventReason, failureReason, retryCalendarItem, retryKey } = await import("../lib/retry-item.ts");
 const { contentHash } = await import("../lib/calendar-db.ts");
 const { channelClashes, ClashError, movePiece, moveRefusal, planPieceMove, siblingLegs } = await import("../lib/move-piece.ts");
@@ -83,6 +83,33 @@ test("dropPieceChannel refuses, changing nothing, when that channel already went
   ]);
   await assert.rejects(dropPieceChannel(adminDb(), "p", "instagram"), /already went out on Zernio/);
   assert.ok(!m.calls.some((c) => c.method === "DELETE" || c.method === "PATCH"));
+});
+
+test("bankPiece: unsent legs go to banked and their Zernio posts are deleted; published legs stay", async () => {
+  const m = use([
+    { method: "GET", url: REST + "gtm_content_items", json: [
+      { id: "p-linkedin", status: "scheduled", zernio_post_id: "z1" },
+      { id: "p-youtube", status: "published", zernio_post_id: "z0" },
+    ] },
+    { method: "GET", url: `${Z}/posts/z1`, json: { post: { _id: "z1", status: "scheduled", platforms: [] } } },
+    { method: "DELETE", url: `${Z}/posts/z1`, json: {} },
+    { method: "PATCH", url: REST + "gtm_content_items", status: 204 },
+  ]);
+  const r = await bankPiece(adminDb(), "p");
+  assert.deepEqual(r, { banked: ["p-linkedin"], deleted: { "p-linkedin": "z1" } });
+  const patch = m.calls.find((c) => c.method === "PATCH")!;
+  assert.deepEqual([json(patch.body).status, json(patch.body).zernio_post_id], ["banked", null]);
+});
+
+test("unbankPiece: banked legs go back to approved with today's date, so the scheduler gives them a day", async () => {
+  const m = use([
+    { method: "GET", url: REST + "gtm_content_items", json: [{ id: "p-linkedin" }] },
+    { method: "PATCH", url: REST + "gtm_content_items", status: 204 },
+  ]);
+  assert.deepEqual(await unbankPiece(adminDb(), "p", "2026-11-03"), ["p-linkedin"]);
+  const patch = m.calls.find((c) => c.method === "PATCH")!;
+  assert.deepEqual([json(patch.body).status, json(patch.body).date], ["approved", "2026-11-03"]);
+  assert.equal(new URL(patch.url).searchParams.get("status"), "eq.banked");
 });
 
 test("killPiece refuses, changing nothing, when Zernio says a linked post already went out", async () => {

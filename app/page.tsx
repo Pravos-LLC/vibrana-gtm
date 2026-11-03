@@ -34,7 +34,7 @@ export default async function Today() {
     waitingCandidates(db),
   ]);
   const overdue = posts.filter((p) => p.date < today && !DONE.includes(p.status));
-  const next7 = posts.filter((p) => p.date >= today && p.status !== "skipped");
+  const next7 = posts.filter((p) => p.date >= today && p.status !== "skipped" && p.status !== "banked");
   const blocked = next7.filter((p) => p.linkProblems.length > 0 || ["idea", "drafted"].includes(p.status));
   const live = posts.filter((p) => p.status === "published" && p.date >= addDays(today, -14)).reverse();
   const openDeals = (deals.data ?? []).filter((d) => d.stage !== "LOST" && d.stage !== "SIGNED").length;

@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ExternalLink } from "lucide-react";
-import { calendarFailure, calendarPieceLegs, killCalendarPiece, moveCalendarPost, publishCalendarPost, retryCalendarPost } from "@/app/calendar/actions";
+import { calendarFailure, calendarPieceLegs, killCalendarPiece, bankCalendarPiece, unbankCalendarPiece, moveCalendarPost, publishCalendarPost, retryCalendarPost } from "@/app/calendar/actions";
 import { SHIFT_EVENT } from "@/components/calendar/calendar-toolbar";
 import { ChannelMark, PostChip, PostRow, StatusBadge, channelLabel } from "@/components/content/post-card";
 import { cn } from "@/lib/ui/cn";
@@ -252,6 +252,17 @@ function PostSheet({ post, onStatus, onMove, onClose }: {
     });
   }
 
+  function bank(out: boolean) {
+    if (!post.storyId) return;
+    setMessage(null);
+    start(async () => {
+      const r = out ? await unbankCalendarPiece(post.storyId!) : await bankCalendarPiece(post.storyId!);
+      if (!r.ok) { setMessage(r.error); return; }
+      onClose();
+      router.refresh();
+    });
+  }
+
   function kill() {
     if (!post.storyId) return;
     setMessage(null);
@@ -353,6 +364,12 @@ function PostSheet({ post, onStatus, onMove, onClose }: {
               Schedule publishing{post.time ? ` · ${post.time} Berlin` : ""}
             </Button>
           </div>
+        )}
+        {post.storyId && post.status === "banked" && (
+          <Button className="w-full" disabled={pending} onClick={() => bank(true)}>Schedule it (next open day)</Button>
+        )}
+        {post.storyId && movable(post) && (
+          <Button variant="outline" className="w-full" disabled={pending} onClick={() => bank(false)}>Move to bank (not now)</Button>
         )}
         {post.storyId && movable(post) && (
           confirmKill ? (

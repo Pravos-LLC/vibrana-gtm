@@ -14,7 +14,7 @@ export type Post = {
 };
 
 export const CHANNELS = ["linkedin", "instagram", "youtube", "newsletter", "website"] as const;
-export const DONE = ["published", "skipped"];
+export const DONE = ["published", "skipped", "banked"];
 
 export type PostFilters = { q: string; channel: string; status: string; pillar: string };
 export const NO_POST_FILTERS: PostFilters = { q: "", channel: "", status: "", pillar: "" };
@@ -24,7 +24,7 @@ export function filterPosts(posts: Post[], f: PostFilters): Post[] {
   const q = f.q.toLowerCase();
   return posts.filter((p) =>
     (!f.channel || p.channels.includes(f.channel))
-    && (f.status ? p.status === f.status : p.status !== "skipped")
+    && (f.status ? p.status === f.status : p.status !== "skipped" && p.status !== "banked")
     && (!f.pillar || p.pillar === f.pillar)
     && (!q || [p.title, p.caption, p.id, p.pillar ?? "", p.format].some((s) => s.toLowerCase().includes(q))));
 }

@@ -336,7 +336,7 @@ export function materializeApproved(input: { assets: Array<MaterialAsset & { sta
       const twin = alreadyOnCalendar(storyId, channel, storyAssets, items);
       if (twin) { skipped.push({ id, storyId, reason: `approved, but ${twin.id} (${twin.status}${twin.zernio_post_id ? ", on Zernio" : ""}) already carries this piece on ${channel} without being bound to the Story, so no second post is made: bind that row to ${storyId} if it is the same post` }); continue; }
       const piece = pieceFor(storyId, channel, storyAssets, storyRows, pieces.find((p) => p.storyId === storyId), stories.find((s) => s.id === storyId), today, seasonEnd,
-        new Set(items.filter((i) => i.status !== "skipped" && pieceKeyOf(i.story_id, i.id) !== storyId).map((i) => i.date)));
+        new Set(items.filter((i) => i.status !== "skipped" && i.status !== "banked" && pieceKeyOf(i.story_id, i.id) !== storyId).map((i) => i.date)));
       if ("error" in piece) { skipped.push({ id, storyId, reason: piece.error }); continue; }
       const made = materializeItem(storyId, channel, storyAssets, storyRows, piece);
       if ("error" in made) { skipped.push({ id, storyId, reason: made.error }); continue; }
@@ -363,7 +363,13 @@ const LIVE = new Set(["scheduled", "published"]);
 const toLint = (i: Item, date = i.date): LintPost => ({ id: i.id, date, channels: i.channels, status: i.status, pillar: i.pillar || traitPillarOf(i.story_id ?? null), format: i.format, storyId: i.story_id ?? null, title: i.title });
 const keyOfItem = (i: Pick<Item, "id" | "story_id">) => pieceKeyOf(i.story_id, i.id);
 
-/** The last day a move may land on: the end of the season holding today, else of the next season to start. */
+/** How far ahead the scheduler places a piece (John, 2026-11-02: no seasons). Beyond it a piece waits for John. */
+export const PLACE_AHEAD_DAYS = 56;
+/** The last day a move may land on: eight weeks from today. */
+export function horizonEnd(today: string): string {
+  return addDays(today, PLACE_AHEAD_DAYS);
+}
+/** @deprecated Seasons no longer bound scheduling; kept for the season review screen until it goes. */
 export function seasonEndFor(seasons: Season[], today: string): string | undefined {
   const sorted = [...seasons].sort((a, b) => a.starts_on.localeCompare(b.starts_on));
   return (sorted.find((s) => s.starts_on <= today && today <= s.ends_on) ?? sorted.find((s) => s.starts_on > today))?.ends_on;
@@ -382,16 +388,15 @@ const placementIssues = (posts: LintPost[], date: string) =>
  *   the same window, else the earliest open day (Saturday only for an Instagram and YouTube piece; never Sunday)
  *   (John: "drops back to whatever is available"). A day is open when no other piece holds it, every leg may post
  *   that day, and the move adds no house-rule problem (lib/rhythm.ts).
- * - Never after the current season ends: a piece with no open day before then stays as it is and is reported
- *   ("doesn't fit this season"), for John to place by hand.
+ * - Never more than eight weeks ahead (no seasons since 2026-11-02): a piece with no open day by then stays as it is and
+ *   is reported ("doesn't fit"), for John to place by hand or bank.
  */
-export function planSlots(input: { items: Item[]; ready: Item[]; now: Date; timeZone: string; seasons?: Season[]; holds?: ScheduleHold[]; manual?: string[] }): { slotted: Slotted[]; skipped: Skipped[] } {
+export function planSlots(input: { items: Item[]; ready: Item[]; now: Date; timeZone: string; holds?: ScheduleHold[]; manual?: string[] }): { slotted: Slotted[]; skipped: Skipped[] } {
   const { items, ready, now, timeZone } = input;
   const holds = input.holds ?? [];
   const manual = new Set(input.manual ?? []);
-  const lastSeasonDay = (input.seasons ?? []).map((s) => s.ends_on).sort().at(-1);
   const today = dayParts(now, timeZone);
-  const seasonEnd = seasonEndFor(input.seasons ?? [], `${today.year}-${today.month}-${today.day}`);
+  const seasonEnd = horizonEnd(`${today.year}-${today.month}-${today.day}`);
   const taken = new Set(items.filter((i) => LIVE.has(i.status) || i.zernio_post_id).flatMap((i) => i.channels.map((ch) => `${ch}|${i.date}`)));
   const ahead = (date: string, time: string) => zonedToUtc(date, time, timeZone).getTime() >= now.getTime() + LEAD_MS;
   const slotted: Slotted[] = [];
@@ -402,16 +407,16 @@ export function planSlots(input: { items: Item[]; ready: Item[]; now: Date; time
     const hold = heldBy(item, holds);
     if (hold) { skipped.push({ id: item.id, reason: `held: ${holdReason(hold)}` }); continue; }
     if (item.channels.length !== 1) { skipped.push({ id: item.id, reason: "needs exactly one channel" }); continue; }
+    if (item.status === "banked") { skipped.push({ id: item.id, reason: "in the bank: schedule it from the calendar's Bank to give it a day" }); continue; }
     if (manual.has(item.channels[0]) || isHandPublished(item.channels[0])) { skipped.push({ id: item.id, reason: `${item.channels[0]} is published by hand` }); continue; }
     const piecePillar = item.pillar || items.find((x) => item.story_id && x.story_id === item.story_id && x.pillar)?.pillar || traitPillarOf(item.story_id ?? null);
     if (!pillarAllowed(piecePillar, item.channels[0])) { skipped.push({ id: item.id, reason: `${item.channels[0]} never takes ${piecePillar} pieces (the guide's weekly rhythm); skip this leg` }); continue; }
-    if (lastSeasonDay && item.date > lastSeasonDay) { skipped.push({ id: item.id, reason: `parked in the reserve bank (${item.date}, after the last season ends ${lastSeasonDay}); give it a slot inside a season to schedule it` }); continue; }
     eligible.push(item);
   }
 
   // What already holds its day: everything on the calendar except the pieces being placed now (and killed legs).
   const placing = new Set(eligible.map((i) => i.id));
-  const board: LintPost[] = items.filter((i) => i.status !== "skipped" && !placing.has(i.id) && !manual.has(i.channels[0]) && !isHandPublished(i.channels[0] ?? "")).map((i) => toLint(i));
+  const board: LintPost[] = items.filter((i) => i.status !== "skipped" && i.status !== "banked" && !placing.has(i.id) && !manual.has(i.channels[0]) && !isHandPublished(i.channels[0] ?? "")).map((i) => toLint(i));
   const dayHasOther = (date: string, key: string) => board.some((p) => p.date === date && pieceKeyOf(p.storyId, p.id) !== key);
 
   // One group per Story and planned date (a piece), earliest first, so earlier pieces claim the earlier open days.
@@ -452,9 +457,7 @@ export function planSlots(input: { items: Item[]; ready: Item[]; now: Date; time
       ?? window.find((date) => fitRank(date, lanes) > 0 && opens(date))
       ?? days.find((date) => opens(date));
     if (pick) claim(group, pick, true);
-    else for (const i of group) skipped.push({ id: i.id, reason: seasonEnd
-      ? `doesn't fit this season: no open day before it ends on ${seasonEnd}; place it by hand`
-      : `no open day in the next ${HORIZON_DAYS} days for ${i.channels[0]}` });
+    else for (const i of group) skipped.push({ id: i.id, reason: `doesn't fit: no open posting day in the next eight weeks (to ${seasonEnd}); pick a day for it or bank it` });
   }
   slotted.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   return { slotted, skipped };
@@ -527,9 +530,7 @@ export async function autoSchedule(db: SupabaseClient, opts: { storyId?: string;
   for (let i = 0; i < storyIds.length; i += 100) stories.push(...must(await db.from("gtm_stories").select("id,title").in("id", storyIds.slice(i, i + 100)), "stories") as StoryHead[]);
   const p = dayParts(now, cal.timezone);
   const today = `${p.year}-${p.month}-${p.day}`;
-  // A failed seasons read fails the pass (BR-06): without the season ends a post could be placed in the reserve bank.
-  const seasons = must(await db.from("gtm_seasons").select("id,starts_on,ends_on"), "publishing season rules");
-  const made = materializeApproved({ assets, approvals, items: cal.items, manual: cal.manual, holds, pieces: opts.pieces ?? loadSeasonPieces(), stories, today, seasonEnd: seasonEndFor((seasons ?? []) as Season[], today) });
+  const made = materializeApproved({ assets, approvals, items: cal.items, manual: cal.manual, holds, pieces: opts.pieces ?? loadSeasonPieces(), stories, today, seasonEnd: horizonEnd(today) });
   skippedEarly.push(...made.skipped);
   const created: string[] = [];
   for (const row of made.rows) {
@@ -567,7 +568,7 @@ export async function autoSchedule(db: SupabaseClient, opts: { storyId?: string;
     if (long) { skippedEarly.push({ id: i.id, storyId: i.story_id, reason: long }); continue; }
     ready.push(i);
   }
-  const plan = planSlots({ items: cal.items, ready, now, timeZone: cal.timezone, seasons: (seasons ?? []) as Season[], holds, manual: cal.manual });
+  const plan = planSlots({ items: cal.items, ready, now, timeZone: cal.timezone, holds, manual: cal.manual });
   const held = holds.filter((h) => !opts.storyId || h.storyId === opts.storyId);
   const notFinal: NotFinal[] = [...new Set(assets.map((a) => a.story_id))].sort().flatMap((storyId) => {
     const early = nonFinal(assets.filter((a) => a.story_id === storyId));

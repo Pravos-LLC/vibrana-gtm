@@ -27,7 +27,7 @@ export function boardSets(rows: { story_id: string; status: string }[], recorded
   for (const r of rows) byStory.set(r.story_id, [...(byStory.get(r.story_id) ?? []), r.status]);
   const live = new Set<string>(), killed = new Set<string>();
   for (const [id, statuses] of byStory) {
-    if (statuses.some((s) => s !== "published" && s !== "skipped")) live.add(id);
+    if (statuses.some((s) => s !== "published" && s !== "skipped" && s !== "banked")) live.add(id);
     else if (recorded.has(id)) killed.add(id);
   }
   // A piece killed before it was ever scheduled has no rows to loop over, and is still killed.
