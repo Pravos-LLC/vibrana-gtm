@@ -7,6 +7,7 @@ import { SlideViewer } from "@/components/guide/slide-viewer";
 import { AddInspirationForm } from "@/components/inspiration/add-form";
 import { KINDS } from "@/lib/inspiration";
 import { PIPELINES } from "@/lib/pipelines";
+import { RHYTHM } from "@/lib/rhythm";
 import { ASSETS, CHANNELS, HYPOTHESIS, PILLARS, PILLAR_TONE, PIPELINE, REVIEW, STORIES, VOICE, WHY, type PillarSlug, type Substack } from "@/lib/guide/content";
 import { youtubeThumb, type BoardItem } from "@/lib/guide/inspiration";
 import type { PlanWeek } from "@/lib/guide/plan";
@@ -455,9 +456,9 @@ export function ChannelsChapter() {
       </div>
       <div className="mt-14">
         <h3 className="font-display text-pl-xl font-semibold text-ink">Weekly rhythm</h3>
-        <p className="mt-2 max-w-[70ch] text-sm text-ink-3">{CHANNELS.rhythm.summary}</p>
+        <p className="mt-2 max-w-[70ch] text-sm text-ink-3">{RHYTHM.summary}</p>
         <div className="mt-5 grid gap-2 sm:grid-cols-4 lg:grid-cols-7">
-          {CHANNELS.rhythm.days.map((d) => (
+          {RHYTHM.days.map((d) => (
             <div key={d.day} className="rounded-lg border border-line p-3">
               <p className="text-xs text-ink-3">{d.day}</p>
               <p className="mt-1 text-sm font-medium capitalize text-ink">{d.primary ?? "Off"}</p>
@@ -466,7 +467,7 @@ export function ChannelsChapter() {
             </div>
           ))}
         </div>
-        <ol className="mt-5 space-y-1.5 text-sm text-ink-2">{CHANNELS.rhythm.rules.map((r, i) => <li key={r} className="flex gap-3"><span className="w-5 shrink-0 font-mono text-xs tabular-nums text-ink-3">{i + 1}</span>{r}</li>)}</ol>
+        <ol className="mt-5 space-y-1.5 text-sm text-ink-2">{RHYTHM.rules.map((r, i) => <li key={r} className="flex gap-3"><span className="w-5 shrink-0 font-mono text-xs tabular-nums text-ink-3">{i + 1}</span>{r}</li>)}</ol>
       </div>
       <div className="mt-14 grid gap-12 lg:grid-cols-2">
         <div>
@@ -634,14 +635,15 @@ function FormatPipelines() {
 
 const FORMAT_ICON: Record<string, typeof Film> = { video: Film, carousel: LayoutGrid, document: FileText, text: Type, image: ImageIcon, ig_story: ImageIcon };
 const DAY = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-/** The weekdays the rhythm posts on (Saturday's optional reel is not a core post). */
-const CORE_DAY = DAY.map((d) => d !== "Sat" && !!CHANNELS.rhythm.days.find((x) => x.day === d)?.primary);
+/** The weekdays the rhythm posts on (Saturday's optional reel is not a core post). Read per render: the rhythm is a setting. */
+const coreDays = () => DAY.map((d) => d !== "Sat" && !!RHYTHM.days.find((x) => x.day === d)?.primary);
 const short = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 
 const CHANNEL_ABBR: Record<string, string> = { linkedin: "LI", instagram: "IG", youtube: "YT", newsletter: "Substack", website: "Site" };
 const GRID = "md:grid-cols-[4.5rem_0.55fr_1.3fr_1.3fr_1.3fr_0.8fr_0.55fr_0.55fr]";
 
 export function PlanChapter({ weeks, thumbs = {}, error }: { weeks: PlanWeek[]; thumbs?: Record<string, string>; error?: string }) {
+  const CORE_DAY = coreDays();
   return (
     <Chapter id="plan" title="The next ten weeks" lead="Live from the calendar, always the ten weeks from this one. Color is the pillar, the icon is the format. The highlighted days carry the week's core posts (the weekly rhythm); one piece fanned out to several channels shows once. Review weeks are marked.">
       <div className="mb-6 flex flex-wrap gap-4 text-xs text-ink-2">
