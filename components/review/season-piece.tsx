@@ -26,7 +26,6 @@ import { ShareForReview } from "@/components/review/share-for-review";
 import { ThirdPartyHold } from "./third-party-hold";
 import { StageBadge } from "./stage-badge";
 import { StageBadges, WaitingBadge } from "./stage-badges";
-import { PipelineStepper } from "./pipeline-stepper";
 import { History, TextDiff, VersionCompare, WhatChangedPanel, useCompare } from "./what-changed";
 import { NoteItem, ResolvedNotes } from "./review-ui";
 import { whatChanged, type JohnDecision } from "@/lib/what-changed";
@@ -194,7 +193,8 @@ function PieceSection({ piece: p, channel, status = "", platform = "" }: { piece
       <div className="mt-3 grid justify-items-start gap-3 [&>*]:max-w-full">
         <ThirdPartyHold storyId={p.storyId} initial={p.hold ?? null} onSet={actions.setStoryHold} final={mode.kind === "final"} defaultWho={p.pipeline?.thirdParty?.who ?? ""} />
         <KillPiece storyId={p.storyId} name={p.name} kill={actions.killPiece} />
-        {view && <div className="opacity-80"><PipelineStepper view={view} thirdParty={p.pipeline?.thirdParty} scheduled={p.scheduled} /></div>}
+        {/* One line says where a piece is (John, 2026-11-02): the badges under its title. The step-by-step view is on the Story page. */}
+        <a href={`/stories/${p.storyId}`} className="text-xs text-ink-3 underline-offset-2 hover:underline">Production steps</a>
       </div>
     </section>
   );
