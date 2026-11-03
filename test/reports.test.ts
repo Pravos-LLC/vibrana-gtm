@@ -404,7 +404,7 @@ test("run: saves the report and its actions, emails it, and finishes the run row
   assert.deepEqual(actions.map((a: { type: string; change: unknown }) => [a.type, a.change]), [["move", { date: "2026-10-16" }]]);
   const email = body(m.calls.find((c) => c.url.startsWith("https://api.resend.com"))!.body);
   assert.match(email.subject, /^Week 1 report: 4 comments on the LinkedIn video led the week\. \(1 change to decide\)$/);
-  assert.match(email.html, /https:\/\/cockpit\.test\/performance\/report\/1/);
+  assert.match(email.html, /https:\/\/cockpit\.test\/performance\/report\/2026-10-05/);
   const finish = m.calls.filter((c) => c.method === "PATCH").map((c) => body(c.body)).at(-1);
   assert.deepEqual([finish.status, finish.email_id], ["done", "em-1"]);
 });
@@ -444,4 +444,12 @@ test("a report covers a calendar week, numbered by its ISO week, with no season"
   const wk = calendarReportWeek("2026-12-16", "2026-12-16");
   assert.deepEqual([wk.season, wk.week, wk.from, wk.to, wk.prev.week, wk.prev.from, wk.next.from, wk.next.to], [null, 51, "2026-12-14", "2026-12-20", 50, "2026-12-07", "2026-12-21", "2027-01-03"]);
   assert.equal(calendarReportWeek("2027-01-01", "2027-01-01").week, 53);
+});
+
+test("candidates --week N is ISO week N of this year; a date is its Monday", async () => {
+  const { resolveCandidateWeek } = await import("../lib/candidates/select.ts");
+  const now = new Date("2026-11-03T02:00:00Z");
+  assert.equal(await resolveCandidateWeek(null as never, "45", now), "2026-11-02");
+  assert.equal(await resolveCandidateWeek(null as never, "2026-11-05", now), "2026-11-02");
+  await assert.rejects(resolveCandidateWeek(null as never, "54", now), /ISO week/);
 });

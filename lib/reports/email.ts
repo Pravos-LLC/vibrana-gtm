@@ -1,13 +1,14 @@
 import { loadRuntimeConfig } from "../runtime-config.mjs";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
-// The weekly report by email (Resend), linking to /performance/report/<week> where the changes are decided.
+// The weekly report by email (Resend), linking to /performance/report/<Monday> where the changes are decided.
 import type { Report } from "./guard";
 import type { Pack } from "./pack";
 
 const esc = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\"", "&quot;");
 const fmtDate = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 
-export const reportUrl = (cockpitUrl: string, week: number) => `${cockpitUrl}/performance/report/${week}`;
+/** A report is addressed by its Monday: week numbers repeat every year (ISO weeks) and the old season weeks overlap them. */
+export const reportUrl = (cockpitUrl: string, monday: string) => `${cockpitUrl}/performance/report/${monday}`;
 
 export function reportSubject(pack: Pack, report: Report) {
   const n = report.actions.length;
@@ -37,7 +38,7 @@ export function reportHtml(pack: Pack, r: Report, cockpitUrl: string): string {
   const blocks = sections(pack, r).filter(([, lines]) => lines.length).map(([title, lines]) => `<tr><td style="padding:16px 0;border-top:1px solid #e6e4ef">
     <div style="font-size:12px;color:#6b6b80;text-transform:uppercase;letter-spacing:.06em">${esc(title)}</div>
     <ul style="margin:8px 0 0;padding-left:18px">${lines.map((l) => `<li style="margin:0 0 6px">${esc(l)}</li>`).join("")}</ul></td></tr>`).join("");
-  const url = reportUrl(cockpitUrl, pack.week.number);
+  const url = reportUrl(cockpitUrl, pack.week.from);
   return `<!doctype html><html><body style="margin:0;background:#faf9fd;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#2b2838">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:24px 16px">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px">
@@ -51,7 +52,7 @@ export function reportHtml(pack: Pack, r: Report, cockpitUrl: string): string {
 }
 
 export function reportText(pack: Pack, r: Report, cockpitUrl: string): string {
-  const lines = [`Vibrana content report, week ${pack.week.number} (${pack.week.from} to ${pack.week.to})`, reportUrl(cockpitUrl, pack.week.number), "", r.headline, r.lede, ""];
+  const lines = [`Vibrana content report, week ${pack.week.number} (${pack.week.from} to ${pack.week.to})`, reportUrl(cockpitUrl, pack.week.from), "", r.headline, r.lede, ""];
   for (const [title, items] of sections(pack, r)) if (items.length) lines.push(title.toUpperCase(), ...items.map((l) => `- ${l}`), "");
   return lines.join("\n");
 }

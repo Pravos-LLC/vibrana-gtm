@@ -48,7 +48,7 @@ export default async function Today() {
         <StatTile href="/calendar?view=list" label="Overdue posts" value={String(overdue.length)} note="dated in the past, not out yet" tone={overdue.length ? "bad" : undefined} />
         <StatTile href="/calendar" label="Not ready, next 7 days" value={String(blocked.length)} note={`of ${next7.length} going out`} tone={blocked.length ? "warn" : undefined} />
         {report && (
-          <StatTile href={`/performance/report/${report.week}${report.toDecide ? "#changes" : ""}`} label={`Report: ${report.toDecide === 1 ? "change" : "changes"} to decide`} value={String(report.toDecide)}
+          <StatTile href={`/performance/report/${report.period_start}${report.toDecide ? "#changes" : ""}`} label={`Report: ${report.toDecide === 1 ? "change" : "changes"} to decide`} value={String(report.toDecide)}
             note={`Week ${report.week}${report.headline ? `: ${report.headline}` : ""}`} />
         )}
         {candidates && <StatTile href="/signals?view=candidates" label="Candidates waiting" value={String(candidates)} note="drafted from the Signal Desk" />}
