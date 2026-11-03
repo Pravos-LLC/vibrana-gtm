@@ -158,11 +158,14 @@ export async function bankPiece(db: SupabaseClient, storyId: string): Promise<{ 
   return out;
 }
 
-/** Out of the bank: its legs go back to approved with today's date, so the scheduler gives them the next open day. */
+/** Out of the bank: its legs go back to approved dated yesterday (a missed slot), so the scheduler places them by the
+ * normal rules, never today and never on an off day. */
 export async function unbankPiece(db: SupabaseClient, storyId: string, today: string): Promise<string[]> {
   const rows = must(await db.from("gtm_content_items").select("id").eq("story_id", storyId).eq("status", "banked"), `banked rows of ${storyId}`) as { id: string }[];
   if (!rows.length) throw new Error(`${storyId} has nothing in the bank`);
-  const week = (await import("./calendar")).weekOfDate(today);
-  must(await db.from("gtm_content_items").update({ status: "approved", date: today, week, updated_at: new Date().toISOString() }).in("id", rows.map((r) => r.id)).eq("status", "banked"), `unbank ${storyId}`);
+  const { addDays } = await import("./week");
+  const missed = addDays(today, -1);
+  const week = (await import("./calendar")).weekOfDate(missed);
+  must(await db.from("gtm_content_items").update({ status: "approved", date: missed, week, updated_at: new Date().toISOString() }).in("id", rows.map((r) => r.id)).eq("status", "banked"), `unbank ${storyId}`);
   return rows.map((r) => r.id);
 }

@@ -176,7 +176,7 @@ function cardParts(card: CardInput): { part: "text" | "asset"; state: PartState 
 }
 
 /** A post that already went out, or was skipped, has nothing left to approve or stage. */
-const finished = (card: CardInput) => card.itemStatus === "published" || card.itemStatus === "skipped";
+const finished = (card: CardInput) => card.itemStatus === "published" || card.itemStatus === "skipped" || card.itemStatus === "banked";
 const settled = (card: CardInput): CardInput => !finished(card) ? card : { ...card, staged: true, text: card.text === "none" ? "none" : "approved", asset: card.asset === "none" ? "none" : "approved", openNotes: 0, staleApprovals: 0 };
 
 function pipeline(input: SeasonInput) {

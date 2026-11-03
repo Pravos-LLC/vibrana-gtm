@@ -101,14 +101,14 @@ test("bankPiece: unsent legs go to banked and their Zernio posts are deleted; pu
   assert.deepEqual([json(patch.body).status, json(patch.body).zernio_post_id], ["banked", null]);
 });
 
-test("unbankPiece: banked legs go back to approved with today's date, so the scheduler gives them a day", async () => {
+test("unbankPiece: banked legs go back to approved with yesterday's date, so the scheduler places them by its rules", async () => {
   const m = use([
     { method: "GET", url: REST + "gtm_content_items", json: [{ id: "p-linkedin" }] },
     { method: "PATCH", url: REST + "gtm_content_items", status: 204 },
   ]);
   assert.deepEqual(await unbankPiece(adminDb(), "p", "2026-11-03"), ["p-linkedin"]);
   const patch = m.calls.find((c) => c.method === "PATCH")!;
-  assert.deepEqual([json(patch.body).status, json(patch.body).date], ["approved", "2026-11-03"]);
+  assert.deepEqual([json(patch.body).status, json(patch.body).date], ["approved", "2026-11-02"]);
   assert.equal(new URL(patch.url).searchParams.get("status"), "eq.banked");
 });
 

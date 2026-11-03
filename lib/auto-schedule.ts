@@ -219,7 +219,7 @@ export function pieceFor(storyId: string, channel: string, assets: MaterialAsset
  * `busy` is every day another piece already holds (scheduled, published or hand-placed and not yet sent): a computed
  * day is never one of them, so a new Story never lands beside a piece John placed and later bumps it.
  */
-export function nextSlotDay(today: string, opts: { pillar?: string | null; channels?: string[]; seasonEnd?: string; busy?: Set<string> } = {}): string {
+export function nextSlotDay(today: string, opts: { pillar?: string | null; channels?: string[]; seasonEnd?: string; busy?: Set<string> } = {}): string { // seasonEnd: the horizon end (horizonEnd)
   const lanes = lanesOf(opts.pillar ?? null, []);
   // A channel that never takes this pillar does not decide the day: that leg is refused when it is scheduled.
   const wanted = opts.channels?.length ? opts.channels : ["linkedin"];
@@ -438,6 +438,8 @@ export function planSlots(input: { items: Item[]; ready: Item[]; now: Date; time
   // Planned slots that are still ahead claim their days before anything is moved.
   const toMove: Item[][] = [];
   for (const group of ordered) {
+    // A date John set further out than eight weeks waits: it is queued once it comes within the horizon.
+    if (group[0].date > seasonEnd) { for (const i of group) skipped.push({ id: i.id, reason: `dated ${i.date}, more than eight weeks out: it is scheduled once it is within eight weeks` }); continue; }
     const keeps = group.every((i) => ahead(i.date, i.time ?? channelTime(i.channels[0], i.format)) && !taken.has(`${i.channels[0]}|${i.date}`));
     if (keeps) claim(group, group[0].date, false);
     else toMove.push(group);

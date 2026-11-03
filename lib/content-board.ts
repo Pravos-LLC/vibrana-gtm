@@ -154,7 +154,8 @@ export async function loadContentBoard(db: SupabaseClient, filters: Filters) {
     const { slot, name } = parsePieceTitle(story.title);
     const mine = items.filter((i) => i.story_id === story.id);
     const active = mine.filter((i) => i.status !== "skipped" && i.channels?.some((c) => (ROLES as readonly string[]).includes(c)));
-    const delivered = (i: typeof mine[number]) => i.status === "published" || (i.status === "scheduled" && !!i.zernio_post_id && i.zernio_post_id !== "pending");
+    // A banked piece is set aside by John: done for the board, like a sent one.
+    const delivered = (i: typeof mine[number]) => i.status === "published" || i.status === "banked" || (i.status === "scheduled" && !!i.zernio_post_id && i.zernio_post_id !== "pending");
     const scheduled = active.length > 0 && active.every(delivered)
       && cards.filter((c) => c.channel !== "newsletter").every((c) => mine.some((i) => i.channels?.includes(c.channel) && (i.status === "skipped" || delivered(i))));
     const date = mine.map((i) => String(i.date ?? "").slice(0, 10)).filter(Boolean).sort()[0] ?? null;
