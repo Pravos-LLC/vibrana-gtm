@@ -130,6 +130,8 @@ test("a lookup that fails after earlier chunks keeps those chunks: progress is n
   assert.ok(r.error);
   assert.deepEqual((await events()).map((e) => e.gmail_message_id), ["a1"]);
   assert.deepEqual((await state())?.pending, ["b2"]);
+  // The listing finished before the failure: the row says so, so the next run continues from history, not from Oct 1.
+  assert.deepEqual({ ...(await box()), last_error: null }, { history_id: "900", backfill_done: true, last_error: null });
 });
 
 test("history: a deleted message is skipped, not a failure; a too-old cursor lists again from the last good run", async () => {

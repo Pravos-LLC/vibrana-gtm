@@ -264,10 +264,15 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     const cutoff = Date.parse(BACKFILL_SINCE);
     const chunk = opts.chunk ?? 50, reserve = opts.chunkReserveMs ?? 30_000;
     let done = 0;
+    // State and mailbox row move together: once the listing is done the state drops its listing cursor, so the row must
+    // say backfill_done with the new history id in the same step, or a later failure would send the next run back to
+    // Oct 1 (review of #23, NS3).
     const commit = async () => {
       result.pending = queue.length - done;
       await saveState({ pageToken: backfillDone ? undefined : nextPageToken, startHistory: backfillDone ? undefined : startHistory, since: backfillDone ? undefined : since,
         pending: queue.slice(done), okAt: state.okAt });
+      must(await db.from("gtm_team_mailboxes").update({ history_id: backfillDone ? historyId : row.history_id, backfill_done: backfillDone })
+        .eq("member", row.member).eq("address", row.address), "save mailbox cursor");
     };
     while (done < queue.length) {
       if (opts.deadline != null && clock() > opts.deadline - reserve) break;
@@ -300,9 +305,8 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     await commit();
     const remaining = queue.length - done;
     if (remaining) result.complete = false;
-    // backfill_done follows the listing: pending ids are finished from `pending` in history mode, never by re-listing (NS1).
-    must(await db.from("gtm_team_mailboxes").update({ history_id: backfillDone ? historyId : row.history_id, backfill_done: backfillDone })
-      .eq("member", row.member).eq("address", row.address), "save mailbox cursor");
+    // backfill_done follows the listing (saved by commit): pending ids are finished from `pending` in history mode, never
+    // by re-listing (NS1).
     const caughtUp = backfillDone && listedAll && !remaining;
 
     // 3. Replies and bounces: re-read outreach threads of the last 30 days that have neither yet, newest first, rotating

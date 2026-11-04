@@ -29,8 +29,11 @@ export async function GET(request: Request) {
   if (!cfg) return back("not-configured");
   let granted: Awaited<ReturnType<typeof exchangeCode>>;
   try { granted = await exchangeCode(cfg, code, verifier, await redirectUri()); } catch { return back("google-refused"); }
+  // Google revokes per account and client, not per token: revoking would also kill a live connection of that address
+  // (another member's mailbox, or this one's own reconnect). Only a grant nobody uses is revoked (review of #23, N-f).
+  const inUse = async () => !!(await adminDb().from("gtm_team_mailboxes").select("member").eq("address", granted.email).limit(1)).data?.length;
   if (!v.member.mailboxes.includes(granted.email)) {
-    await revokeToken(granted.refreshToken);
+    if (!(await inUse())) await revokeToken(granted.refreshToken);
     return back("wrong-mailbox");
   }
   const db = adminDb();
@@ -43,7 +46,7 @@ export async function GET(request: Request) {
   // A fresh connection starts a fresh backfill: no cursor or pending ids from an earlier connection carry over.
   if (!error) await db.from("gtm_sync_state").delete().eq("key", stateKey(v.member.code, granted.email));
   if (error) {
-    await revokeToken(granted.refreshToken);
+    if (!(await inUse())) await revokeToken(granted.refreshToken);
     return back("save-failed");
   }
   return back("connected");
