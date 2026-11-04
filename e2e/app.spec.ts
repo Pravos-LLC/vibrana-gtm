@@ -49,7 +49,7 @@ test("a gtm_team member (Abe) gets the Signal Desk only: every other page sends 
   // The sidebar offers Signals alone.
   await expect(page.getByRole("link", { name: "Signals" })).toBeVisible();
   for (const name of ["Review", "Ideas", "Outreach", "Writing desk", "Calendar", "CRM", "Costs"]) await expect(page.getByRole("link", { name, exact: true })).toHaveCount(0);
-  for (const path of ["/", "/content", "/costs", "/calendar", "/funnel", "/inspiration", "/ideas", "/outreach", "/outreach/write", "/guide", "/engage", "/stories/fx-story"]) {
+  for (const path of ["/", "/content", "/costs", "/calendar", "/funnel", "/performance/team", "/team/mailbox", "/inspiration", "/ideas", "/outreach", "/outreach/write", "/guide", "/engage", "/stories/fx-story"]) {
     await page.goto(path);
     await expect(page, path).toHaveURL(/\/signals$/);
   }
@@ -160,6 +160,24 @@ test.describe("owner", () => {
     await expect(page.getByText("High confidence")).toBeVisible();
     await expect(page.getByText("Low confidence")).toBeVisible();
     await shot(page, "analytics-report");
+  });
+
+  test("Analytics > Team shows a teammate's work: the seeded mailbox send counts, the unread CRM is not measured", async ({ page }) => {
+    await page.goto("/performance/team?days=7");
+    await expect(page.getByRole("link", { name: "Team" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("heading", { level: 1, name: "Team: Sample teammate" })).toBeVisible();
+    // No CRM read yet in the fixture: CRM tiles say so instead of showing 0.
+    await expect(page.getByText("not measured: no CRM read yet (the team cron runs hourly)").first()).toBeVisible();
+    // The seeded mailbox is connected and its one outreach send is counted.
+    await expect(page.getByText(/teammate@example\.com: synced/)).toBeVisible();
+    await expect(page.getByText("1 first touch, 0 follow-ups")).toBeVisible();
+    for (const h of ["From added to opportunity", "Weekly activity", "Discipline", "Hygiene", "What was counted"]) await expect(page.getByRole("heading", { name: h, exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "7 days" })).toHaveAttribute("aria-current", "page");
+    await shot(page, "team-performance");
+    await page.goto("/team/mailbox");
+    await expect(page.getByRole("heading", { name: "What connecting does", exact: true })).toBeVisible();
+    await expect(page.getByText("Subjects are not read.", { exact: false })).toBeVisible();
+    await expect(page.getByText(/Sample teammate: teammate@example\.com/)).toBeVisible();
   });
 
   test("Performance: the owner adds the week's YouTube stats in the sheet and they land in gtm_manual_metrics", async ({ page }) => {

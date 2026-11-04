@@ -19,7 +19,7 @@ export const validPageToken = (token: string) => token.length <= 2048 && /^[a-zA
 export const header = (message: MailMessage, name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
 // Deliberately conservative addr-spec parsing: display names/comments never establish identity.
 // Quoted local-parts and malformed/group addresses are ignored rather than guessed.
-function addresses(value: string): string[] {
+export function addresses(value: string): string[] {
   const unquoted = value.replace(/"(?:\\.|[^"\\])*"/g, "");
   let bare = "", depth = 0;
   for (const char of unquoted) {
@@ -45,7 +45,7 @@ export function mailboxConfig(env: Record<string, string | undefined> = process.
   return { email, clientId, clientSecret, refreshToken };
 }
 
-const automated = (m: MailMessage) => (!!header(m, "Auto-Submitted") && header(m, "Auto-Submitted").toLowerCase() !== "no") || /auto.?reply|out of (?:the )?office/i.test(header(m, "Subject"));
+export const automated = (m: MailMessage) => (!!header(m, "Auto-Submitted") && header(m, "Auto-Submitted").toLowerCase() !== "no") || /auto.?reply|out of (?:the )?office/i.test(header(m, "Subject"));
 
 /** Forwarding has no sent copy: require an unambiguous sent record, original recipient, sender, subject and later receipt. */
 function matchForwarded(thread: MailThread, messages: MailMessage[], drafts: OutreachMail[], mailbox: string): Conversation | null {

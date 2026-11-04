@@ -224,7 +224,7 @@ export async function markDeskEmailSent(db: SupabaseClient, personId: string, ed
   const problems = sendProblems(edit);
   if (problems.length) throw new Error(problems.join(" "));
   const d = await readyDesk(db, personId, edit, actor, profile, track);
-  const rows = must(await db.from(DRAFTS).update({ email_status: "sent" }).eq("id", d.id).eq("status", "accepted").in("email_status", ["none", "queued"]).select(DRAFT_COLUMNS), "mark sent") as unknown as Draft[];
+  const rows = must(await db.from(DRAFTS).update({ email_status: "sent", email_sent_by: actor }).eq("id", d.id).eq("status", "accepted").in("email_status", ["none", "queued"]).select(DRAFT_COLUMNS), "mark sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This email was already marked sent.");
   return rows[0];
 }
@@ -234,7 +234,7 @@ export async function unmarkDeskEmailSent(db: SupabaseClient, personId: string, 
   await dossierRow(db, personId, track);
   const d = await deskDraft(db, personId);
   if (!d || d.email_status !== "sent") throw new Error("This email is not marked sent.");
-  const rows = must(await db.from(DRAFTS).update({ email_status: "none", email_sent_at: null }).eq("id", d.id).eq("email_status", "sent").select(DRAFT_COLUMNS), "undo sent") as unknown as Draft[];
+  const rows = must(await db.from(DRAFTS).update({ email_status: "none", email_sent_at: null, email_sent_by: null }).eq("id", d.id).eq("email_status", "sent").select(DRAFT_COLUMNS), "undo sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
   return rows[0];
 }
@@ -248,7 +248,7 @@ export async function markDeskLinkedinSent(db: SupabaseClient, personId: string,
   if ((await dossierRow(db, personId, track)).track !== "client") throw new Error("Mark invite sent is for the client stream; a guest is marked sent by its route.");
   const d = await readyDesk(db, personId, edit, actor, profile, track);
   if (d.linkedin_status === "sent" || d.linkedin_status === "connected") return d;
-  const rows = must(await db.from(DRAFTS).update({ linkedin_status: "sent" }).eq("id", d.id).eq("status", "accepted").select(DRAFT_COLUMNS), "mark invite sent") as unknown as Draft[];
+  const rows = must(await db.from(DRAFTS).update({ linkedin_status: "sent", linkedin_sent_by: actor }).eq("id", d.id).eq("status", "accepted").select(DRAFT_COLUMNS), "mark invite sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
   return rows[0];
 }
@@ -264,7 +264,8 @@ export async function markDeskSent(db: SupabaseClient, personId: string, edit: D
   const problems = routeSendProblems(edit, route);
   if (problems.length) throw new Error(problems.join(" "));
   const d = await readyDesk(db, personId, edit, actor, profile, track);
-  const patch = route === "linkedin" ? { linkedin_status: "sent" } : { email_status: "sent" };
+  // Who marked it: the team page counts desk sends per person (gtm_team_performance migration).
+  const patch = route === "linkedin" ? { linkedin_status: "sent", linkedin_sent_by: actor } : { email_status: "sent", email_sent_by: actor };
   const rows = must(await db.from(DRAFTS).update({ ...patch, route }).eq("id", d.id).eq("status", "accepted")
     .in(route === "linkedin" ? "linkedin_status" : "email_status", ["none", "queued"]).select(DRAFT_COLUMNS), "mark sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This was already marked sent.");
@@ -280,7 +281,7 @@ export async function unmarkDeskSent(db: SupabaseClient, personId: string, track
   if (d.follow_up_status === "sent") throw new Error("Mark the follow-up not sent first.");
   const linkedin = (d.route ?? guestRoute(row.dossier)) === "linkedin";
   if ((linkedin ? d.linkedin_status : d.email_status) !== "sent") throw new Error("This is not marked sent.");
-  const patch = linkedin ? { linkedin_status: "none", linkedin_sent_at: null } : { email_status: "none", email_sent_at: null };
+  const patch = linkedin ? { linkedin_status: "none", linkedin_sent_at: null, linkedin_sent_by: null } : { email_status: "none", email_sent_at: null, email_sent_by: null };
   const rows = must(await db.from(DRAFTS).update(patch).eq("id", d.id).eq(linkedin ? "linkedin_status" : "email_status", "sent").select(DRAFT_COLUMNS), "undo sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
   return rows[0];

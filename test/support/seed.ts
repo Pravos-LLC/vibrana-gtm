@@ -171,6 +171,7 @@ export const TABLES = [
   "gtm_outreach_drafts", "gtm_outreach_draft_versions", "gtm_outreach_dossiers", "gtm_outreach_desk", "gtm_outreach_tracks",
   "gtm_outreach_angle_runs", "gtm_outreach_angle_edits", "gtm_outreach_lessons", "gtm_outreach_learn_runs",
   "gtm_red_flag_resolutions", "client_feedback",
+  "gtm_team_mailboxes", "gtm_team_mail_events", "gtm_team_stock_daily",
   "review_batches", "review_assets", "review_comments", "review_publications", "review_publication_cancellations",
 ] as const;
 
@@ -286,6 +287,10 @@ export async function seed() {
   must(await db.from("gtm_content_reports").insert({ id: FIXTURE_REPORT, kind: "weekly", week: 1, period_start: monday, period_end: day(6), status: "done", headline: "Fixture report", report: {} }), "report");
   must(await db.from("gtm_report_actions").insert({ report_id: FIXTURE_REPORT, type: "move", item_id: "fx-upcoming-idea", change: { date: day(6) }, proposal: "Fixture move" }), "report action");
   must(await db.from("gtm_sync_state").insert({ key: "fixture.cursor", value: { cursor: "c0" } }), "sync state");
+  // Team performance: a connected fixture mailbox (a placeholder, not a real sealed token), one counted send, one snapshot.
+  must(await db.from("gtm_team_mailboxes").insert({ member: "SAMPLE", address: "teammate@example.com", token_ciphertext: "fixture-not-a-real-sealed-token-".repeat(2), backfill_done: true }), "team mailbox");
+  must(await db.from("gtm_team_mail_events").insert({ member: "SAMPLE", gmail_message_id: "f1a7", thread_id: "f1a7", kind: "outreach", at: new Date().toISOString(), person_ids: ["fx-person"], recipient_hashes: ["fixture"] }), "team mail event");
+  must(await db.from("gtm_team_stock_daily").insert({ member: "SAMPLE", date: "2026-11-04", metrics: { sendable: 0 } }), "team stock");
   // A saved setting; its trigger writes the history row.
   must(await db.from("gtm_settings").insert({ key: "fixture.setting", value: { x: 0 }, updated_by: "fixture" }), "setting");
   // Analytics > Reports: one published weekly review (the synthetic document in test/fixtures), already emailed.

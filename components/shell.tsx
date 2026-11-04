@@ -1,7 +1,7 @@
 import { Suspense, cache } from "react";
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { BookOpen, CalendarDays, DoorOpen, FileChartColumn, Film, Home, Lightbulb, ListChecks, LogOut, Mail, MessagesSquare, PenLine, PieChart, Radar, Receipt, Settings2, Sparkles, Users } from "lucide-react";
+import { BookOpen, CalendarDays, DoorOpen, FileChartColumn, Film, Home, Lightbulb, ListChecks, LogOut, Mail, MessagesSquare, PenLine, PieChart, Radar, Receipt, Settings2, Sparkles, UserCheck, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarInset, SidebarLabel, SidebarMenu, SidebarMenuButton, SidebarProvider, SidebarTrigger, type NavBadge } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/toaster";
@@ -26,6 +26,7 @@ const NAV = [
   { group: "Analytics", items: [
     { href: "/performance", label: "Performance", icon: PieChart },
     { href: "/performance/reports", label: "Reports", icon: FileChartColumn },
+    { href: "/performance/team", label: "Team", icon: UserCheck },
   ] },
   { group: "Outreach", items: [
     { href: "/outreach/write", label: "Writing desk", icon: PenLine },
