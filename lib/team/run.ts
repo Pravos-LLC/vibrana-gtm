@@ -74,7 +74,7 @@ async function alertNewKeys(names: string[], mail: { to: string; from: string })
   const res = await providerFetch()("https://api.resend.com/emails", {
     method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "idempotency-key": `team-keys/${names.join(",")}` },
     body: JSON.stringify({ from: mail.from, to: mail.to.split(",").map((s) => s.trim()).filter(Boolean), subject: `New Twenty API key: ${names.join(", ")}`.slice(0, 180), text }),
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) throw new Error(`new API key alert: Resend ${res.status}`);
 }

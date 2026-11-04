@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/db";
 import { exchangeCode, gmailConfig, mailboxAad, revokeToken, stateKey } from "@/lib/team/mailbox";
-import { openToken, sealToken, verifyState } from "@/lib/team/crypto";
+import { sealToken, verifyState } from "@/lib/team/crypto";
 import { NONCE_COOKIE, VERIFIER_COOKIE, clearFlowCookies, origin, redirectUri, viewer } from "@/lib/team/connect";
 
 // Google's redirect after the member consents. API routes skip the proxy, so this route checks everything itself:
@@ -34,8 +34,8 @@ export async function GET(request: Request) {
     return back("wrong-mailbox");
   }
   const db = adminDb();
-  // A reconnect replaces the stored token: revoke the old one once the new one is saved.
-  const { data: previous } = await db.from("gtm_team_mailboxes").select("token_ciphertext").eq("member", v.member.code).eq("address", granted.email).maybeSingle();
+  // A reconnect simply replaces the stored token. The old one is never revoked here: Google revokes the whole grant for
+  // the account and client, which would kill the token just issued (review of #23, NB1).
   const { error } = await db.from("gtm_team_mailboxes").upsert({
     member: v.member.code, address: granted.email, token_ciphertext: sealToken(granted.refreshToken, mailboxAad(v.member.code, granted.email)),
     key_version: 1, history_id: null, backfill_done: false, connected_at: new Date().toISOString(), last_sync_at: null, last_error: null,
@@ -45,12 +45,6 @@ export async function GET(request: Request) {
   if (error) {
     await revokeToken(granted.refreshToken);
     return back("save-failed");
-  }
-  if (previous?.token_ciphertext) {
-    try {
-      const old = openToken(previous.token_ciphertext as string, mailboxAad(v.member.code, granted.email));
-      if (old !== granted.refreshToken) await revokeToken(old);
-    } catch { /* an unreadable old token is already useless */ }
   }
   return back("connected");
 }

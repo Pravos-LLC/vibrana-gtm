@@ -99,8 +99,8 @@ export class TwentyReader {
       const c = d[object];
       let fresh = 0;
       for (const e of c.edges) if (!seen.has(e.node.id)) { seen.add(e.node.id); out.push(e.node); fresh++; }
-      if (out.length >= max) throw new Error(`Twenty ${object}: more than ${max} rows; refusing to return a silently truncated list`);
       if (!c.pageInfo.hasNextPage || !c.pageInfo.endCursor || (!fresh && c.edges.length)) return out;
+      if (out.length >= max) throw new Error(`Twenty ${object}: more than ${max} rows; refusing to return a silently truncated list`);
       after = c.pageInfo.endCursor;
     }
   }

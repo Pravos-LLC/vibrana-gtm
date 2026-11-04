@@ -79,12 +79,17 @@ export const windows = (now: Date, days: number): { cur: Window; prev: Window } 
   return { cur: { from, to }, prev: { from: from - days * DAY, to: from } };
 };
 
-/** Desk sends that are not already counted from the mailbox (same person, same day). */
+/** How far apart a desk mark and the mailbox's record of the same email can be (marked later, other time zone). */
+export const DESK_MATCH_MS = 36 * 3_600_000;
+
+/** Desk sends that are not already counted from the mailbox (same person, within 36 hours either way). */
 export function deskOnly(desk: DeskSend[], mail: MailEvent[] | null, memberEmail: string): { at: string; channel: "email" | "linkedin"; person: string }[] {
   const me = memberEmail.toLowerCase();
-  const seen = new Set((mail ?? []).filter((e) => e.kind === "outreach").flatMap((e) => e.person_ids.map((p) => `${p}|${e.at.slice(0, 10)}`)));
+  const sentTo = new Map<string, number[]>();
+  for (const e of mail ?? []) if (e.kind === "outreach") for (const p of e.person_ids) sentTo.set(p, [...(sentTo.get(p) ?? []), t(e.at)]);
+  const inMailbox = (person: string, at: string) => (sentTo.get(person) ?? []).some((x) => Math.abs(x - t(at)) <= DESK_MATCH_MS);
   return desk.flatMap((d) => [
-    ...(d.email_sent_at && d.email_sent_by?.toLowerCase() === me && !seen.has(`${d.person}|${d.email_sent_at.slice(0, 10)}`) ? [{ at: d.email_sent_at, channel: "email" as const, person: d.person }] : []),
+    ...(d.email_sent_at && d.email_sent_by?.toLowerCase() === me && !inMailbox(d.person, d.email_sent_at) ? [{ at: d.email_sent_at, channel: "email" as const, person: d.person }] : []),
     ...(d.linkedin_sent_at && d.linkedin_sent_by?.toLowerCase() === me ? [{ at: d.linkedin_sent_at, channel: "linkedin" as const, person: d.person }] : []),
   ]);
 }

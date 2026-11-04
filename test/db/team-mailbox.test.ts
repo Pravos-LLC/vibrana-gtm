@@ -99,18 +99,37 @@ test("a deadline mid-run keeps the unread ids pending, and the next run finishes
     { url: `${GM}threads/`, json: { id: "t", messages: [] } },
   ];
   mock = installFetchMock(base(routes));
-  // late() is asked once for the page, then once per id: the third question (b2) is past the deadline.
+  // The clock is asked once for the page, then once before each one-id chunk: the third question (b2) is past the deadline.
   let ticks = 0;
-  const r1 = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, deadline: 2, clock: () => ++ticks });
+  const r1 = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, deadline: 2, clock: () => ++ticks, chunk: 1, chunkReserveMs: 0 });
   assert.equal(r1.pending, 2); assert.equal(r1.complete, false);
   assert.deepEqual((await events()).map((e) => e.gmail_message_id), ["a1"]);
   assert.deepEqual((await state())?.pending, ["b2", "c3"]);
+  // The listing finished, so the backfill is done: the pending ids are finished from `pending`, never by listing again.
+  assert.equal((await box()).backfill_done, true);
   mock.restore();
-  mock = installFetchMock(base(routes));
+  mock = installFetchMock(base([{ url: `${GM}history?startHistoryId=900`, json: { history: [], historyId: "901" } }, ...routes]));
   const r2 = await syncMailbox(admin(), member, { ...row, ...(await box()) }, new TwentyReader({ pauseMs: 0 }), { cfg });
+  assert.ok(!mock.calls.some((c) => c.url.includes("labelIds=SENT")), "the second run does not list SENT again");
   assert.equal(r2.error, undefined, r2.error ?? "");
   assert.deepEqual((await events()).map((e) => e.gmail_message_id), ["a1", "b2"]);
-  assert.deepEqual(await box(), { history_id: "900", backfill_done: true, last_error: null });
+  assert.deepEqual(await box(), { history_id: "901", backfill_done: true, last_error: null });
+  assert.ok((await state())?.okAt, "caught up: the watermark is set");
+});
+
+test("a lookup that fails after earlier chunks keeps those chunks: progress is never undone", async () => {
+  const row = await fresh();
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }, { id: "b2" }] } },
+    { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
+    { url: `${GM}messages/b2`, json: sent("b2", T0 + 1, "bo@prospect.test") },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: "https://crm.test/graphql", status: 503, json: {} },
+  ]));
+  const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0, retries: 0 }), { cfg, chunk: 1 });
+  assert.ok(r.error);
+  assert.deepEqual((await events()).map((e) => e.gmail_message_id), ["a1"]);
+  assert.deepEqual((await state())?.pending, ["b2"]);
 });
 
 test("history: a deleted message is skipped, not a failure; a too-old cursor lists again from the last good run", async () => {

@@ -189,7 +189,8 @@ test("desk sends count only for the member's own login and never twice with the 
     { person: "p2", email_sent_at: d(4), linkedin_sent_at: d(4), email_sent_by: "abe@team.test", linkedin_sent_by: "abe@team.test" },
     { person: "p3", email_sent_at: d(4), linkedin_sent_at: null, email_sent_by: "john@team.test", linkedin_sent_by: null },
   ];
-  const mail = [ev("outreach", 20, "a", ["p1"])];
+  // The mailbox saw p1's email a day before the desk mark (marked late): still the same email.
+  const mail = [ev("outreach", 21, "a", ["p1"])];
   const only = M.deskOnly(desk, mail, "abe@team.test");
   assert.deepEqual(only.map((x) => `${x.person}:${x.channel}`), ["p2:email", "p2:linkedin"]);
   assert.equal(M.teamReport({ ...base, activity: null, mail: null, desk }).cur.deskSent, 3, "without a mailbox every own desk send counts");
@@ -250,6 +251,12 @@ test("the reader pages with the cursor and stops at the deadline", async () => {
 });
 
 /* Mailbox sync runs against the local database: test/db/team-mailbox.test.ts. */
+
+test("a reconnect never revokes the previous token: Google would revoke the new grant with it (review NB1)", () => {
+  const src = readFileSync(new URL("../app/api/team/mailbox/callback/route.ts", import.meta.url), "utf8");
+  assert.equal((src.match(/revokeToken\(/g) ?? []).length, 2, "only the wrong-mailbox and failed-save paths revoke, both the token just granted");
+  assert.doesNotMatch(src, /openToken/);
+});
 
 test("the team cron is scheduled hourly in vercel.json", () => {
   const crons = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8")).crons as { path: string; schedule: string }[];
