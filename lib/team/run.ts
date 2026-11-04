@@ -37,9 +37,8 @@ export async function runTeam(db: SupabaseClient, members: TeamMember[], opts: {
         r.activity = failed.length ? `partial: ${failed.join(", ")}` : "ok";
         const s = stock(a, now);
         must(await db.from("gtm_team_stock_daily").upsert({ member: m.code, date: now.toISOString().slice(0, 10), captured_at: now.toISOString(), metrics: {
-          sendable: s.sendable, verified: s.verified, with_email: s.withEmail, people: s.total, reviewed: s.reviewed, keep: s.keep, unreviewed: s.unreviewed,
-          unreviewed_over_14: s.unreviewedOver14, open_tasks: s.openTasks, overdue_tasks: s.overdueTasks, companies_no_owner: s.companiesNoOwner,
-          stage_mix: s.stageMix,
+          sendable: s.sendable, verified: s.verified, with_email: s.withEmail, people: s.total,
+          open_tasks: s.openTasks, overdue_tasks: s.overdueTasks, companies_no_owner: s.companiesNoOwner,
         } }, { onConflict: "member,date" }), "stock snapshot");
         r.stock = failed.length ? "partial" : "ok";
       }

@@ -2,8 +2,9 @@
 //
 // Ground rules (adversarial review, 2026-11-04):
 // - A source that is not connected or could not be read is null ("not measured"), never 0.
-// - Quality leads: sendable contacts, KEEP rate and meetings sit next to emails and replies; raw adds are secondary.
-// - Stock fields (verified email, research stage) describe the member's records as they stand now, whoever enriched them.
+// - Quality leads: sendable contacts and meetings sit next to emails and replies; raw adds are secondary.
+// - Keep/Maybe/Pass review labels are not measured: they are triage only, not an outreach input (VIB-481, 2026-11-04).
+// - Stock fields (verified email, sendable) describe the member's records as they stand now, whoever enriched them.
 // - Reply rate: replied threads over first-touch threads at least 7 days old, bounces excluded; hidden below 10.
 import type { Activity } from "./crm";
 
@@ -131,32 +132,17 @@ function period(i: Inputs, w: Window): Period {
 
 export type Stock = {
   sendable: number | null; verified: number | null; withEmail: number | null; total: number | null;
-  reviewed: number | null; keep: number | null; keepRate: number | null;
-  unreviewed: number | null; oldestUnreviewedDays: number | null; unreviewedOver14: number | null;
-  stageMix: Record<string, Record<string, number>> | null;
   openTasks: number | null; overdueTasks: number | null; companiesNoOwner: number | null; unverified: number | null;
 };
 
 export function stock(a: Activity | null, now: Date): Stock {
   const p = a && !a.errors.people ? a.people : null, c = a && !a.errors.companies ? a.companies : null, tk = a && !a.errors.tasks ? a.tasks : null;
-  const reviewed = c ? c.filter((x) => x.decision && x.decision !== "UNREVIEWED") : null;
-  const unreviewed = c ? c.filter((x) => !x.decision || x.decision === "UNREVIEWED") : null;
-  const ages = unreviewed?.map((x) => (now.getTime() - t(x.createdAt)) / DAY) ?? [];
-  const mix: Record<string, Record<string, number>> | null = c ? {} : null;
-  if (c && mix) for (const x of c) { const s = x.stage ?? "none", d = x.decision ?? "UNREVIEWED"; (mix[s] ??= {})[d] = (mix[s][d] ?? 0) + 1; }
   return {
     total: p ? p.length : null,
     withEmail: p ? p.filter((x) => x.hasEmail).length : null,
     verified: p ? p.filter((x) => x.hasEmail && x.verification === "VERIFIED").length : null,
     sendable: p ? p.filter((x) => x.hasEmail && x.verification === "VERIFIED" && !x.notSendable).length : null,
     unverified: p ? p.filter((x) => x.verification !== "VERIFIED").length : null,
-    reviewed: reviewed ? reviewed.length : null,
-    keep: reviewed ? reviewed.filter((x) => x.decision === "KEEP").length : null,
-    keepRate: reviewed && reviewed.length ? reviewed.filter((x) => x.decision === "KEEP").length / reviewed.length : null,
-    unreviewed: unreviewed ? unreviewed.length : null,
-    oldestUnreviewedDays: ages.length ? Math.floor(Math.max(...ages)) : null,
-    unreviewedOver14: unreviewed ? ages.filter((d) => d > 14).length : null,
-    stageMix: mix,
     openTasks: tk ? tk.filter((x) => x.status !== "DONE").length : null,
     overdueTasks: tk ? tk.filter((x) => x.status !== "DONE" && x.dueAt && t(x.dueAt) < now.getTime()).length : null,
     companiesNoOwner: c ? c.filter((x) => !x.hasOwner).length : null,
