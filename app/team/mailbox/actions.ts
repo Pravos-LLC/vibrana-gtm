@@ -28,14 +28,18 @@ export async function disconnectMailbox(): Promise<void> {
   const v = await viewer();
   if (!v?.member) redirect("/team/mailbox?status=not-member");
   const db = adminDb();
-  const { data } = await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext").eq("member", v.member.code);
+  const { data, error } = await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext").eq("member", v.member.code);
+  if (error) redirect("/team/mailbox?status=disconnect-failed");
   for (const row of (data ?? []) as { member: string; address: string; token_ciphertext: string }[]) {
     try { await revokeToken(openToken(row.token_ciphertext, mailboxAad(row.member, row.address))); } catch { /* deleted below either way */ }
   }
-  await db.from("gtm_team_mailboxes").delete().eq("member", v.member.code);
-  await db.from("gtm_team_mail_events").delete().eq("member", v.member.code);
-  await db.from("gtm_sync_state").delete().eq("key", `team.backfill.${v.member.code.toLowerCase()}`);
+  // Events first: if a later step fails, a retry still finds the mailbox row and finishes the job.
+  const steps = [
+    await db.from("gtm_team_mail_events").delete().eq("member", v.member.code),
+    await db.from("gtm_sync_state").delete().like("key", `team.mailbox.${v.member.code.toLowerCase()}.%`),
+    await db.from("gtm_team_mailboxes").delete().eq("member", v.member.code),
+  ];
   revalidatePath("/team/mailbox");
   revalidatePath("/performance/team");
-  redirect("/team/mailbox?status=disconnected");
+  redirect(steps.some((s) => s.error) ? "/team/mailbox?status=disconnect-failed" : "/team/mailbox?status=disconnected");
 }

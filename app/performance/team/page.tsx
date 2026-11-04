@@ -6,6 +6,7 @@ import { TrendChart } from "@/components/performance/trend-chart";
 import { TwentyLink } from "@/components/crm/people";
 import { sessionDb } from "@/lib/supabase/server";
 import { loadActivity } from "@/lib/team/crm";
+import { selectAll } from "@/lib/team/mailbox";
 import { memberByCode, teamMembers, type TeamMember } from "@/lib/team/members";
 import { REPLY_MIN_N, teamReport, type DeskSend, type MailEvent, type Period, type StockRow } from "@/lib/team/metrics";
 import { cn } from "@/lib/ui/cn";
@@ -48,7 +49,9 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
   const [activity, boxes, mail, desk, stock] = await Promise.all([
     loadActivity(db, member.code).catch(() => null),
     db.from("gtm_team_mailboxes").select("address,connected_at,last_sync_at,last_error,backfill_done").eq("member", member.code),
-    db.from("gtm_team_mail_events").select("kind,at,thread_id,person_ids").eq("member", member.code).order("at").limit(20_000),
+    // PostgREST returns at most 1000 rows a request: read every page, or past 1000 events the newest would be dropped.
+    selectAll<MailEvent>((from, to) => db.from("gtm_team_mail_events").select("kind,at,thread_id,person_ids").eq("member", member.code).order("id").range(from, to), "mail events")
+      .then((data) => ({ data, error: null }), (e: Error) => ({ data: null, error: e })),
     db.from("gtm_outreach_drafts").select("person,email_sent_at,linkedin_sent_at,email_sent_by,linkedin_sent_by")
       .or(`email_sent_by.eq."${member.authEmail}",linkedin_sent_by.eq."${member.authEmail}"`),
     db.from("gtm_team_stock_daily").select("date,metrics").eq("member", member.code).order("date", { ascending: false }).limit(60),

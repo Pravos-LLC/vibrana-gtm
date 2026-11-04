@@ -99,13 +99,15 @@ export async function recentApiWriters(reader: TwentyReader, now = new Date()): 
   return [...names].sort();
 }
 
-/** Records the names; returns the ones never seen before (none on the very first run, which only seeds the list). */
-export async function newApiWriters(db: SupabaseClient, names: string[], now = new Date()): Promise<string[]> {
+/** The names never seen before (none on the very first run, which only seeds the list). Nothing is saved here. */
+export async function newApiWriters(db: SupabaseClient, names: string[]): Promise<{ fresh: string[]; all: string[] }> {
   const { data, error } = await db.from("gtm_sync_state").select("value").eq("key", KNOWN_KEYS).maybeSingle();
   if (error) throw new Error(`known API keys: ${error.message}`);
   const known = (data?.value as { names?: string[] } | undefined)?.names;
-  const fresh = known ? names.filter((n) => !known.includes(n)) : [];
-  const all = [...new Set([...(known ?? []), ...names])].sort();
+  return { fresh: known ? names.filter((n) => !known.includes(n)) : [], all: [...new Set([...(known ?? []), ...names])].sort() };
+}
+
+/** Records the names as known, after any alert about them went out, so a failed alert is retried next run. */
+export async function saveApiWriters(db: SupabaseClient, all: string[], now = new Date()) {
   must(await db.from("gtm_sync_state").upsert({ key: KNOWN_KEYS, value: { names: all, updated: now.toISOString() }, updated_at: now.toISOString() }, { onConflict: "key" }), "save known API keys");
-  return fresh;
 }

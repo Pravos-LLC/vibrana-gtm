@@ -43,6 +43,9 @@ export class TwentyReader {
     fetcher?: typeof fetch; sleep?: (ms: number) => Promise<void>; now?: () => number;
   } = {}) {}
 
+  /** Moves the stop time, e.g. to give each team member a fair share of a cron run. */
+  setDeadline(deadline: number | undefined) { this.opts.deadline = deadline; }
+
   read<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
     const run = this.chain.then(() => this.send<T>(query, variables));
     this.chain = run.catch(() => undefined);
@@ -96,7 +99,8 @@ export class TwentyReader {
       const c = d[object];
       let fresh = 0;
       for (const e of c.edges) if (!seen.has(e.node.id)) { seen.add(e.node.id); out.push(e.node); fresh++; }
-      if (!c.pageInfo.hasNextPage || !c.pageInfo.endCursor || out.length >= max || (!fresh && c.edges.length)) return out;
+      if (out.length >= max) throw new Error(`Twenty ${object}: more than ${max} rows; refusing to return a silently truncated list`);
+      if (!c.pageInfo.hasNextPage || !c.pageInfo.endCursor || (!fresh && c.edges.length)) return out;
       after = c.pageInfo.endCursor;
     }
   }

@@ -22,7 +22,8 @@ const STATUS: Record<string, string> = {
   "google-refused": "Google did not grant offline, read-only metadata access. Start again and accept the permission.",
   "not-configured": "The Google connection is not set up in this deployment yet (TEAM_GMAIL_CLIENT_ID / TEAM_GMAIL_CLIENT_SECRET).",
   "not-member": "Your login is not a configured team member, so there is no mailbox to connect.",
-  "save-failed": "The connection could not be saved. Try again.",
+  "save-failed": "The connection could not be saved, and Google access was revoked. Try again.",
+  "disconnect-failed": "Google access was revoked, but deleting the counted emails did not finish. Press Disconnect again.",
 };
 
 export default async function MailboxPage({ searchParams }: { searchParams: Promise<{ status?: string }> }) {

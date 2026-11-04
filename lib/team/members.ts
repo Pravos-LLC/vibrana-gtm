@@ -24,7 +24,8 @@ export type TeamMember = {
 
 export type CreatedBy = { source?: string | null; name?: string | null; workspaceMemberId?: string | null } | null | undefined;
 
-const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+// Strict on purpose: authEmail is interpolated into a PostgREST filter on the team page.
+const EMAIL = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CODE = /^[A-Z][A-Z0-9_]{1,19}$/;
 

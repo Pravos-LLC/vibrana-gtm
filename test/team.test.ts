@@ -13,8 +13,7 @@ const { classifySend, threadOutcome, recipients, eligibleForOutreach } = await i
 const { sealToken, openToken, signState, verifyState, addressHash, pkceChallenge } = await import("../lib/team/crypto.ts");
 const M = await import("../lib/team/metrics.ts");
 const { TwentyReader } = await import("../lib/twenty.ts");
-const { syncMailbox, mailboxAad, authUrl } = await import("../lib/team/mailbox.ts");
-const { adminDb } = await import("../lib/db.ts");
+const { authUrl } = await import("../lib/team/mailbox.ts");
 
 let mock: ReturnType<typeof installFetchMock> | null = null;
 const use = (routes: Route[]) => (mock = installFetchMock(routes));
@@ -250,55 +249,7 @@ test("the reader pages with the cursor and stops at the deadline", async () => {
   await assert.rejects(late.read("{x}"), /deadline/);
 });
 
-/* ---------------------------------------------------------------- mailbox sync */
-
-test("first sync lists sent mail back to Oct 1, records outreach and replies without addresses, and saves the cursor", async () => {
-  const REST = "https://db.test/rest/v1/";
-  const GM = "https://gmail.googleapis.com/gmail/v1/users/me/";
-  const t0 = Date.parse("2026-10-20T10:00:00Z");
-  const sent = (id: string, at: number, to: string) => ({ id, threadId: "th" + id, internalDate: String(at), labelIds: ["SENT"], payload: { headers: [{ name: "From", value: "abe@hq.test" }, { name: "To", value: to }] } });
-  const twentyPeople = { data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: "p1", gtmRelationship: null, prospectReviewState: null, gtmQueue: null, emails: { primaryEmail: "ana@prospect.test" } } }] } } };
-  const twentyCompanies = { data: { companies: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [] } } };
-  const routes: Route[] = [
-    { url: "https://oauth2.googleapis.com/token", json: { access_token: "at" } },
-    { url: `${GM}profile`, json: { emailAddress: "abe@hq.test", historyId: "900" } },
-    { method: "GET", url: `${REST}gtm_sync_state`, json: null },
-    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1", threadId: "tha1" }, { id: "b2", threadId: "thb2" }, { id: "c3", threadId: "thc3" }] } },
-    { url: `${GM}messages/a1`, json: sent("a1", t0, "Ana <ana@prospect.test>") },
-    { url: `${GM}messages/b2`, json: sent("b2", t0, "friend@personal.test") },
-    { url: `${GM}messages/c3`, json: sent("c3", Date.parse("2026-09-20T10:00:00Z"), "ana@prospect.test") },
-    { method: "DELETE", url: `${REST}gtm_sync_state`, status: 204, body: "" },
-    { url: "https://crm.test/graphql", body: JSON.stringify(twentyPeople), times: 1 },
-    { url: "https://crm.test/graphql", body: JSON.stringify(twentyCompanies), times: 1 },
-    { method: "POST", url: `${REST}gtm_team_mail_events`, status: 201, json: [] },
-    { method: "GET", url: `${REST}gtm_team_mail_events`, json: [{ thread_id: "tha1", kind: "outreach", at: new Date(t0).toISOString(), recipient_hashes: [addressHash("ana@prospect.test")] }] },
-    { url: `${GM}threads/tha1`, json: { id: "tha1", messages: [sent("a1", t0, "ana@prospect.test"), { id: "r9", internalDate: String(t0 + 3_600_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "ana@prospect.test" }] } }] } },
-    { method: "PATCH", url: `${REST}gtm_team_mailboxes`, status: 204, body: "" },
-  ];
-  use(routes);
-  const row = { member: "ABE", address: "abe@hq.test", token_ciphertext: sealToken("refresh", mailboxAad("ABE", "abe@hq.test")), history_id: null, backfill_done: false, last_sync_at: null };
-  const reader = new TwentyReader({ pauseMs: 0 });
-  const r = await syncMailbox(adminDb(), member, row, reader, { cfg: { clientId: "cid", clientSecret: "cs" }, now: new Date("2026-11-04T00:00:00Z") });
-  assert.equal(r.error, undefined, r.error ?? "");
-  assert.deepEqual({ sends: r.sends, outreach: r.outreach, other: r.other_crm, replies: r.replies, complete: r.complete }, { sends: 2, outreach: 1, other: 0, replies: 1, complete: true });
-  const posts = mock!.calls.filter((c) => c.method === "POST" && c.url.startsWith(`${REST}gtm_team_mail_events`)).map((c) => c.body!);
-  assert.equal(posts.length, 2);
-  for (const body of posts) assert.doesNotMatch(body, /prospect\.test|personal\.test|@/, "no address is ever stored");
-  assert.match(posts[0], /"kind":"outreach"/); assert.match(posts[1], /"kind":"reply"/);
-  const saved = mock!.calls.find((c) => c.method === "PATCH")!;
-  assert.match(saved.body!, /"history_id":"900"/); assert.match(saved.body!, /"backfill_done":true/);
-});
-
-test("a refused refresh token is recorded as needing a reconnect, not thrown", async () => {
-  use([
-    { url: "https://oauth2.googleapis.com/token", status: 400, json: { error: "invalid_grant" } },
-    { method: "PATCH", url: "https://db.test/rest/v1/gtm_team_mailboxes", status: 204, body: "" },
-  ]);
-  const row = { member: "ABE", address: "abe@hq.test", token_ciphertext: sealToken("refresh", mailboxAad("ABE", "abe@hq.test")), history_id: "5", backfill_done: true, last_sync_at: null };
-  const r = await syncMailbox(adminDb(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg: { clientId: "cid", clientSecret: "cs" } });
-  assert.match(r.error!, /Reconnect/);
-  assert.match(mock!.calls.at(-1)!.body!, /Reconnect the mailbox/);
-});
+/* Mailbox sync runs against the local database: test/db/team-mailbox.test.ts. */
 
 test("the team cron is scheduled hourly in vercel.json", () => {
   const crons = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8")).crons as { path: string; schedule: string }[];

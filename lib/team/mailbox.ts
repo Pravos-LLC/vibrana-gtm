@@ -8,7 +8,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 import { must } from "../db";
 import type { MailMessage, MailThread } from "../outreach/mailbox";
-import type { TwentyReader } from "../twenty";
+import { createHash } from "node:crypto";
+import { TwentyError, type TwentyReader } from "../twenty";
 import { classifySend, domainOf, FREEMAIL, recipients, threadOutcome, type CrmPerson } from "./classify";
 import { addressHash, openToken } from "./crypto";
 import type { TeamMember } from "./members";
@@ -79,7 +80,7 @@ async function accessToken(cfg: GmailConfig, refreshToken: string, fetcher: type
 /* ------------------------------------------------------------------------------------------------ Gmail */
 
 export class TeamGmail {
-  constructor(private token: string, private fetcher: typeof fetch = fetch) {}
+  constructor(private token: string, private fetcher: typeof fetch = fetch, private deadline?: number) {}
   async get<T>(path: string, params: URLSearchParams = new URLSearchParams()): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       const res = await providerFetch(this.fetcher)(`https://gmail.googleapis.com/gmail/v1/users/me/${path}${params.size ? `?${params}` : ""}`, {
@@ -88,7 +89,8 @@ export class TeamGmail {
       if (res.ok) return res.json() as Promise<T>;
       if (res.status === 401) throw new ReconnectError("Google no longer accepts the stored connection. Reconnect the mailbox.");
       if (res.status === 404) throw Object.assign(new Error("Gmail: not found"), { status: 404 });
-      if ((res.status === 429 || res.status >= 500) && attempt < 3) { await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt)); continue; }
+      const late = this.deadline != null && Date.now() + 1000 * 2 ** attempt > this.deadline;
+      if ((res.status === 429 || res.status >= 500) && attempt < 3 && !late) { await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt)); continue; }
       throw new Error(`Gmail ${res.status}`);
     }
   }
@@ -117,14 +119,16 @@ export class TeamGmail {
 
 /* ------------------------------------------------------------------------------------------------ CRM lookups */
 
-/** Twenty people by exact primary email, 50 addresses a request. Only people Twenty already has come back. */
+/** Twenty people by exact primary email (any case), 25 addresses a request. Only people Twenty already has come back. */
 export async function lookupPeople(reader: TwentyReader, emails: string[]): Promise<Map<string, CrmPerson>> {
   const out = new Map<string, CrmPerson>();
   const list = [...new Set(emails)];
-  for (let i = 0; i < list.length; i += 50) {
-    const batch = list.slice(i, i + 50);
+  for (let i = 0; i < list.length; i += 25) {
+    const batch = list.slice(i, i + 25);
+    // ilike, not in: Twenty keeps emails as typed, and `in` is case-sensitive. ilike's `_` and `%` can only widen the
+    // match, and every row is re-checked for the exact lowercase address below.
     const rows = await reader.all<CrmPerson & { emails: { primaryEmail: string | null } | null }>("people", "id gtmRelationship prospectReviewState gtmQueue emails { primaryEmail }",
-      { emails: { primaryEmail: { in: batch } } }, "PersonFilterInput", 100, 500);
+      { or: batch.map((e) => ({ emails: { primaryEmail: { ilike: e } } })) }, "PersonFilterInput", 100, 500);
     for (const r of rows) {
       const e = r.emails?.primaryEmail?.toLowerCase();
       if (e && batch.includes(e)) out.set(e, { id: r.id, gtmRelationship: r.gtmRelationship, prospectReviewState: r.prospectReviewState, gtmQueue: r.gtmQueue });
@@ -157,79 +161,116 @@ export async function lookupCompanies(reader: TwentyReader, domains: string[]): 
 /* ------------------------------------------------------------------------------------------------ sync */
 
 export type MailboxRow = { member: string; address: string; token_ciphertext: string; history_id: string | null; backfill_done: boolean; last_sync_at: string | null };
-export type SyncResult = { address: string; sends: number; outreach: number; other_crm: number; replies: number; bounces: number; threads_checked: number; complete: boolean; error?: string };
+export type SyncResult = { address: string; sends: number; outreach: number; other_crm: number; replies: number; bounces: number; threads_checked: number; pending: number; complete: boolean; error?: string };
 type Event = { member: string; gmail_message_id: string; thread_id: string; kind: "outreach" | "other_crm" | "reply" | "bounce"; at: string; person_ids?: string[]; company_ids?: string[]; recipient_hashes?: string[] };
 
-const backfillKey = (member: string) => `team.backfill.${member.toLowerCase()}`;
+/**
+ * Per-mailbox sync state (gtm_sync_state). A cursor only ever moves past work that is finished: ids listed but not yet
+ * classified ride along in `pending`, so a run that stops at its deadline, or whose CRM lookup fails, loses nothing.
+ * `okAt` is the last fully successful run, the watermark a history reset reads back from (adversarial review of #23).
+ */
+export type SyncState = { pageToken?: string; startHistory?: string; since?: string; pending?: string[]; okAt?: string };
+
+export const stateKey = (member: string, address: string) =>
+  `team.mailbox.${member.toLowerCase()}.h${createHash("sha256").update(address.toLowerCase()).digest("hex").slice(0, 16)}`;
+
+/** Fixed, address-free messages for last_error, which owners read. Raw provider errors never reach it. */
+export class SyncStepError extends Error {}
+const failure = (e: unknown): string => {
+  if (e instanceof ReconnectError || e instanceof SyncStepError) return e.message;
+  if (e instanceof TwentyError) return "The CRM rejected a lookup; the sync retries next hour.";
+  const status = (e as { status?: number }).status;
+  if (status) return `Gmail answered ${status}; the sync retries next hour.`;
+  return "The sync stopped early; it resumes where it left off next hour.";
+};
+
+/** Every row of a select, 1000 at a time (PostgREST caps a response at max_rows). */
+export async function selectAll<T>(page: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>, what: string, max = 50_000): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; from < max; from += 1000) {
+    const rows = must(await page(from, from + 999), what) as T[];
+    out.push(...rows);
+    if (rows.length < 1000) break;
+  }
+  return out;
+}
 
 export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: MailboxRow, reader: TwentyReader, opts: {
-  cfg: GmailConfig; fetcher?: typeof fetch; now?: Date; deadline?: number; maxMessages?: number; maxThreads?: number;
+  cfg: GmailConfig; fetcher?: typeof fetch; now?: Date; deadline?: number; maxMessages?: number; maxThreads?: number; clock?: () => number;
 }): Promise<SyncResult> {
-  const now = opts.now ?? new Date(), fetcher = opts.fetcher ?? fetch;
-  const result: SyncResult = { address: row.address, sends: 0, outreach: 0, other_crm: 0, replies: 0, bounces: 0, threads_checked: 0, complete: true };
-  const late = () => !!opts.deadline && Date.now() > opts.deadline;
+  const now = opts.now ?? new Date(), fetcher = opts.fetcher ?? fetch, clock = opts.clock ?? Date.now;
+  const result: SyncResult = { address: row.address, sends: 0, outreach: 0, other_crm: 0, replies: 0, bounces: 0, threads_checked: 0, pending: 0, complete: true };
+  const late = () => opts.deadline != null && clock() > opts.deadline;
+  const key = stateKey(row.member, row.address);
+  const saveState = async (state: SyncState) =>
+    must(await db.from("gtm_sync_state").upsert({ key, value: state, updated_at: now.toISOString() }, { onConflict: "key" }), "save mailbox sync state");
   try {
+    const { data: stored, error: stateError } = await db.from("gtm_sync_state").select("value").eq("key", key).maybeSingle();
+    if (stateError) throw new SyncStepError("The sync state could not be read; the sync retries next hour.");
+    const state: SyncState = { ...((stored?.value as SyncState | undefined) ?? {}) };
     const refresh = openToken(row.token_ciphertext, mailboxAad(row.member, row.address));
-    const gmail = new TeamGmail(await accessToken(opts.cfg, refresh, fetcher), fetcher);
+    const gmail = new TeamGmail(await accessToken(opts.cfg, refresh, fetcher), fetcher, opts.deadline);
     const profile = await gmail.profile();
     if (profile.emailAddress.toLowerCase() !== row.address) throw new ReconnectError("The connected Google account is not the configured mailbox. Reconnect it.");
 
-    // 1. Which sent messages are new.
-    const ids: string[] = [];
+    // 1. Collect sent-message ids. Nothing is committed yet; the new cursor is only saved with the ids still to do.
+    const collected: string[] = [];
     let historyId = row.history_id, backfillDone = row.backfill_done;
+    let nextPageToken = state.pageToken, startHistory = state.startHistory, since = state.since;
     const max = opts.maxMessages ?? 400;
     if (!backfillDone || !historyId) {
-      const { data } = await db.from("gtm_sync_state").select("value").eq("key", backfillKey(row.member)).maybeSingle();
-      const state = (data?.value as { pageToken?: string; historyId?: string; since?: string } | undefined) ?? {};
-      const since = Date.parse(state.since ?? BACKFILL_SINCE);
-      let pageToken = state.pageToken, startHistory = state.historyId ?? profile.historyId, reachedEnd = false;
-      while (ids.length < max && !late()) {
-        const page = await gmail.listSent(pageToken);
-        const metas = [];
-        for (const m of page.messages ?? []) metas.push(m.id);
-        ids.push(...metas);
-        // Gmail lists newest first: stop paging once a page reaches past the backfill start (the classifier drops older ones).
-        const last = metas.at(-1);
-        const lastAt = last ? Number((await gmail.message(last)).internalDate ?? 0) : 0;
-        if (!page.nextPageToken || (last && lastAt < since)) { reachedEnd = true; break; }
-        pageToken = page.nextPageToken;
+      since ??= BACKFILL_SINCE;
+      startHistory ??= profile.historyId;
+      const sinceMs = Date.parse(since);
+      let reachedEnd = false;
+      while ((state.pending?.length ?? 0) + collected.length < max && !late()) {
+        const page = await gmail.listSent(nextPageToken);
+        const ids = (page.messages ?? []).map((m) => m.id);
+        collected.push(...ids);
+        // Newest first: once a page's last message is older than the backfill start, the end is reached.
+        let lastAt = 0;
+        if (ids.length) { try { lastAt = Number((await gmail.message(ids.at(-1)!)).internalDate ?? 0); } catch (e) { if ((e as { status?: number }).status !== 404) throw e; } }
+        nextPageToken = page.nextPageToken;
+        if (!nextPageToken || (ids.length && lastAt && lastAt < sinceMs)) { reachedEnd = true; nextPageToken = undefined; break; }
       }
-      if (reachedEnd) {
-        historyId = startHistory; backfillDone = true;
-        await db.from("gtm_sync_state").delete().eq("key", backfillKey(row.member));
-      } else {
-        result.complete = false;
-        must(await db.from("gtm_sync_state").upsert({ key: backfillKey(row.member), value: { pageToken, historyId: startHistory, since: state.since ?? BACKFILL_SINCE }, updated_at: now.toISOString() }, { onConflict: "key" }), "save backfill cursor");
-      }
+      if (reachedEnd) { backfillDone = true; historyId = startHistory ?? profile.historyId; }
+      else result.complete = false;
     } else {
-      let pageToken: string | undefined;
+      let pageToken: string | undefined, newest = historyId, finished = false;
       try {
         do {
           const page = await gmail.history(historyId, pageToken);
-          for (const h of page.history ?? []) for (const a of h.messagesAdded ?? []) if (a.message.labelIds?.includes("SENT")) ids.push(a.message.id);
-          if (page.historyId) historyId = page.historyId;
+          for (const h of page.history ?? []) for (const a of h.messagesAdded ?? []) if (a.message.labelIds?.includes("SENT")) collected.push(a.message.id);
+          if (page.historyId) newest = page.historyId;
           pageToken = page.nextPageToken;
-        } while (pageToken && ids.length < max && !late());
-        if (pageToken) result.complete = false;
+          finished = !pageToken;
+        } while (pageToken && !late());
+        // The history id only advances when every page was read; a partial read is re-read next run (events are unique).
+        if (finished) historyId = newest; else result.complete = false;
       } catch (e) {
         if ((e as { status?: number }).status !== 404) throw e;
-        // Gmail keeps about a week of history. Too old a cursor: list SENT again from a day before the last sync.
-        const since = new Date(Date.parse(row.last_sync_at ?? BACKFILL_SINCE) - 86_400_000).toISOString();
-        must(await db.from("gtm_sync_state").upsert({ key: backfillKey(row.member), value: { since, historyId: profile.historyId }, updated_at: now.toISOString() }, { onConflict: "key" }), "reset backfill");
-        backfillDone = false; result.complete = false;
+        // Gmail keeps about a week of history. Too old a cursor: list SENT again from a day before the last fully
+        // successful run (never from a failed run's time, which would skip what it failed to read).
+        since = new Date(Date.parse(state.okAt ?? BACKFILL_SINCE) - 86_400_000).toISOString();
+        startHistory = profile.historyId; nextPageToken = undefined; backfillDone = false; result.complete = false;
       }
     }
 
-    // 2. Classify each new send against the CRM.
-    const since = Date.parse(BACKFILL_SINCE);
+    // 2. Classify pending and new ids, as far as the deadline allows; the rest stays pending.
+    const queue = [...new Set([...(state.pending ?? []), ...collected])];
+    const cutoff = Date.parse(BACKFILL_SINCE);
     const sends: { id: string; threadId: string; at: number; rcpts: string[] }[] = [];
-    for (const id of [...new Set(ids)]) {
-      if (late()) { result.complete = false; break; }
-      const m = await gmail.message(id);
+    let done = 0;
+    for (const id of queue) {
+      if (late()) break;
+      let m: MailMessage & { threadId: string };
+      try { m = await gmail.message(id); } catch (e) { if ((e as { status?: number }).status === 404) { done++; continue; } throw e; }
+      done++;
       const at = Number(m.internalDate ?? 0);
-      if (!m.labelIds?.includes("SENT") || at < since) continue;
+      if (!m.labelIds?.includes("SENT") || at < cutoff) continue;
       sends.push({ id: m.id, threadId: m.threadId, at, rcpts: recipients(m, member.mailboxes.length ? member.mailboxes : [row.address], ignoredDomains()) });
     }
+    const remaining = queue.slice(done);
     result.sends = sends.length;
     const allRcpts = sends.flatMap((s) => s.rcpts);
     const people = await lookupPeople(reader, allRcpts);
@@ -243,11 +284,20 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
       else { events.push({ ...base, kind: "other_crm", company_ids: c.companyIds }); result.other_crm++; }
     }
     if (events.length) must(await db.from("gtm_team_mail_events").upsert(events, { onConflict: "member,gmail_message_id", ignoreDuplicates: true }), "save mail events");
+    // Events are saved: now the cursor may move, carrying whatever was not reached.
+    result.pending = remaining.length;
+    if (remaining.length) result.complete = false;
+    const caughtUp = backfillDone && !remaining.length;
+    await saveState({ pageToken: backfillDone ? undefined : nextPageToken, startHistory: backfillDone ? undefined : startHistory, since: backfillDone ? undefined : since,
+      pending: remaining, okAt: state.okAt });
+    must(await db.from("gtm_team_mailboxes").update({ history_id: backfillDone ? historyId : row.history_id, backfill_done: caughtUp })
+      .eq("member", row.member).eq("address", row.address), "save mailbox cursor");
 
-    // 3. Replies and bounces: re-read each outreach thread of the last 30 days that has neither yet.
+    // 3. Replies and bounces: re-read outreach threads of the last 30 days that have neither yet, newest first, rotating
+    //    the start each hour so a long list is covered across runs rather than only ever its first slice.
     const windowStart = new Date(now.getTime() - REPLY_WINDOW_DAYS * 86_400_000).toISOString();
-    const recent = must(await db.from("gtm_team_mail_events").select("thread_id,kind,at,recipient_hashes").eq("member", row.member).gte("at", windowStart), "recent mail events") as
-      { thread_id: string; kind: string; at: string; recipient_hashes: string[] }[];
+    const recent = await selectAll<{ thread_id: string; kind: string; at: string; recipient_hashes: string[] }>((from, to) =>
+      db.from("gtm_team_mail_events").select("thread_id,kind,at,recipient_hashes").eq("member", row.member).gte("at", windowStart).order("id").range(from, to), "recent mail events");
     const threads = new Map<string, { first: number; hashes: Set<string>; done: boolean }>();
     for (const e of recent) {
       const t = threads.get(e.thread_id) ?? { first: Infinity, hashes: new Set<string>(), done: false };
@@ -255,10 +305,13 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
       if (e.kind === "reply" || e.kind === "bounce") t.done = true;
       threads.set(e.thread_id, t);
     }
+    const open = [...threads].filter(([, t]) => !t.done && t.first !== Infinity).sort(([, a], [, b]) => b.first - a.first);
+    const cap = opts.maxThreads ?? 150;
+    const start = open.length > cap ? (Math.floor(now.getTime() / 3_600_000) * cap) % open.length : 0;
     const replyEvents: Event[] = [];
-    for (const [threadId, t] of threads) {
-      if (t.done || t.first === Infinity) continue;
-      if (result.threads_checked >= (opts.maxThreads ?? 150) || late()) { result.complete = false; break; }
+    for (let k = 0; k < Math.min(cap, open.length); k++) {
+      if (late()) { result.complete = false; break; }
+      const [threadId, t] = open[(start + k) % open.length];
       result.threads_checked++;
       let thread: MailThread;
       try { thread = await gmail.thread(threadId); } catch (e) { if ((e as { status?: number }).status === 404) continue; throw e; }
@@ -269,12 +322,14 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
         result.bounces++;
       }
     }
+    if (open.length > cap) result.complete = false;
     if (replyEvents.length) must(await db.from("gtm_team_mail_events").upsert(replyEvents, { onConflict: "member,gmail_message_id", ignoreDuplicates: true }), "save replies");
 
-    must(await db.from("gtm_team_mailboxes").update({ history_id: historyId, backfill_done: backfillDone, last_sync_at: now.toISOString(), last_error: null })
-      .eq("member", row.member).eq("address", row.address), "save mailbox cursor");
+    // Every sent message up to now is classified: this run is the new watermark a history reset reads back from.
+    if (caughtUp) await saveState({ pending: [], okAt: now.toISOString() });
+    must(await db.from("gtm_team_mailboxes").update({ last_sync_at: now.toISOString(), last_error: null }).eq("member", row.member).eq("address", row.address), "save mailbox status");
   } catch (e) {
-    result.error = (e as Error).message.slice(0, 300);
+    result.error = failure(e);
     result.complete = false;
     await db.from("gtm_team_mailboxes").update({ last_error: result.error, last_sync_at: now.toISOString() }).eq("member", row.member).eq("address", row.address);
   }

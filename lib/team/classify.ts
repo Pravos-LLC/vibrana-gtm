@@ -61,7 +61,8 @@ export function threadOutcome(messages: MailMessage[], firstSendAt: number, own:
   const later = messages.filter((m) => Number(m.internalDate ?? 0) > firstSendAt && !m.labelIds?.includes("SENT")
     && !m.labelIds?.some((l) => l === "DRAFT" || l === "SPAM" || l === "TRASH"))
     .filter((m) => !addresses(header(m, "From")).some((a) => mine.has(a)));
-  const failure = later.find((m) => /mailer-daemon|postmaster/i.test(header(m, "From")) || m.payload?.mimeType === "multipart/report");
+  // From mailer-daemon or postmaster only: multipart/report alone also covers read receipts, which are not bounces.
+  const failure = later.find((m) => /mailer-daemon|postmaster/i.test(header(m, "From")));
   const replies = later.filter((m) => !autoMessage(m) && !/mailer-daemon|postmaster/i.test(header(m, "From")) && addresses(header(m, "From")).some(isRecipient))
     .map((m) => ({ id: m.id, at: Number(m.internalDate) }));
   return { replies, bounce: failure ? { id: failure.id, at: Number(failure.internalDate) } : null };
