@@ -4,14 +4,14 @@
 // for reference. Read only, except "Use this version" on an earlier desk text and the copy-link buttons. Any field of
 // the dossier may be missing; a section with nothing in it is left out. A guest's dossier (track 'guest') gets its own
 // layout after "Who": pillar, template, the dated trigger, the angle and questions, the warm path, and the approach and
-// protocol notes up front. Both streams warn when the export is more than 3 days old.
+// protocol notes up front. The research date shows quietly under the name; there is no stale warning (a failed client check still alerts).
 import { Fragment, useState } from "react";
 import { AlertTriangle, CheckCircle2, Copy, ExternalLink, UserRound, Mail, Globe, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toaster";
 import { cn } from "@/lib/ui/cn";
-import { DESK_VARIANT, exportAgeDays, exportIsStale, guestReach, guestRoute, ROUTE_LABEL, safeUrl, STALE_DAYS, TEMPLATE_LABEL, type Dossier, type Profile } from "@/lib/outreach/desk";
+import { DESK_VARIANT, exportAgeDays, guestReach, guestRoute, ROUTE_LABEL, safeUrl, TEMPLATE_LABEL, type Dossier, type Profile } from "@/lib/outreach/desk";
 import type { DeskPerson } from "@/lib/outreach/desk-store";
 import type { Draft, DraftVersion } from "@/lib/outreach/model";
 
@@ -113,12 +113,6 @@ function DossierView({ person, onRestore }: { person: DeskPerson; onRestore: (v:
 
   return (
     <div className="space-y-4 text-sm" data-testid="desk-dossier">
-      {exportIsStale(builtAt) && (
-        <div role="status" className="flex gap-2 rounded-md border border-[color:var(--amber)]/40 bg-[color:var(--amber)]/10 p-3 text-amber-strong" data-testid="export-stale">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-          <p>This export is {age} days old (built {when(builtAt)}). Re-export before you send: facts, status and client checks may have moved on since it was built (stale after {STALE_DAYS} days).</p>
-        </div>
-      )}
       {check?.ok === false && (
         <div role="alert" className="flex gap-2 rounded-md border border-[color:var(--red,#dc2626)]/40 bg-destructive/10 p-3 text-red-strong" data-testid="client-check">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
@@ -130,6 +124,7 @@ function DossierView({ person, onRestore }: { person: DeskPerson; onRestore: (v:
         <div className="space-y-1">
           <p className="font-display text-base font-semibold text-ink">{person.row.name || person.row.twenty_person_id}</p>
           <p className="text-ink-2">{[p.title, p.company ?? c.name].filter(has).join(", ")}</p>
+          {age != null && <p className="text-xs text-ink-3" data-testid="export-age">Researched {when(builtAt)}{age > 0 ? ` (${age} day${age === 1 ? "" : "s"} ago)` : ""}</p>}
           <div className="flex flex-wrap gap-1.5">
             {employees != null && String(employees) !== "" && <Badge variant="outline">{String(employees)} people</Badge>}
             {where && <Badge variant="outline">{where}</Badge>}
