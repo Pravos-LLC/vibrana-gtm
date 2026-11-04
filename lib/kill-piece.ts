@@ -29,10 +29,6 @@ const OUT = ["published", "partial"];
  */
 export async function killPiece(db: SupabaseClient, storyId: string, opts: { reason?: string } = {}): Promise<KillResult> {
   if (!storyId) throw new Error("killPiece: no story id");
-  // A shared piece's rows belong to its delivery ledger: a direct skip is refused there after the Zernio delete, and a
-  // fix authorisation's note must not be closed behind it (review #151 B1 note).
-  const shared = must(await db.from("gtm_piece_reviews").select("story_id").eq("story_id", storyId).maybeSingle(), "shared review check");
-  if (shared) throw new Error(`${storyId} uses shared review: pause its scheduling and release or retire its channel deliveries on its card in /content first (gtm piece release|replace), then leave shared review and kill it`);
   const rows = must(await db.from("gtm_content_items").select("id,status,zernio_post_id").eq("story_id", storyId), `rows of ${storyId}`) as Row[];
   // A piece John is still reviewing in /content may never have been scheduled: no calendar rows, but a real Story. Its kill
   // is the record plus its notes (sd-anthropic-release-bar, 2026-10-31: the kill was refused and the piece came back).
@@ -87,18 +83,14 @@ export async function killPiece(db: SupabaseClient, storyId: string, opts: { rea
 /**
  * Take one channel off a piece (John, 2026-11-02: approval picks the channels): its unsent calendar rows are skipped and
  * any Zernio post that has not gone out is deleted, exactly like a kill but for one channel. A leg that already went out
- * is left alone and reported. Refuses while a send is in flight or a shared delivery holds the row.
+ * is left alone and reported. Refuses while a send is in flight.
  */
 export async function dropPieceChannel(db: SupabaseClient, storyId: string, channel: string, opts: { dryRun?: boolean } = {}): Promise<{ skipped: string[]; deleted: Record<string, string>; published: string[] }> {
-  if (must(await db.from("gtm_piece_reviews").select("story_id").eq("story_id", storyId).maybeSingle(), "shared review check"))
-    throw new Error(`${storyId} uses shared review: change its channels on its shared card`);
   const rows = (must(await db.from("gtm_content_items").select("id,status,zernio_post_id,channels").eq("story_id", storyId), `rows of ${storyId}`) as (Row & { channels: string[] | null })[])
     .filter((r) => (r.channels ?? []).includes(channel));
   const out = { skipped: [] as string[], deleted: {} as Record<string, string>, published: rows.filter((r) => r.status === "published").map((r) => r.id) };
   const live = rows.filter((r) => r.status !== "published" && r.status !== "skipped");
   if (live.some((r) => r.zernio_post_id === "pending")) throw new Error(`${channel}: a send is in flight; wait for it, then try again`);
-  if (live.length && must(await db.from("gtm_piece_deliveries").select("id").in("calendar_id", live.map((r) => r.id)).limit(1), "shared delivery check")?.length)
-    throw new Error(`${channel}: this channel has a shared delivery; release it on the piece first`);
   // Check every linked post first, so a channel that already went out is never half-dropped.
   const gone = new Set<string>();
   for (const r of live.filter((x) => x.zernio_post_id)) {
@@ -129,8 +121,6 @@ export async function dropPieceChannel(db: SupabaseClient, storyId: string, chan
  * linked post before changing anything, like a kill.
  */
 export async function bankPiece(db: SupabaseClient, storyId: string): Promise<{ banked: string[]; deleted: Record<string, string> }> {
-  if (must(await db.from("gtm_piece_reviews").select("story_id").eq("story_id", storyId).maybeSingle(), "shared review check"))
-    throw new Error(`${storyId} uses shared review: release its deliveries on its shared card first`);
   const rows = must(await db.from("gtm_content_items").select("id,status,zernio_post_id").eq("story_id", storyId), `rows of ${storyId}`) as Row[];
   const live = rows.filter((r) => !["published", "skipped", "banked"].includes(r.status));
   if (!live.length) throw new Error(`${storyId} has nothing on the calendar to bank`);

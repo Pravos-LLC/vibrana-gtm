@@ -49,7 +49,6 @@ export async function resolveFixNote(admin: SupabaseClient, noteId: string, repl
   if (!fix) throw new Error(`${noteId} is not an approve-with-note`);
   if (row.resolved_at) throw new Error(`${noteId} is already resolved`);
   const assets = must(await admin.from("gtm_story_assets").select("id,story_id,kind,sha256,revision,body,metadata").in("id", fix.assets), "note assets") as Array<{ id: string; story_id: string; kind: string; sha256: string; revision: number; body: string | null; metadata?: Record<string,unknown> }>;
-  if (assets.some(a=>a.metadata?.shared_review === true)) throw new Error("Shared pieces require explicit scoped fix completion; legacy resolve cannot approve them");
   if (assets.length !== fix.assets.length) throw new Error(`${noteId}: ${fix.assets.filter((id) => !assets.some((a) => a.id === id)).join(", ")} no longer exist; restage the part and ask John to approve it in /content`);
   const versions = must(await admin.from("gtm_story_asset_versions").select("asset_id,created_at").in("asset_id", fix.assets), "versions") as Array<{ asset_id: string; created_at: string }>;
   if (!fixLanded({ assets: fix.assets, createdAt: row.created_at, part: fix.part }, versions)) {

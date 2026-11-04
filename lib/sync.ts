@@ -11,10 +11,6 @@ import {
   type ZPost,
 } from "./zernio";
 import { readPages } from "./db-read";
-import {
-  loadPieceDeliveries,
-  reconcilePieceDeliveries,
-} from "./piece-delivery";
 import { crmSnapshot } from "./twenty";
 import { weekOfDate, type Item } from "./calendar";
 
@@ -25,10 +21,7 @@ export async function pushItems(items: Item[], { allowEmpty = false } = {}) {
   if (!items.length && !allowEmpty)
     return { upserted: 0, removed: 0, skipped: "calendar has no items" };
   const db = adminDb();
-  // A row with a shared delivery is owned by the delivery ledger: its payload, slot and status are frozen, and the
-  // database refuses a write to them. The import leaves those rows exactly as they are and says so.
-  const frozen = new Set((await loadPieceDeliveries(db)).map((d) => d.calendar_id));
-  const rows = items.filter((i) => !frozen.has(i.id)).map((i) => ({
+  const rows = items.map((i) => ({
     id: i.id,
     week: weekOfDate(i.date, i.week),
     date: i.date,
@@ -53,23 +46,18 @@ export async function pushItems(items: Item[], { allowEmpty = false } = {}) {
     await db.from("gtm_content_items").select("id"),
     "list content_items",
   ) as { id: string }[];
-  const stale = existing.map((r) => r.id).filter((id) => !ids.includes(id) && !frozen.has(id));
+  const stale = existing.map((r) => r.id).filter((id) => !ids.includes(id));
   if (stale.length)
     must(
       await db.from("gtm_content_items").delete().in("id", stale),
       "delete stale items",
     );
-  const kept = items.filter((i) => frozen.has(i.id)).map((i) => i.id);
-  return { upserted: rows.length, removed: stale.length, ...(kept.length ? { frozen: kept } : {}) };
+  return { upserted: rows.length, removed: stale.length };
 }
 
 /** Reconcile scheduled items with Zernio post status. Returns patches for calendar write-back. */
 export async function syncStatus() {
   const db = adminDb();
-  await reconcilePieceDeliveries(db);
-  const shared = new Set(
-    (await loadPieceDeliveries(db)).map((d) => d.calendar_id),
-  );
   const open = (
     await readPages<{ id: string; zernio_post_id: string; status: string }>(
       (from, to) =>
@@ -84,7 +72,7 @@ export async function syncStatus() {
           .range(from, to),
       "provider-linked items",
     )
-  ).filter((r) => !shared.has(r.id));
+  );
   const patches: Array<{
     id: string;
     status: string;
@@ -160,13 +148,9 @@ export async function syncStatus() {
     );
     patches.push(patch);
   }
-  // A retired shared post that Zernio brings back is an alert in the cron result, never a silent double post.
-  const { retiredPostAlerts, raiseRetiredAlerts } = await import("./piece-delivery");
-  const alerts = await retiredPostAlerts(db);
-  if (alerts.length) await raiseRetiredAlerts(db, alerts);
-  if (errors.length || alerts.length)
+  if (errors.length)
     throw new Error(
-      [errors.length ? `Status reconciliation unavailable for ${errors.join(", ")}; remaining channel outcomes were still checked` : "", ...alerts.map((a) => a.message)].filter(Boolean).join(". "),
+      `Status reconciliation unavailable for ${errors.join(", ")}; remaining channel outcomes were still checked`,
     );
   return patches;
 }

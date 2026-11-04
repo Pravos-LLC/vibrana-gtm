@@ -43,7 +43,6 @@ function stagePiece(head: { pipeline?: string | null; series?: string | null; th
 
 /**
  * Everything /content shows. `pieceOptions` lists every story on the board, also when a piece filter narrows the reads.
- * `sharedProblem` is set when the shared-review read failed: the legacy board still loads (review #147 B1).
  */
 export async function loadContentBoard(db: SupabaseClient, filters: Filters) {
   const [storyRows, { live, killed }, published] = await Promise.all([
@@ -51,21 +50,13 @@ export async function loadContentBoard(db: SupabaseClient, filters: Filters) {
     boardStoryIds(db),
     loadPublishedCards(db),
   ]);
-  // An adopted piece's text and video are reviewed in the shared section above; only its Substack essays (and their
-  // images) stay here, decided as before (review #151 N2). A failed or missing shared read never takes the page down
-  // (review #147 B1); the assets' own shared stamp still keeps an adopted piece's platform cards out.
-  let adoptedIds = new Set<string>(), sharedProblem: string | null = null;
-  try {
-    adoptedIds = new Set((await readPages((from, to) => db.from("gtm_piece_reviews").select("story_id", { count: "exact" }).order("story_id").range(from, to), "shared pieces") as { story_id: string }[]).map((p) => p.story_id));
-  } catch (e) { sharedProblem = e instanceof Error ? e.message : String(e); }
-  // A killed piece (a recorded kill, lib/season-board.ts) leaves the board; an adopted piece stays for its Substack cards.
-  const board = bySlot(storyRows.filter((s) => onBoard(s, live, killed) || (adoptedIds.has(s.id) && !killed.has(s.id))));
+  // A killed piece (a recorded kill, lib/season-board.ts) leaves the board.
+  const board = bySlot(storyRows.filter((s) => onBoard(s, live, killed)));
   // A one-piece lookup (/content?piece=, every calendar and work-board link) reads and signs that piece only (#159,
   // John 2026-10-17: 10-12 s before the piece opened). The piece list in the toolbar still comes from every story.
   const scoped = filters.piece ? board.filter((s) => s.id === filters.piece) : board;
   const boardIds = scoped.map((s) => s.id);
   const boardAssets = (boardIds.length ? await readChunks(boardIds, (chunk, from, to) => db.from("gtm_story_assets").select("*", { count: "exact" }).in("story_id", chunk).order("id").range(from, to), "story assets") : []) as StoryAsset[];
-  const sharedStories = new Set([...adoptedIds, ...boardAssets.filter((a) => a.metadata?.shared_review === true).map((a) => a.story_id)]);
   const stories = scoped;
   const ids = stories.map((s) => s.id);
   const assets = boardAssets;
@@ -123,7 +114,7 @@ export async function loadContentBoard(db: SupabaseClient, filters: Filters) {
   const all: PieceData[] = stories.flatMap((story): PieceData[] => {
     const own = assets.filter((a) => a.story_id === story.id);
     const cards: CardData[] = [];
-    for (const role of sharedStories.has(story.id) ? [] : ROLES) {
+    for (const role of ROLES) {
       const copy = own.find((a) => a.kind === "copy" && reviews.some((r) => r.asset_id === a.id && r.channel === role));
       if (!copy || isPublishedCard(published, story.id, copy.id, role)) continue;
       const media = own.filter((a) => (a.kind === "video" || a.kind === "image") && reviews.some((r) => r.asset_id === a.id && r.channel === role))
@@ -149,7 +140,7 @@ export async function loadContentBoard(db: SupabaseClient, filters: Filters) {
         alternatives: alternatives.map((a) => a.id),
       });
     }
-    // An adopted piece with no Substack essay has nothing left to decide here.
+    // A piece with no cards has nothing to decide here.
     if (!cards.length) return [];
     const { slot, name } = parsePieceTitle(story.title);
     const mine = items.filter((i) => i.story_id === story.id);
@@ -167,7 +158,7 @@ export async function loadContentBoard(db: SupabaseClient, filters: Filters) {
     // Before the final, the media column shows what is staged at the current stage when it is reviewed in /content
     // (a rough cut), never a paper edit; a plan image has no platform, so it is not on any card.
     const current = pieceView({ pipeline })?.current;
-    const stageAssets = !sharedStories.has(story.id) && current && !current.stage.final && current.stage.review === "cockpit"
+    const stageAssets = current && !current.stage.final && current.stage.review === "cockpit"
       ? own.filter((a) => (a.kind === "video" || a.kind === "image") && a.stage === current.stage.key).sort((x, y) => x.id.localeCompare(y.id)).map((a) => toAsset(a, null))
       : [];
     return [{ storyId: story.id, slot, name, pillar: mine.find((i) => i.pillar)?.pillar ?? null, date, cards, scheduled, groups: buildGroups(cards), stageAssets,
@@ -223,5 +214,5 @@ export async function loadContentBoard(db: SupabaseClient, filters: Filters) {
   const { summary, stages, initial: seasonInitial } = pieceParts(all);
   const initial = { ...seasonInitial, ...pieceParts(directed).initial };
   const pieceOptions = board.map((s) => ({ id: s.id, label: parsePieceTitle(s.title).name }));
-  return { error: null, storyRows, stories, all, directed, hiddenPieces, holds, summary, stages, initial, pieceOptions, sharedProblem } as const;
+  return { error: null, storyRows, stories, all, directed, hiddenPieces, holds, summary, stages, initial, pieceOptions } as const;
 }

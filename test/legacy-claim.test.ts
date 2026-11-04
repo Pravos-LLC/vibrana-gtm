@@ -27,7 +27,6 @@ test("Schedule onto a taken day, a claimed row and a held piece each say what to
     ["publishing slot was taken; replan", "schedule", /linkedin already has a post on 2030-01-08\. Move this post to another day in \/calendar, or use Publish now/],
     ["post is already claimed or no longer approved", "now", /already on its way to Zernio/],
     ["publishing is held or waiting for an accepted fix", "now", /on hold or waiting for the fix/],
-    ["use shared piece dispatch", "schedule", /uses shared review; it schedules from its card/],
   ] as const) {
     const m = installFetchMock([refuse(message)]);
     try { await assert.rejects(claimLegacySend(db, item.id, item, [], mode), want); } finally { m.restore(); }

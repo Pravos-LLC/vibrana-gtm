@@ -11,7 +11,6 @@ import { parsePieceTitle } from "../season";
 import { isFinalStage } from "../stage";
 import type { StoryAsset, StoryChannel } from "../story";
 import { readPages, readChunks } from "../db-read";
-import { must } from "../db";
 import { signedUrls } from "../sign-urls";
 
 export type SharedNote = {
@@ -77,14 +76,6 @@ type Version = {
 };
 export type SharedInput = {
   parties: string[];
-  shared?: {
-    storyId: string;
-    textId: string;
-    videoId: string;
-    channels: string[];
-    videoApproved: boolean;
-    textApproved: boolean;
-  }[];
   stories: Array<{
     id: string;
     title: string;
@@ -115,38 +106,29 @@ export function buildSharedPieces(input: SharedInput): SharedPiece[] {
       )
       .map((story): SharedPiece => {
         const party = story.third_party_who!.trim();
-        const shared = input.shared?.find((p) => p.storyId === story.id);
-        const own = input.assets.filter(
-          (a) =>
-            a.story_id === story.id &&
-            (!shared || [shared.textId, shared.videoId].includes(a.id)),
-        );
+        const own = input.assets.filter((a) => a.story_id === story.id);
         const bound = (a: StoryAsset) =>
-          (shared
-            ? shared.channels
-            : input.channels
-                .filter((c) => c.asset_id === a.id)
-                .map((c) => c.channel)
-          ).sort((x, y) => ORDER.indexOf(x) - ORDER.indexOf(y));
+          input.channels
+            .filter((c) => c.asset_id === a.id)
+            .map((c) => c.channel)
+            .sort((x, y) => ORDER.indexOf(x) - ORDER.indexOf(y));
         const media = own.filter(
           (a) => (a.kind === "video" || a.kind === "image") && bound(a).length,
         );
         // A short reaches a third party only once John has approved its YouTube cut (the one 9:16 video every platform posts) on its current bytes.
         const johnApproved = (a: StoryAsset) =>
-          shared
-            ? shared.videoApproved
-            : input.channels.some(
-                (c) =>
-                  c.asset_id === a.id &&
-                  c.channel === "youtube" &&
-                  c.status === "approved" &&
-                  c.approved_sha256 === a.sha256,
-              );
+          input.channels.some(
+            (c) =>
+              c.asset_id === a.id &&
+              c.channel === "youtube" &&
+              c.status === "approved" &&
+              c.approved_sha256 === a.sha256,
+          );
         const isShort = story.pipeline !== "episode";
         const state: SharedPiece["state"] = !media.length
           ? "empty"
           : media.every((m) => isFinalStage(m.stage)) &&
-              (!(isShort || shared) || media.every(johnApproved))
+              (!isShort || media.every(johnApproved))
             ? "final"
             : "in-production";
         const format =
@@ -180,11 +162,7 @@ export function buildSharedPieces(input: SharedInput): SharedPiece[] {
             continue;
           let listing: SharedAsset["listing"] = null;
           // A short is one 9:16 video for every platform: they watch and approve that, not a post per platform.
-          if (
-            a.kind === "copy" &&
-            (format === "short" || (shared && !shared.textApproved))
-          )
-            continue;
+          if (a.kind === "copy" && format === "short") continue;
           if (a.kind === "copy") {
             const { frontmatter, prose } = splitFrontmatter(a.body ?? "");
             // A listing still carrying a note to John is not ready to show anyone outside.
@@ -317,7 +295,7 @@ async function sharedInput(
       "reviewer assets",
     ),
     assetIds = assets.map((a) => a.id);
-  const [channels, decisions, versions, canonical] = await Promise.all([
+  const [channels, decisions, versions] = await Promise.all([
     readChunks<StoryChannel>(
       assetIds,
       (chunk, from, to) =>
@@ -356,39 +334,7 @@ async function sharedInput(
           .range(from, to),
       "reviewer versions",
     ),
-    readChunks<{
-      story_id: string;
-      text_asset_id: string;
-      video_asset_id: string;
-      channels: string[];
-    }>(
-      ids,
-      (chunk, from, to) =>
-        db
-          .from("gtm_piece_reviews")
-          .select("story_id,text_asset_id,video_asset_id,channels")
-          .in("story_id", chunk)
-          .order("story_id")
-          .range(from, to),
-      "canonical reviewer assets",
-    ),
   ]);
-  const shared: NonNullable<SharedInput["shared"]> = [];
-  for (const p of canonical) {
-    const s = must(
-      await db.rpc("gtm_piece_snapshot", { p_story_id: p.story_id }),
-      "canonical review scope",
-    ) as { video: { status: string }; text: { status: string } } | null;
-    if (!s) throw new Error("Canonical review scope unavailable");
-    shared.push({
-      storyId: p.story_id,
-      textId: p.text_asset_id,
-      videoId: p.video_asset_id,
-      channels: p.channels,
-      videoApproved: s.video.status === "approved",
-      textApproved: s.text.status === "approved",
-    });
-  }
   const input: Omit<SharedInput, "url"> = {
     parties,
     stories,
@@ -396,7 +342,6 @@ async function sharedInput(
     channels,
     decisions,
     versions,
-    shared,
   };
   // Sign only what the reviewer will see: the final media of their pieces, its posters and each listing's thumbnail.
   const visible = buildSharedPieces({ ...input, url: (p) => p ?? null });

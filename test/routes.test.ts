@@ -20,8 +20,6 @@ afterEach(() => { mock?.restore(); mock = null; delete process.env.CRON_SECRET; 
 
 const cronReq = (auth?: string) => new Request("https://cockpit.test/api/cron/sync", { headers: auth === undefined ? {} : { authorization: auth } });
 const SYNC_OK: Route[] = [
-  {method:"GET",url:REST+"gtm_piece_deliveries",json:[]},{method:"GET",url:REST+"gtm_piece_delivery_attempts",json:[]},
-  {method:"GET",url:REST+"gtm_piece_reviews",json:[]},
   { method: "GET", url: REST + "gtm_sync_state?select=value&key=eq.pieces.killed", json: [] },
   { method: "GET", url: REST + "gtm_content_items", json: [] },
   { method: "GET", url: REST + "gtm_seasons", json: [] },

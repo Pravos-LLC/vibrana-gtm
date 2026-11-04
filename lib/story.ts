@@ -59,9 +59,7 @@ export type PlannedAsset = ManifestAsset & {
   stageExplicit?: boolean;
 };
 export type StoryHead = { id: string; title: string; link: string; season_id?: string | null; pipeline?: Format | null; series?: string | null; third_party_who?: string | null };
-export type StageOptions = { stage?: string; changes?: string; reopen?: boolean; /** false: refuse an unplayable video instead of re-encoding it (gtm story stage --no-heal). */ heal?: boolean; shared?: boolean;
-  /** Tests only (the CLI never sets it): treat shared delivery as installed, to exercise shared staging before VIB-446. */
-  assumeSharedDelivery?: boolean };
+export type StageOptions = { stage?: string; changes?: string; reopen?: boolean; /** false: refuse an unplayable video instead of re-encoding it (gtm story stage --no-heal). */ heal?: boolean };
 /** Bytes a publish gate verified: in memory for normal media, or a LargeMedia handle streamed when it is sent. */
 export type VerifiedMedia = Map<string, Buffer | LargeMedia>;
 
@@ -91,7 +89,6 @@ export function planStory(manifestPath: string, cal: Calendar, stage?: string, o
       if (key !== undefined && !stageOf(p, key)) throw new Error(`stage "${key}" is not in the ${p.format} pipeline (${p.stages.map((s) => s.key).join(", ")})`);
     }
   }
-  if (opts.shared && (story.assets.filter(a => a.kind === "copy").length !== 1 || story.assets.filter(a => a.kind === "video").length !== 1)) throw new Error("Shared review requires exactly one text and one video");
   const storyChanges = opts.changes ?? story.changes;
   const seen = new Set<string>();
   const workspace = realpathSync(process.env.GTM_WORKSPACE ?? resolve(homedir(), "Projects/john-workspace"));
@@ -258,62 +255,14 @@ export async function stageStory(db: SupabaseClient | null, manifestPath: string
     const prior = db && needsLegacy ? must(await db.from("gtm_story_assets").select("id,sha256,stage,updated_at,metadata").eq("story_id", story.id), "packaging legacy assets") as ExistingPackagingAsset[] : [];
     packagingGate(story.id, assets, prior, story.pipeline);
   }
-  // A configured `--shared` dry run also runs the read-only shared checks, so it fails the way the real run would
-  // (review #145 N8). A plain dry run reads nothing new.
-  // An offline dry run cannot check the shared state, so it must not read as a pass (review #145 R2).
-  if (dryRun && !db && opts.shared) throw new Error("A --shared dry run needs the database (NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY): it checks the shared review before anything is written");
-  if (dryRun && db && opts.shared) {
-    const existing = must(await db.from("gtm_story_assets").select("id,kind,metadata").eq("story_id", story.id), "current story assets") as Array<Pick<StoryAsset, "id" | "kind" | "metadata">>;
-    await sharedChecks(db, story.id, assets, existing, opts);
-  }
   if (dryRun) return { dryRun: true, id: story.id, ...heal, assets: assets.map((a) => ({ id: a.id, kind: a.kind, channels: a.channels, bytes: a.bytes, sha256: a.sha256, ...(a.stage ? { stage: a.stage } : {}), ...(a.large ? { large: true, review_proxy: "720p, rendered and uploaded with the master" } : {}) })) };
   if (!db) throw new Error("Story staging needs a database connection");
   const written = await writeStory(db, {
     id: story.id, title: story.title, link: story.link, season_id: story.season ?? null,
     ...(isFormat(story.pipeline) ? { pipeline: story.pipeline } : {}), ...(story.series ? { series: story.series } : {}),
     ...(story.third_party ? { third_party_who: story.third_party.trim() } : {}),
-  }, assets, force, { reopen: opts.reopen, shared: opts.shared, assumeSharedDelivery: opts.assumeSharedDelivery });
+  }, assets, force, { reopen: opts.reopen });
   return { ...written, ...heal };
-}
-
-/**
- * Read-only checks before a shared piece is written (also run by a configured dry run). Refuses:
- * - `--shared` while shared delivery is not installed (review #145 N1), unless a test assumes it;
- * - `--shared` onto a Story with any asset that is not already part of a shared piece (#145 N4): adopting a historical
- *   piece is the owner's choice in /content, and an image left on the legacy path would become unpublishable;
- * - a restage without `--shared` of a piece left part-way by a failed `--shared` run (#145 N5): it would write shared
- *   assets with no shared review behind them, invisible in /content and refused by legacy publishing;
- * - for a configured piece: dropping the canonical text or video, or channels that differ from the review (#145 N3,
- *   compared with the same `sharedChannels` rule configuration uses).
- */
-async function sharedChecks(db: SupabaseClient, storyId: string, assets: Array<Pick<PlannedAsset, "id" | "channels" | "kind">>, existing: Array<Pick<StoryAsset, "id" | "metadata" | "kind">>, opts: { shared?: boolean; assumeSharedDelivery?: boolean }) {
-  const marked = existing.some((a) => a.metadata?.shared_review === true);
-  if (!opts.shared && !marked) return null;
-  const { loadPieceReview, sameChannels, sharedChannels, sharedDeliveryInstalled } = await import("./piece-review");
-  if (opts.shared && !opts.assumeSharedDelivery) {
-    const installed = await sharedDeliveryInstalled(db);
-    if (!installed.ok) throw new Error(`--shared is not available yet: ${installed.reason}. Stage without --shared.`);
-  }
-  const review = await loadPieceReview(db, storyId);
-  if (!review) {
-    if (!opts.shared) throw new Error(`${storyId} is part-way into shared review (its assets are marked shared but no shared review exists): restage with --shared to finish it`);
-    const legacy = existing.filter((a) => a.metadata?.shared_review !== true);
-    if (legacy.length) throw new Error(`Choose the existing piece's canonical text and video in /content before staging it with --shared (not part of a shared piece: ${legacy.map((a) => a.id).join(", ")})`);
-    // Before any write: the piece must end with exactly one text and one video, counting what a part-way run already
-    // wrote, so a renamed asset never gets uploaded and stamped first (review #145 R1).
-    for (const kind of ["copy", "video"] as const) {
-      const ids = [...new Set([...existing, ...assets].filter((a) => a.kind === kind).map((a) => a.id))];
-      if (ids.length !== 1) throw new Error(`Shared review needs exactly one ${kind === "copy" ? "text" : "video"}; this piece would have ${ids.length} (${ids.join(", ")}). Keep the ids a part-way run already staged.`);
-    }
-    return null;
-  }
-  const canonical = [review.text.asset.id, review.video.asset.id];
-  const dropped = canonical.filter((id) => !assets.some((a) => a.id === id));
-  if (dropped.length) throw new Error(`Keep the canonical text and video ids when restaging: ${dropped.join(", ")}`);
-  if (!sameChannels(sharedChannels(assets, canonical), review.channels)) {
-    throw new Error("Selected channels differ from shared review; change them explicitly in /content before staging");
-  }
-  return review;
 }
 
 /**
@@ -321,7 +270,7 @@ async function sharedChecks(db: SupabaseClient, storyId: string, assets: Array<P
  * Send to Review on a Sunday candidate (copy built in memory): upsert the Story, its asset snapshots and their
  * pending channel assignments, keeping every decision on an unchanged asset.
  */
-export async function writeStory(db: SupabaseClient, story: StoryHead, assets: PlannedAsset[], force = false, opts: { reopen?: boolean; shared?: boolean; assumeSharedDelivery?: boolean } = {}) {
+export async function writeStory(db: SupabaseClient, story: StoryHead, assets: PlannedAsset[], force = false, opts: { reopen?: boolean } = {}) {
   const allExisting = must(await db.from("gtm_story_assets").select("id,story_id,sha256,storage_path").in("id", assets.map((a) => a.id)), "existing story assets") as Pick<StoryAsset, "id" | "story_id" | "sha256" | "storage_path">[];
   const otherStory = allExisting.find((a) => a.story_id !== story.id);
   if (otherStory) throw new Error(`${otherStory.id} already belongs to Story ${otherStory.story_id}`);
@@ -330,18 +279,14 @@ export async function writeStory(db: SupabaseClient, story: StoryHead, assets: P
   if (edited.length && !force) {
     throw new Error(`copy edited in the dashboard would be overwritten by the local file: ${edited.map((e) => e.id).join(", ")}. Copy the dashboard text into the file (gtm calendar export shows it) or pass --force.`);
   }
-  const shared = !!opts.shared || existing.some((a) => a.metadata?.shared_review === true);
-  const review = await sharedChecks(db, story.id, assets, existing, opts);
-  const missingShared = existing.filter((a) => a.metadata?.shared_review_part && !assets.some((next) => next.id === a.id));
-  if (missingShared.length) throw new Error(`Keep the canonical text and video ids when restaging: ${missingShared.map((a) => a.id).join(", ")}`);
   const stale = existing.filter((a) => !assets.some((next) => next.id === a.id));
-  if (stale.length && !shared) throw new Error(`story ${story.id} has assets missing from the manifest: ${stale.map((a) => a.id).join(", ")}. Resolve them explicitly before staging.`);
+  if (stale.length) throw new Error(`story ${story.id} has assets missing from the manifest: ${stale.map((a) => a.id).join(", ")}. Resolve them explicitly before staging.`);
   const channelRows = must(await db.from("gtm_story_asset_channels").select("asset_id,channel").in("asset_id", assets.map((a) => a.id)), "existing channel assignments") as { asset_id: string; channel: string }[];
   // John's channel ticks (lib/piece-channels.ts): a dropped channel is never bound again, an added one is accepted as bound.
   const { dropped, added } = await (await import("./piece-channels")).channelChoice(db, story.id);
   for (const a of assets) {
     const removed = channelRows.filter((row) => row.asset_id === a.id && !a.channels.includes(row.channel) && !added.includes(row.channel));
-    if (removed.length && !shared) throw new Error(`${a.id} has channel assignments missing from the manifest: ${removed.map((c) => c.channel).join(", ")}. Resolve them explicitly.`);
+    if (removed.length) throw new Error(`${a.id} has channel assignments missing from the manifest: ${removed.map((c) => c.channel).join(", ")}. Resolve them explicitly.`);
   }
   // The stage each media asset ends at: named on the asset, or the run's stage for new or changed bytes; else unchanged.
   const stageFor = new Map<string, string | undefined>();
@@ -359,7 +304,7 @@ export async function writeStory(db: SupabaseClient, story: StoryHead, assets: P
     if (length.errors.length) throw new Error(length.errors.join("\n"));
     lengthWarnings.push(...length.warnings);
   }
-  const progress = shared ? { rows: [], warnings: [] } : await planProgress(db, story, assets, existing, stageFor, !!opts.reopen);
+  const progress = await planProgress(db, story, assets, existing, stageFor, !!opts.reopen);
   packagingGate(story.id, assets, existing, story.pipeline);
   must(await db.from("gtm_stories").upsert({
     id: story.id, title: story.title, link_url: story.link, ...(story.season_id ? { season_id: story.season_id } : {}),
@@ -411,14 +356,13 @@ export async function writeStory(db: SupabaseClient, story: StoryHead, assets: P
       // A version's own description (changes, label, jump points) belongs to new bytes; unchanged bytes keep theirs.
       storage_path: storagePath, body: a.body, url: a.url, metadata: { ...(prior?.sha256 === a.sha256 ? prior.metadata ?? {} : {}), ...(prior?.sha256 === a.sha256 ? {} : a.metadata ?? {}), ...(legacy ? { packaging_legacy: legacy } : {}), bytes: a.bytes, ...proxy, ...(posterPath ? { poster_path: posterPath } : {}), ...(thumb ? { thumbnail_path: thumb.path, thumbnail_sha256: thumb.sha256 } : {}), ...(prior?.sha256 !== a.sha256 ? { edited_in_dashboard: undefined } : {}) },
     };
-    if (shared) Object.assign(row.metadata, { shared_review: true, ...(prior?.metadata?.shared_review_part ? { shared_review_part: prior.metadata.shared_review_part } : {}) });
     // Compare-and-swap prevents another stage or human save being overwritten after the read.
     if (prior) {
       const saved = must(await db.from("gtm_story_assets").update(row).eq("id", a.id).eq("revision", prior.revision).eq("sha256", prior.sha256).eq("metadata", JSON.stringify(prior.metadata ?? {})).select("id").maybeSingle(), `update asset ${a.id}`);
       if (!saved) throw new Error(`${a.id} changed while staging; reload the canonical version before retrying`);
     } else must(await db.from("gtm_story_assets").insert(row), `insert asset ${a.id}`);
     const channels = channelRows.filter((row) => row.asset_id === a.id);
-    for (const channel of shared ? [] : a.channels) {
+    for (const channel of a.channels) {
       // A channel John unticked on the piece stays off until he ticks it back (lib/piece-channels.ts).
       if (dropped.includes(channel)) continue;
       if (!channels.some((c) => c.channel === channel)) {
@@ -427,17 +371,8 @@ export async function writeStory(db: SupabaseClient, story: StoryHead, assets: P
     }
   }
   if (progress.rows.length) must(await db.from("gtm_story_stages").upsert(progress.rows.map((r) => ({ story_id: story.id, ...r }))), "stage progress");
-  const rebound = shared ? [] : await rebindOpenItems(db, story.id, rekeyed);
+  const rebound = await rebindOpenItems(db, story.id, rekeyed);
   const kept = moved.length ? await approvalsKept(db, moved.map((m) => m.asset), assets) : [];
-  // A new shared piece is configured here, after its assets are written, with the same channel rule the restage check
-  // uses. A run that fails before this point is resumed by restaging with --shared (sharedChecks says so).
-  if (opts.shared && !review) {
-    const { pieceCandidates, configurePieceReview, sharedChannels } = await import("./piece-review");
-    const choices = await pieceCandidates(db, story.id);
-    const texts = choices.filter((a) => a.asset.kind === "copy"), videos = choices.filter((a) => a.asset.kind === "video");
-    if (texts.length !== 1 || videos.length !== 1) throw new Error("Shared review needs exactly one text and one video; choose canonical assets in /content");
-    await configurePieceReview(db, { storyId: story.id, text: texts[0], video: videos[0], channels: sharedChannels(assets, [texts[0].asset.id, videos[0].asset.id]) });
-  }
   return {
     id: story.id, assets: assets.length, channels: [...new Set(assets.flatMap((a) => a.channels))],
     ...(moved.length ? { moved_keys: moved, approvals_kept: kept } : {}), ...(rebound.length ? { rebound_items: rebound } : {}),
@@ -515,7 +450,6 @@ async function planProgress(db: SupabaseClient, story: StoryHead, assets: Planne
 /** Pure gate: a channel can go out only if every bound asset is approved for its current bytes. */
 export function assertStoryApproval(cal: Calendar, item: Item, assets: StoryAsset[], approvals: StoryChannel[]): VerifiedMedia {
   const bytes: VerifiedMedia = new Map();
-  if (assets.some((a) => a.metadata?.shared_review === true)) throw new Error("This piece uses shared approvals; use the shared publishing workflow");
   if (!item.story_id) return bytes;
   if (item.channels.length !== 1 || !item.story_assets?.length) throw new Error(`${item.id}: Story posts need one channel and explicit story_assets`);
   const channel = item.channels[0];
@@ -578,7 +512,6 @@ export async function checkStoryApprovalDb(db: SupabaseClient, item: Item) {
   if (ids.size !== item.story_assets.length) throw new Error(`${item.id}: duplicate story assets`);
   const assets = must(await db.from("gtm_story_assets").select("*").eq("story_id", item.story_id).in("id", item.story_assets), "story assets") as StoryAsset[];
   const approvals = must(await db.from("gtm_story_asset_channels").select("*").in("asset_id", item.story_assets), "story approvals") as StoryChannel[];
-  if (assets.some((a) => a.metadata?.shared_review === true)) throw new Error("This piece uses shared approvals; use the shared publishing workflow");
   if (assets.length !== ids.size) throw new Error(`${item.id}: Story assets missing from the Cockpit`);
   const bound = (ref: string) => assets.some((a) => a.source === ref || a.storage_path === ref);
   for (const ref of [item.copy, ...(item.media ?? [])].filter((x): x is string => !!x)) {

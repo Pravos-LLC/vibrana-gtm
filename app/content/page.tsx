@@ -1,7 +1,5 @@
 import { packagingBrandOptions } from "@/lib/packaging/server-catalog";
 import { Suspense } from "react";
-import { loadSharedSection, type SharedSection } from "./shared/section";
-import { ReleasedNotice } from "@/components/review/released-notice";
 import { TemplateReview } from "@/components/review/template-review";
 import { loadTemplateReview } from "@/lib/packaging/load-review";
 import { Shell, requestWorkCounts } from "@/components/shell";
@@ -55,14 +53,9 @@ async function ContentReviewBody({ searchParams }: { searchParams: Promise<Recor
   const db = await sessionDb();
   // The board, who is on file for @mentions (the check under each text says whether a tag will work, lib/mentions.ts)
   // and the work-board line read side by side.
-  const sharedPromise = loadSharedSection(db, { adoptedOnly: true, filters }).then(
-    (section) => ({ section, problem: null }),
-    (error: unknown) => { unstable_rethrow(error); return { section: null, problem: error instanceof Error ? error.message : String(error) }; },
-  );
   const [board, peopleRows, work] = await Promise.all([loadContentBoard(db, filters), loadPeople(db).catch(() => []), requestWorkCounts()]);
   if (board.error !== null) return <Shell title="Content review" active="/content" wide><p className="text-red-strong">Could not load the content: {board.error}</p></Shell>;
   const { storyRows, stories, all, directed, hiddenPieces, holds, summary, stages, initial, pieceOptions } = board;
-  let sharedProblem = board.sharedProblem;
   const people = peopleRows.map(({ name, linkedin_name, linkedin_urn, linkedin_error, instagram_handle, auto_tag }) => ({ name, linkedin_name, linkedin_urn, linkedin_error, instagram_handle, auto_tag }));
   const visible = filterPieces(directed, filters);
   const linkedHidden = filters.piece ? hiddenPieces.find((h) => h.storyId === filters.piece) : undefined;
@@ -84,13 +77,6 @@ async function ContentReviewBody({ searchParams }: { searchParams: Promise<Recor
     : { data: [] };
   const links: ReviewLinkRow[] = ((inviteRows ?? []) as Array<Pick<Invite, "id" | "party" | "expires_at" | "created_at" | "claimed_email" | "claimed_at" | "revoked_at">>)
     .map((i) => ({ id: i.id, party: i.party, state: inviteState(i), claimedEmail: i.claimed_email, expiresAt: i.expires_at, createdAt: i.created_at }));
-  // Shared pieces obey the same filters and join the toolbar's counts; any failure is one line, never the page (#147 B1, B3).
-  // "Leave shared review" lands here with which approvals survived (?released=<text><video>, 1 kept, 0 to decide).
-  const releasedParam = Array.isArray(params.released) ? params.released[0] : params.released;
-  const released = filters.piece && /^[01]{2}$/.test(releasedParam ?? "") ? releasedParam! : null;
-  const sharedResult = await sharedPromise;
-  const sharedSection: SharedSection | null = sharedProblem ? null : sharedResult.section;
-  sharedProblem ??= sharedResult.problem;
   return (
     <Shell title="Content review" active="/content" wide>
       <nav aria-label="Content tools" className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-ink-2">
@@ -102,10 +88,7 @@ async function ContentReviewBody({ searchParams }: { searchParams: Promise<Recor
           </Link>
         )}
         <Link href="/content/delivery" className="underline underline-offset-4">Delivery report</Link>
-        {sharedSection?.delivery.ok && <Link href="/content/shared" className="underline underline-offset-4">Choose shared assets</Link>}
       </nav>
-      {released && <ReleasedNotice released={released} />}
-      {sharedProblem && <p role="alert" className="mb-4 text-sm text-red-strong" data-testid="shared-unavailable">Shared pieces could not be loaded ({sharedProblem}). Pieces below are unaffected; refresh to retry.</p>}
       {/* Keyed on the query so a new filter starts from fresh server data. */}
       <ReviewProvider key={filtersToQuery(filters)} initial={initial} summary={summary} stages={stages}>
         <div className="space-y-5">
@@ -118,8 +101,7 @@ async function ContentReviewBody({ searchParams }: { searchParams: Promise<Recor
             </ContentDetail>
           } />
           <ContentToolbar path="/content" filters={filters} pieces={pieceOptions} pillars={pillars}
-            shown={shownCards + (sharedSection?.shown ?? 0)} total={summary.length + (sharedSection?.total ?? 0)} {...seriesOptions(all)} />
-          {sharedSection?.node}
+            shown={shownCards} total={summary.length} {...seriesOptions(all)} />
           <SeriesSection all={directed} filters={filters} path="/content" />
           <PeopleProvider people={people} add={addPerson}><PieceList pieces={visible} focus={filters.focus} status={filters.status} platform={filters.platform} open={openChannel} /></PeopleProvider>
           {linkedHidden && (
@@ -132,7 +114,7 @@ async function ContentReviewBody({ searchParams }: { searchParams: Promise<Recor
               Not shown until a new version is staged: {hiddenPieces.map((h) => all.find((p) => p.storyId === h.storyId)?.name ?? h.storyId).join(", ")}.
             </p>
           )}
-          {!visible.length && !linkedHidden && !sharedSection?.shown && (
+          {!visible.length && !linkedHidden && (
             <Card glow={false} className="p-8 text-center text-ink-2">
               {all.length === 0 ? "No season pieces staged yet." : "No platform cards match these filters."}
               {hasFilters(filters) && <> <Link href="/content?status=all" className="font-medium text-ink underline underline-offset-4">Clear filters</Link></>}

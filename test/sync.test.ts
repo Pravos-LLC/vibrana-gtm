@@ -23,7 +23,7 @@ import type { Item } from "../lib/calendar.ts";
 const REST = "https://db.test/rest/v1/";
 const Z = "https://zernio.test/api/v1";
 let mock: ReturnType<typeof installFetchMock> | null = null;
-const use = (routes: Route[]) => (mock = installFetchMock([...routes,{method:"GET",url:REST+"gtm_piece_deliveries",json:[]},{method:"GET",url:REST+"gtm_piece_delivery_attempts",json:[]}]));
+const use = (routes: Route[]) => (mock = installFetchMock(routes));
 afterEach(() => { mock?.restore(); mock = null; });
 const json = (b: string | null) => JSON.parse(b ?? "null");
 const item = (id: string, extra: Partial<Item> = {}): Item => ({ id, week: 1, date: "2026-10-06", pillar: "p", title: id, format: "text", channels: ["linkedin"], status: "approved", ...extra });
@@ -110,20 +110,6 @@ test("a published post deleted at Zernio later is history: no error, no patch, t
   const patches = await syncStatus();
   assert.deepEqual(patches.map((p) => p.id), ["next"]);
   assert.ok(!m.calls.some((c) => c.method === "PATCH" && c.url.includes("eq.old")));
-});
-
-test("calendar import leaves rows owned by a shared delivery untouched: not upserted, not deleted", async () => {
-  mock = installFetchMock([
-    { method: "GET", url: REST + "gtm_piece_deliveries", json: [{ id: "d1", calendar_id: "frozen" }] },
-    { method: "POST", url: REST + "gtm_content_items", status: 201 },
-    { method: "GET", url: REST + "gtm_content_items", json: [{ id: "a" }, { id: "frozen" }, { id: "frozen-gone" }] },
-    { method: "DELETE", url: REST + "gtm_content_items", status: 204 },
-  ]);
-  mock.calls.length = 0;
-  const r = await pushItems([item("a"), item("frozen", { status: "drafted" })]);
-  assert.deepEqual(r, { upserted: 1, removed: 1, frozen: ["frozen"] });
-  const up = mock.calls.find((c) => c.method === "POST")!;
-  assert.deepEqual(json(up.body).map((x: { id: string }) => x.id), ["a"]);
 });
 
 test("syncStatus reports a failed provider read after checking later rows",async()=>{
