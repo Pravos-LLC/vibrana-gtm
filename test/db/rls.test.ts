@@ -22,7 +22,9 @@ before(async () => {
 const OUTREACH_IDS_SOLO = OUTREACH_IDS.solo;
 // Service-key-only tables: RLS on, no policy and no grant for anon or authenticated, so not even the owner reads them.
 const SERVICE_ONLY = ["review_publications", "review_publication_cancellations", "client_feedback"];
-const OWNER_READABLE = TABLES.filter((t) => !SERVICE_ONLY.includes(t));
+// Column-limited: the owner reads the listed columns only (a mailbox's status, never its sealed token).
+const COLUMN_LIMITED: Record<string, string> = { gtm_team_mailboxes: "member,address,key_version,backfill_done,connected_at,last_sync_at,last_error" };
+const OWNER_READABLE = TABLES.filter((t) => !SERVICE_ONLY.includes(t) && !(t in COLUMN_LIMITED));
 const DENIED = /permission denied|row-level security|violates row-level|not allowed|insufficient/i;
 
 /** Full, ordered contents of every table: the "nothing changed" oracle for denied writes. */
@@ -63,6 +65,9 @@ function probe(t: (typeof TABLES)[number]): { row: Record<string, unknown>; key:
     case "gtm_manual_metrics": return { row: { week_start: "2001-01-01", channel: "youtube" }, key: ["week_start", "2001-01-01"], patch: { note: "changed" } };
     case "gtm_content_reports": return { row: { kind: "baseline", period_start: "2001-01-01", period_end: "2001-01-02" }, key: ["period_start", "2001-01-01"], patch: { headline: "changed" } };
     case "gtm_report_actions": return { row: { report_id: FIXTURE_REPORT, type: "move", proposal: id }, key: ["proposal", id], patch: { rationale: "changed" } };
+    case "gtm_team_mailboxes": { const m = `P${id.slice(6, 12).toUpperCase().replace(/[^A-Z0-9]/g, "A")}`; return { row: { member: m, address: "probe@example.com", token_ciphertext: "x".repeat(60) }, key: ["member", m], patch: { last_error: "changed" } }; }
+    case "gtm_team_mail_events": { const g = randomUUID().replace(/-/g, "").slice(0, 16); return { row: { member: "PROBE", gmail_message_id: g, thread_id: g, kind: "outreach", at: "2026-01-01T00:00:00Z" }, key: ["gmail_message_id", g], patch: { kind: "reply" } }; }
+    case "gtm_team_stock_daily": { const m = `P${id.slice(6, 12).toUpperCase().replace(/[^A-Z0-9]/g, "A")}`; return { row: { member: m, date: "2026-01-01", metrics: {} }, key: ["member", m], patch: { metrics: { x: 1 } } }; }
     case "gtm_sync_state": { const k = id.replace(/-/g, "_"); return { row: { key: k, value: {} }, key: ["key", k], patch: { value: { x: 1 } } }; }
     case "gtm_settings": return { row: { key: id, value: {} }, key: ["key", id], patch: { value: { x: 1 } } };
     case "gtm_settings_history": return { row: { key: id, value: {} }, key: ["key", id], patch: { value: { x: 1 } } };
@@ -247,7 +252,23 @@ test("a signed-in non-owner, a gtm_team member and a user_metadata impostor read
       const { error } = await db[who].from(t).select("*");
       assert.match(error?.message ?? "", DENIED, `${who} ${t}`);
     }
+    for (const [t, cols] of Object.entries(COLUMN_LIMITED)) {
+      const { data, error } = await db[who].from(t).select(cols);
+      assert.equal(error, null, `${who} ${t}: ${error?.message}`);
+      assert.deepEqual(data, [], `${who} ${t}`);
+    }
   }
+});
+
+test("a team mailbox: the owner reads its status columns, and nobody but the secret key reads the sealed token", async () => {
+  const cols = COLUMN_LIMITED.gtm_team_mailboxes;
+  const [{ data, error }, { count }] = await Promise.all([db.owner.from("gtm_team_mailboxes").select(cols), sr.from("gtm_team_mailboxes").select("*", { count: "exact", head: true })]);
+  assert.equal(error, null, error?.message ?? "");
+  assert.ok((data ?? []).length > 0 && data!.length === count, "the owner sees every connection's status");
+  for (const who of ["owner", "member", "team", "impostor"] as const) {
+    for (const q of ["*", "token_ciphertext", "history_id"]) assert.match((await db[who].from("gtm_team_mailboxes").select(q)).error?.message ?? "no error", DENIED, `${who} ${q}`);
+  }
+  assert.equal((await sr.from("gtm_team_mailboxes").select("token_ciphertext")).error, null);
 });
 
 test("the owner reads every seeded gtm_* and review_* table and the view", async () => {

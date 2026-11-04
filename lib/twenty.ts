@@ -27,6 +27,85 @@ async function gql<T>(query: string, timeoutMs = 15_000): Promise<T> {
   return json.data as T;
 }
 
+/**
+ * Serial, paced Twenty reads for batch jobs (the team cron). Production Twenty is small: after the 2026-10-01 saturation
+ * the CRM runbook (vibrana-crm docs/operations.md) asks for one reader at a time, a pause between reads and backoff on
+ * 429 or 5xx. `gql()` above is a single request for page views; this wraps a variables-capable request in that discipline
+ * and stops at a deadline rather than running into the function's time limit. GraphQL errors are not retried: they are
+ * answers, not overload.
+ */
+export class TwentyReader {
+  private chain: Promise<unknown> = Promise.resolve();
+  private last = 0;
+  readonly requests: { count: number } = { count: 0 };
+  constructor(private opts: {
+    pauseMs?: number; retries?: number; deadline?: number; timeoutMs?: number;
+    fetcher?: typeof fetch; sleep?: (ms: number) => Promise<void>; now?: () => number;
+  } = {}) {}
+
+  /** Moves the stop time, e.g. to give each team member a fair share of a cron run. */
+  setDeadline(deadline: number | undefined) { this.opts.deadline = deadline; }
+
+  read<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+    const run = this.chain.then(() => this.send<T>(query, variables));
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async send<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+    if (demoMode()) throw new Error("Demo mode: CRM reads are unavailable; no request was sent");
+    const token = process.env.TWENTY_API_KEY;
+    if (!token) throw new Error("TWENTY_API_KEY is not set");
+    const now = this.opts.now ?? Date.now, sleep = this.opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const pause = this.opts.pauseMs ?? 1500, retries = this.opts.retries ?? 4;
+    for (let attempt = 0; ; attempt++) {
+      const wait = this.last + pause - now();
+      if (wait > 0) await sleep(wait);
+      if (this.opts.deadline && now() > this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
+      this.requests.count++;
+      let status = 0, json: { data?: T; errors?: unknown } | null = null, failure = "";
+      try {
+        const res = await (this.opts.fetcher ?? fetch)(`${BASE}/graphql`, {
+          signal: AbortSignal.timeout(this.opts.timeoutMs ?? 20_000), method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ query, variables }),
+        });
+        status = res.status;
+        json = await res.json().catch(() => null);
+      } catch (e) { failure = (e as Error).message; }
+      this.last = now();
+      if (json?.errors) throw new TwentyError(`Twenty: ${JSON.stringify(json.errors).slice(0, 300)}`, json.errors);
+      if (status >= 200 && status < 300 && json?.data) return json.data;
+      const transient = !status || status === 429 || status >= 500;
+      if (!transient || attempt >= retries) throw new Error(`Twenty read failed (${status || failure || "no response"})`);
+      await sleep(Math.min(30_000, 2_000 * 2 ** attempt));
+    }
+  }
+
+  /**
+   * Every node of a connection, page by page (`first` up to 100), following the cursor. Twenty's cursor under a
+   * createdAt sort hands back the boundary row again on the next page (measured on production 2026-11-04: one extra row
+   * per page), so `id` is always selected and every row is kept once.
+   */
+  async all<N>(object: string, fields: string, filter: Record<string, unknown> | null, filterType: string, pageSize = 100, max = 5_000): Promise<N[]> {
+    const out: N[] = [];
+    const seen = new Set<string>();
+    const select = /(^|\s)id(\s|$)/.test(fields) ? fields : `id ${fields}`;
+    let after: string | null = null;
+    for (;;) {
+      const q = `query($f:${filterType},$a:String){ ${object}(filter:$f, first:${pageSize}, after:$a, orderBy:[{createdAt:AscNullsFirst},{id:AscNullsFirst}]) { pageInfo { hasNextPage endCursor } edges { node { ${select} } } } }`;
+      const d: Record<string, { pageInfo: { hasNextPage: boolean; endCursor: string | null }; edges: { node: N & { id: string } }[] }> =
+        await this.read(q, { f: filter ?? {}, a: after });
+      const c = d[object];
+      let fresh = 0;
+      for (const e of c.edges) if (!seen.has(e.node.id)) { seen.add(e.node.id); out.push(e.node); fresh++; }
+      if (!c.pageInfo.hasNextPage || !c.pageInfo.endCursor || (!fresh && c.edges.length)) return out;
+      if (out.length >= max) throw new Error(`Twenty ${object}: more than ${max} rows; refusing to return a silently truncated list`);
+      after = c.pageInfo.endCursor;
+    }
+  }
+}
+
 async function countPeople(filter?: string): Promise<number> {
   const f = filter ? `(filter:${filter})` : "";
   const d = await gql<{ people: { totalCount: number } }>(`{ people${f} { totalCount } }`);
