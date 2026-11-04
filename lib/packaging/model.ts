@@ -5,6 +5,7 @@ import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } fro
 import { resolve, dirname } from "node:path";
 import { SIZES, TEMPLATES, TOOLKIT_VERSION, type Brand, type Shape, type Template, type Theme } from "./catalog";
 import { imageProblems, sniffImage, IMAGE_TYPES, PUBLISH_IMAGE_BYTES } from "../image-loadable";
+import { checkFrameManifest, type FrameManifest, type StagedVideo } from "./frame";
 
 export type PackagingBrief = {
   schema: 1; story: string; brand: Brand; theme: Theme; template: Template; ready: boolean;
@@ -73,9 +74,12 @@ export function readBrief(path: string): PackagingBrief {
 export function inputPaths(b: PackagingBrief, briefPath: string): string[] {
   return [...new Set([...b.sources.map(s => s.path), b.opening.source, b.payoff.source, ...b.portraits.map(p => p.path), ...(b.background ? [b.background] : []), ...(b.focal ? [b.focal] : [])].map(p => resolve(dirname(briefPath), p)))];
 }
-export function checkPackage(path: string, expected?: { story: string; assetPath: string; sha256: string }): string[] {
+export function checkPackage(path: string, expected?: { story: string; assetPath: string; sha256: string; videos?: StagedVideo[] }): string[] {
   try {
-    const m = JSON.parse(readFileSync(path, "utf8")) as PackagingManifest;
+    const raw = JSON.parse(readFileSync(path, "utf8")) as PackagingManifest | FrameManifest;
+    // A frame cover (gtm packaging frame) is one exact frame of the Story's own cut, bound to that video by hash.
+    if ((raw as FrameManifest).kind === "frame") return checkFrameManifest(path, raw as FrameManifest, expected);
+    const m = raw as PackagingManifest;
     if (m.schema !== 1 || m.toolkit !== TOOLKIT_VERSION || m.catalogHash !== catalogHash()) return ["stale or unsupported packaging toolkit: rerender"];
     const root = dirname(path), bp = resolve(root, m.brief), b = readBrief(bp);
     const errors: string[] = [];
@@ -130,7 +134,10 @@ export function packagingGate(
     if (!cover) continue;
     // Existing identical assets are a legacy import; no fabricated attestation or withdrawn approval.
     if (!a.packaging && existing.some(e => e.id === a.id && e.sha256 === a.sha256 && legacyPackagingRecord(e))) continue;
-    const errors = a.packaging ? checkPackage(a.packaging, { story, assetPath: a.abs, sha256: a.sha256 }) : ["missing packaging manifest"];
-    if (errors.length) throw new Error(`${a.id}: ${errors.join("; ")}. Run gtm packaging brief ${story}, complete the brief, then gtm packaging render ${story} and gtm packaging check ${story}.`);
+    const errors = a.packaging ? checkPackage(a.packaging, { story, assetPath: a.abs, sha256: a.sha256, videos: assets.filter(x => x.kind === "video").map(x => ({ sha256: x.sha256, abs: x.abs })) }) : ["missing packaging manifest"];
+    if (!errors.length) continue;
+    const frame = !!a.packaging && (() => { try { return JSON.parse(readFileSync(a.packaging!, "utf8"))?.kind === "frame"; } catch { return false; } })();
+    if (frame) throw new Error(`${a.id}: ${errors.join("; ")}. Re-run gtm packaging frame ${story} --video <the staged cut> --at <seconds> --out <directory> and point the cover at the new files.`);
+    throw new Error(`${a.id}: ${errors.join("; ")}. Run gtm packaging brief ${story}, complete the brief, then gtm packaging render ${story} and gtm packaging check ${story}.`);
   }
 }

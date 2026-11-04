@@ -13,9 +13,16 @@ gtm packaging check <story-id> [--manifest story.yaml] --json
 gtm packaging revise <story-id> --notes <feedback-id,...> --json
 gtm packaging gallery <story-id> --out <directory> [--asset-root path] --json
 gtm packaging motion <story-id> --brief <path> --out title.webm [--shape landscape|portrait|square|feed] [--asset-root path]
+gtm packaging frame <story-id> --video <cut.mp4> --at <seconds> --out <directory>
 ```
 
 `--manifest` disambiguates a Story; `--brief` selects a separate candidate or production brief. `brief` preserves an existing brief. Renders are content-addressed under `packaging/<story-id>/renders/<key>/`, and `latest.json` points at the newest one.
+
+### Frame covers
+
+When the owner wants the cover to be a screen from the cut itself (the opening title card, say), `frame` takes that exact frame instead of composing a template: no brand, font or brief is involved. It writes `<directory>/frame-<key>/<shape>.jpg` at the registered size for the video's shape, and a `manifest.json` (`kind: "frame"`) binding the cover to the video's sha256 and the timestamp. Point the Story's cover asset at both, as with any render (`source:` the JPEG, `packaging:` the manifest).
+
+The staging gate accepts a frame cover only when its source video is one of the videos being staged, and it re-extracts the frame at the recorded time from that staged file and requires at least 35 dB luma PSNR against the cover, so a hand-written manifest around any other image (or a real frame with something composed on top) is refused. The cover's shape must match the video's display size (rotation and sample aspect applied). Staging a frame cover therefore needs `ffmpeg` and `ffprobe` on PATH. If the cut changes, the old frame fails with "re-extract it from the current cut" until `frame` runs again on the new file. A frame cover does not replace art direction: use it when the frame is the deliberate choice, not to skip a brief.
 
 ## Licensed fonts and marks
 

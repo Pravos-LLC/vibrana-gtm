@@ -131,7 +131,13 @@ const commands: Record<string, () => Promise<void>> = {
       if (!flag("--prompt-file") || !flag("--out")) throw new Error("usage: gtm packaging plate --prompt-file path --out plate.png [--reference source.png]");
       return out(await (await import("../lib/packaging/plate")).generatePlate(readFileSync(flag("--prompt-file")!, "utf8"), flag("--reference"), flag("--out")!));
     }
-    if (!id) throw new Error("usage: gtm packaging brief|render|check|revise|gallery|motion|stage-review <story-id> [--manifest path] [--brand sample-author|vibrana|aios] [--theme light|dark] [--brief path] [--notes ids] [--asset-root path]");
+    if (!id) throw new Error("usage: gtm packaging brief|render|check|revise|gallery|motion|stage-review|frame <story-id> [--manifest path] [--brand sample-author|vibrana|aios] [--theme light|dark] [--brief path] [--notes ids] [--asset-root path]");
+    if (sub === "frame") {
+      // The cover is one exact frame of the cut (the opening screen, say): gtm packaging frame <id> --video cut.mp4 --at 1.0 --out <dir>
+      const at = flag("--at");
+      if (!flag("--video") || !at || !/^\d+(\.\d+)?$/.test(at) || !flag("--out")) throw new Error("usage: gtm packaging frame <story-id> --video <cut.mp4> --at <seconds, e.g. 1.0> --out <directory>");
+      return out((await import("../lib/packaging/frame")).renderFrameCover(id, flag("--video")!, Number(at), flag("--out")!));
+    }
     if (sub === "brief") return out(ops.deriveBrief(id, { manifest: flag("--manifest"), brand: flag("--brand") as import("../lib/packaging/catalog").Brand | undefined, theme: flag("--theme") as import("../lib/packaging/catalog").Theme | undefined, out: flag("--out") }));
     if (sub === "stage-review") {
       if (!flag("--manifest")) throw new Error("stage-review needs --manifest <gallery/index.json>");
