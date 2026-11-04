@@ -79,7 +79,7 @@ export async function seasonsFor(db?: SupabaseClient): Promise<{ id: string; sta
   } catch { return []; }
 }
 
-export async function buildPost(cal: Calendar, item: Item, copyText?: string, utm?: { campaign: string }, people: Person[] = [], options: { shared?: boolean } = {}) {
+export async function buildPost(cal: Calendar, item: Item, copyText?: string, utm?: { campaign: string }, people: Person[] = []) {
   const igStory = item.format === "ig_story";
   if (igStory && (item.channels.length !== 1 || item.channels[0] !== "instagram")) throw new Error(`${item.id}: ig_story items must target instagram only`);
   if (copyText === undefined && !item.copy && !igStory) throw new Error(`${item.id} has no copy`);
@@ -108,11 +108,11 @@ export async function buildPost(cal: Calendar, item: Item, copyText?: string, ut
     const accountId = cal.accounts[ch];
     if (!accountId) throw new Error(`no Zernio account mapped for channel ${ch} (calendar.yaml accounts:)`);
     const psd: Record<string, unknown> = {};
-    if (ch === "youtube" && item.story_id && !copy.meta.youtube_title && !options.shared) {
+    if (ch === "youtube" && item.story_id && !copy.meta.youtube_title) {
       throw new Error(`${item.id}: Story YouTube posts need youtube_title in the approved copy file`);
     }
     if (ch === "youtube") Object.assign(psd, {
-      title: copy.meta.youtube_title ?? (options.shared ? copy.base.trim().split(/\r?\n/)[0].slice(0,100) : item.title), visibility: copy.meta.youtube_visibility ?? "public",
+      title: copy.meta.youtube_title ?? item.title, visibility: copy.meta.youtube_visibility ?? "public",
       madeForKids: false,
       ...(copy.meta.youtube_category_id || copy.meta.youtube_category === "Science & Technology"
         ? { categoryId: copy.meta.youtube_category_id ?? "28" } : {}),
@@ -126,7 +126,7 @@ export async function buildPost(cal: Calendar, item: Item, copyText?: string, ut
     // @mentions become each platform's tag from the people list (lib/mentions.ts), then our links get their UTM tags.
     // LinkedIn first comments keep the team's names plain, as the shared tagging contract requires.
     const tag = (raw: string, opts: { comment?: boolean } = {}) => { const text = renderMentions(raw, ch as MentionChannel, people, opts); return utm ? tagLinks(text, { source: ch, campaign: utm.campaign, content: item.id }) : text; };
-    if (firstComment && (options.shared ? ch === "linkedin" : (ch === "linkedin" || ch === "youtube" || (ch === "instagram" && !hasUrl(firstComment))))) psd.firstComment = tag(firstComment, { comment: true });
+    if (firstComment && (ch === "linkedin" || ch === "youtube" || (ch === "instagram" && !hasUrl(firstComment)))) psd.firstComment = tag(firstComment, { comment: true });
     const text = tag(copy.perChannel[ch] ?? copy.base);
     const custom = copy.perChannel[ch] || text !== copy.base ? text : undefined;
     return { platform: ch, accountId, ...(custom ? { customContent: custom } : {}), ...(Object.keys(psd).length ? { platformSpecificData: psd } : {}) };
@@ -330,19 +330,6 @@ async function sendDbItem(cal: Calendar, item: Item, opts: SendOpts) {
   const { BUCKET } = await import("./review");
   const { contentHash, siblingSource, updateItemDb } = await import("./calendar-db");
   const db = opts.db ?? adminDb();
-  if(item.story_id) {
-    const {loadPieceReview}=await import("./piece-review");
-    const shared=await loadPieceReview(db,item.story_id);
-    if(shared) {
-      if(opts.draft||mode==="now")throw new Error("Shared pieces use review and automatic scheduling; inspect their channel deliveries in /content");
-      if(!shared.ready)throw new Error(shared.blockers.join("; "));
-      const result=await (await import("./piece-schedule")).scheduleSharedPieces(db,{storyId:item.story_id,dryRun:opts.dry});
-      if(opts.dry)return {id,dryRun:true as const,body:{sharedReview:shared,slots:result.scheduled}};
-      const sent=result.scheduled.find(s=>s.id===id);
-      if(!sent?.zernioPostId)throw new Error(result.failed.find(f=>f.id===id)?.error??result.skipped.find(s=>s.id===id)?.reason??"No new delivery created. Inspect the existing channel outcome before retrying.");
-      return {id,zernioPostId:sent.zernioPostId,zernioStatus:sent.zernioStatus??"scheduled",scheduledFor:`${sent.date}T${sent.time}:00`,draft:false,warnings:[]};
-    }
-  }
   // Pending third-party approval: a held Story is never sent (a Zernio draft to preview it still is).
   if (item.story_id && !opts.draft) {
     const { holdFor, holdReason, loadAgentHolds, heldBy } = await import("./auto-schedule");
@@ -520,7 +507,6 @@ export async function claimLegacySend(db: SupabaseClient, id: string, item: Item
   if (/already claimed or no longer approved/.test(msg))
     throw new Error(`${id}: not sent. It is ${item.status === "approved" ? "already on its way to Zernio (another send claimed it)" : `a ${item.status} post`}; ${item.status === "approved" ? "refresh the calendar" : "approve it in /content first"}.`);
   if (/held or waiting for an accepted fix/.test(msg)) throw new Error(`${id}: not sent. The piece is on hold or waiting for the fix John approved with a note.`);
-  if (/use shared piece dispatch/.test(msg)) throw new Error(`${id}: not sent. This piece uses shared review; it schedules from its card in /content.`);
   if (/changed before sending/.test(msg)) throw new Error(`${id}: not sent. The post or its approval changed since this page loaded; refresh and try again.`);
   throw new Error(`${id}: claim approved post: ${msg}`);
 }

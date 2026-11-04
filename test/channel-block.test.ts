@@ -1,5 +1,5 @@
 // The guide's rhythm.blocked (John, 2026-11-02: Proof, Build and Lists never go to Instagram) is refused on every send
-// path: a calendar send, and a shared piece's channel delivery, including one reserved before the block existed.
+// path that sends a calendar item.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -7,7 +7,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Calendar, Item } from "../lib/calendar.ts";
 import { sendCalendarItem } from "../lib/publish-item.ts";
-import { assertChannelTakesPiece, CHANNEL_BLOCKED, deliveryPillar, sendPieceDelivery } from "../lib/piece-delivery.ts";
 import { RHYTHM } from "../lib/rhythm.ts";
 
 const item = (over: Partial<Item> = {}): Item => ({
@@ -40,40 +39,18 @@ test("every send path refuses a channel the guide blocks for the piece's pillar,
   }
 });
 
-test("a shared piece's delivery is refused before any claim when its channel never takes the piece's pillar", async () => {
-  RHYTHM.blocked = [{ channel: "instagram", pillars: ["proof"] }];
-  const cal = { items: [
-    { id: "p-linkedin", story_id: "p", pillar: "proof", channels: ["linkedin"] },
-    { id: "p-instagram", story_id: "p", pillar: "", channels: ["instagram"] },
-    { id: "q-instagram", story_id: "q", pillar: "perspective", channels: ["instagram"] },
-  ] } as unknown as Calendar;
-  let claimed = false;
-  const db = {
-    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { calendar_id: "p-instagram", story_id: "p", channel: "instagram" }, error: null }) }) }) }),
-    rpc: async () => { claimed = true; return { data: null, error: null }; },
-  };
-  try {
-    assert.equal(deliveryPillar(cal, { calendar_id: "p-instagram", story_id: "p" }), "proof");
-    assert.throws(() => assertChannelTakesPiece(cal, { calendar_id: "p-instagram", story_id: "p", channel: "instagram" }), CHANNEL_BLOCKED);
-    assert.doesNotThrow(() => assertChannelTakesPiece(cal, { calendar_id: "q-instagram", story_id: "q", channel: "instagram" }));
-    assert.doesNotThrow(() => assertChannelTakesPiece(cal, { calendar_id: "p-linkedin", story_id: "p", channel: "linkedin" }));
-    await assert.rejects(sendPieceDelivery(db as never, "delivery-1", cal), CHANNEL_BLOCKED);
-    assert.equal(claimed, false);
-  } finally {
-    delete RHYTHM.blocked;
-  }
-});
-
 test("a Story classified only in the private traits file is still blocked when no row carries a pillar", async () => {
   const { TRAITS } = await import("../lib/rhythm.ts");
+  const { dir, cal } = workspace("Body without links.");
   RHYTHM.blocked = [{ channel: "instagram", pillars: ["build"] }];
   TRAITS["t-story"] = { pillar: "build" };
-  const cal = { items: [{ id: "t-story-instagram", story_id: "t-story", pillar: "", channels: ["instagram"] }] } as unknown as Calendar;
   try {
-    assert.equal(deliveryPillar(cal, { calendar_id: "t-story-instagram", story_id: "t-story" }), "build");
-    assert.throws(() => assertChannelTakesPiece(cal, { calendar_id: "t-story-instagram", story_id: "t-story", channel: "instagram" }), CHANNEL_BLOCKED);
+    const ig = { ...item({ id: "t-story-instagram", channels: ["instagram"], story_id: "t-story" }), pillar: undefined } as unknown as Item;
+    cal.items = [ig];
+    await assert.rejects(sendCalendarItem(cal, ig.id, { dry: true }), /instagram never takes build pieces/);
   } finally {
     delete RHYTHM.blocked;
     delete TRAITS["t-story"];
+    rmSync(dir, { recursive: true, force: true });
   }
 });

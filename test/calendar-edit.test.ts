@@ -21,13 +21,10 @@ import type { Post } from "../lib/posts.ts";
 const REST = "https://db.test/rest/v1/";
 const Z = "https://zernio.test/api/v1";
 let mock: ReturnType<typeof installFetchMock> | null = null;
-// The stack's reads and claims these paths now make (a shared review check, the kill record, the delivery ledger, the
-// legacy send claim): answered as for a legacy piece, after each test's own routes.
+// The stack's reads and claims these paths now make (the kill record, the send claim), after each test's own routes.
 const STACK: Route[] = [
-  { method: "GET", url: REST + "gtm_piece_reviews", json: [] },
   { method: "GET", url: REST + "gtm_sync_state", json: [] },
   { method: "POST", url: REST + "gtm_sync_state", status: 201 },
-  { method: "GET", url: REST + "gtm_piece_deliveries", json: [] },
   { method: "POST", url: REST + "rpc/gtm_claim_legacy_send", json: true },
 ];
 const use = (routes: Route[]) => (mock = installFetchMock([...routes, ...STACK]));

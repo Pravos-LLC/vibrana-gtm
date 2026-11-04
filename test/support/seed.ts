@@ -175,13 +175,6 @@ export const TABLES = [
   "review_batches", "review_assets", "review_comments", "review_publications", "review_publication_cancellations",
 ] as const;
 
-/**
- * The shared piece review and delivery ledger (vendored 20261017020000 and 20261017030000). Every write goes through a
- * checked RPC; the browser gets owner-only reads and the secret key reads too, so these are tested apart from TABLES
- * (test/db/rls.test.ts). Truncated with the rest on every seed.
- */
-export const PIECE_LEDGER = ["gtm_piece_reviews", "gtm_piece_part_decisions", "gtm_piece_fixes", "gtm_piece_deliveries", "gtm_piece_delivery_attempts", "gtm_piece_decision_events"] as const;
-
 export function admin(): SupabaseClient {
   const l = local();
   return createClient(l.url, l.secretKey, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -220,7 +213,7 @@ export function standingRules(): string {
 export async function seed() {
   const db = admin();
   sql(`set session_replication_role = replica;
-    truncate ${[...TABLES, ...PIECE_LEDGER].map((t) => `public.${t}`).join(", ")} cascade;
+    truncate ${TABLES.map((t) => `public.${t}`).join(", ")} cascade;
     delete from storage.objects where bucket_id = 'content-review';
     set session_replication_role = origin;
     delete from auth.identities where identity_data ->> 'email' like '%@gtm.test';

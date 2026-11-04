@@ -188,10 +188,6 @@ function checkSlot(item: Item, slot: Slot | undefined): Slot {
  * A dry run never writes: it checks the payload against an in-memory copy of the row.
  */
 async function scheduleDbItems(admin: SupabaseClient, storyId: string, slots: SlotMap, opts: { dryRun?: boolean }) {
-  // A shared piece's rows belong to its delivery ledger (the database refuses a slot or status write to them).
-  const shared = await admin.from("gtm_piece_reviews").select("story_id").eq("story_id", storyId).maybeSingle();
-  if (shared.error) throw new Error(`shared review check: ${shared.error.message}`);
-  if (shared.data) throw new Error(`${storyId} uses shared review: it schedules from its card in /content (gtm piece status ${storyId}).`);
   const cal = await loadCalendarDb(admin);
   const items = cal.items.filter((i) => i.story_id === storyId && (i.status === "drafted" || i.status === "approved") && !allHandPublished(i.channels));
   if (!items.length) throw new Error("No unscheduled calendar items are bound to this Story.");

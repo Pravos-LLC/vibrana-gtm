@@ -376,7 +376,6 @@ test("status mirrors the calendar, then writes Zernio outcomes back into calenda
     items: [{ id: "pub", status: "scheduled", zernio_post_id: "p1" }, { id: "gone", status: "scheduled", zernio_post_id: "p2" }],
     routes: [
       { method: "POST", url: REST + "gtm_content_items", status: 201 },
-      {method:"GET",url:REST+"gtm_piece_deliveries",json:[]},{method:"GET",url:REST+"gtm_piece_delivery_attempts",json:[]},
       // Answers both the mirror's id listing and syncStatus's open-items query.
       { method: "GET", url: REST + "gtm_content_items", json: [{ id: "pub", zernio_post_id: "p1", status: "scheduled" }, { id: "gone", zernio_post_id: "p2", status: "scheduled" }] },
       { method: "GET", url: `${Z}/posts/p1`, json: { post: { _id: "p1", status: "published", platforms: [{ platform: "linkedin", accountId: "a", platformPostUrl: "https://li/p1", publishedAt: "2026-10-06T06:30:00.000Z" }] } } },

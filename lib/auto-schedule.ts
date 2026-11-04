@@ -505,10 +505,6 @@ export async function autoSchedule(db: SupabaseClient, opts: { storyId?: string;
   const now = opts.now ?? new Date();
   // The rhythm John saved in the cockpit, else the guide's (lib/rhythm-settings.ts).
   await (await import("./rhythm-settings")).loadRhythm();
-  const {sharedPieceIds,scheduleSharedPieces}=await import("./piece-schedule");
-  const sharedIds=await sharedPieceIds(db),sharedSet=new Set(sharedIds);
-  const shared=await scheduleSharedPieces(db,{...opts,ids:sharedIds});
-  if(opts.storyId&&sharedSet.has(opts.storyId))return shared;
   // Agent holds always apply, even when a caller passes its own holds (a release dry run passes none).
   const holds: ScheduleHold[] = [...(opts.holds ?? await loadHolds(db)), ...await loadAgentHolds(db, opts.storyId)];
   let cal = await loadCalendarDb(db);
@@ -518,7 +514,7 @@ export async function autoSchedule(db: SupabaseClient, opts: { storyId?: string;
   for (let from = 0; ; from += 500) {
     const assetQuery = db.from("gtm_story_assets").select("id,story_id,title,kind,sha256,source,storage_path,body,stage").order("id");
     const page = must(await (opts.storyId ? assetQuery.eq("story_id", opts.storyId) : assetQuery).range(from, from + 499), "story assets") as StoryAsset[];
-    assets.push(...page.filter(a=>!sharedSet.has(a.story_id)));
+    assets.push(...page);
     if (page.length < 500) break;
   }
   const approvals: StoryChannel[] = [];
@@ -543,7 +539,7 @@ export async function autoSchedule(db: SupabaseClient, opts: { storyId?: string;
   }
   if (made.rows.length && !opts.dryRun) cal = await loadCalendarDb(db);
 
-  const open = cal.items.filter((i) => !sharedSet.has(i.story_id??"") && !i.zernio_post_id && (i.status === "drafted" || i.status === "approved") && (!opts.storyId || i.story_id === opts.storyId));
+  const open = cal.items.filter((i) => !i.zernio_post_id && (i.status === "drafted" || i.status === "approved") && (!opts.storyId || i.story_id === opts.storyId));
   // Point each Story item at its assets' current bytes before judging it (see rebindStoryItem).
   const rebound = new Map<string, { media: string[]; story_assets: string[] }>();
   const current = open.map((i) => {
@@ -624,6 +620,5 @@ export async function autoSchedule(db: SupabaseClient, opts: { storyId?: string;
       result.failed.push({ id: slot.id, storyId: slot.storyId, error: error instanceof Error ? error.message : String(error) });
     }
   }
-  result.scheduled.push(...shared.scheduled);result.skipped.push(...shared.skipped);result.failed.push(...shared.failed);
   return result;
 }

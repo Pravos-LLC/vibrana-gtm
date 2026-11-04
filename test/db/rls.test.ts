@@ -5,7 +5,7 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { admin, anon, ANGLE_RUN_ID, FIXTURE_REPORT, OUTREACH_IDS, PIECE_LEDGER, seed, signedIn, sql, TABLES, type Who } from "../support/seed.ts";
+import { admin, anon, ANGLE_RUN_ID, FIXTURE_REPORT, OUTREACH_IDS, seed, signedIn, sql, TABLES, type Who } from "../support/seed.ts";
 import { local } from "../support/local-supabase.ts";
 
 type Seeded = Awaited<ReturnType<typeof seed>>;
@@ -109,100 +109,35 @@ function probe(t: (typeof TABLES)[number]): { row: Record<string, unknown>; key:
   }
 }
 
-// The shared piece review and delivery ledger (vendored 20261017020000 and 20261017030000): RLS on, select-only for
-// the owner policy and the secret key, and no INSERT, UPDATE or DELETE grant for anyone, the secret key included.
-// Every write is a checked SECURITY DEFINER function. Who may run each one, as the migrations grant it:
-const PIECE_RPCS: Record<string, { anon: boolean; authenticated: boolean; service: boolean }> = Object.fromEntries(([
-  // Owner decisions from the browser, never the secret key (a decision needs a person).
-  ...["gtm_decide_piece_part", "gtm_save_piece_text", "gtm_convert_piece_legacy_fix", "gtm_set_piece_dispatch", "gtm_release_piece_review"].map((n) => [n, false, true, false]),
-  // Owner reads and configuration, also run by the CLI with the secret key; the function checks the owner claim.
-  ...["gtm_piece_snapshot", "gtm_piece_candidates", "gtm_configure_piece_review", "gtm_reviewer_decide_piece_video"].map((n) => [n, false, true, true]),
-  // Staging, fix completion and the delivery ledger: the secret key only.
-  ...["gtm_complete_piece_fix", "gtm_prepare_piece_delivery", "gtm_prepare_piece_deliveries", "gtm_claim_piece_delivery", "gtm_start_piece_send", "gtm_record_piece_delivery",
-    "gtm_claim_legacy_send", "gtm_replan_unsent_delivery", "gtm_release_piece_delivery", "gtm_resend_uncertain_delivery", "gtm_resolve_uncertain_delivery", "gtm_retire_piece_delivery"].map((n) => [n, false, false, true]),
-  // Internal helpers and the ledger's write switch: only the SECURITY DEFINER functions above call them, no role can.
-  ...["gtm_piece_require_actor", "gtm_piece_asset_fingerprint", "gtm_delivery_require_service", "gtm_piece_delivery_hold", "gtm_piece_ledger_write"].map((n) => [n, false, false, false]),
-] as Array<[string, boolean, boolean, boolean]>).map(([n, a, u, s]) => [n, { anon: a, authenticated: u, service: s }]));
+// The surviving sender's claim (vendored 20261017030000, rewritten by 20261104020000 when shared review was retired)
+// and the service check it calls. Who may run each one, as the migrations grant it:
+const SERVICE_RPCS: Record<string, { anon: boolean; authenticated: boolean; service: boolean }> = {
+  gtm_claim_legacy_send: { anon: false, authenticated: false, service: true },
+  // Internal: only the SECURITY DEFINER claim calls it, no role can.
+  gtm_delivery_require_service: { anon: false, authenticated: false, service: false },
+};
 
 // The lists this suite iterates must match what the migrations actually create, so a re-vendored
 // migration that adds a table or a callable function cannot slip past untested.
 const RPCS = ["cancel_review_publication", "finalize_review_publication", "gtm_add_story_feedback", "gtm_add_storyboard_comment", "gtm_claim_red_flag_alert", "gtm_decide_story_asset", "gtm_decide_story_stage", "gtm_decide_storyboard", "gtm_decide_storyboard_scene", "gtm_outreach_accept", "gtm_reopen_storyboard", "gtm_reviewer_add_feedback", "gtm_reviewer_claim", "gtm_reviewer_decide", "gtm_reviewer_decide_asset", "gtm_reviewer_decide_asset_by_link", "gtm_reviewer_parties", "gtm_reviewer_story", "gtm_reviewer_throttle", "gtm_set_story_hold", "gtm_storyboard_anchor_ok", "gtm_storyboard_is_owner", "gtm_storyboard_unapproved_scenes", "gtm_swap_slots", "gtm_update_season", "gtm_update_storyboard_rule", "gtm_withdraw_storyboard_comment", "gtm_work_waiting_notes", "reserve_review_publication", "submit_review"];
 test("the tested inventory equals every public table, view and callable function", () => {
   const tables = sql("select string_agg(tablename, ',' order by tablename) from pg_tables where schemaname = 'public'").trim().split(",");
-  assert.deepEqual(tables, [...TABLES, ...PIECE_LEDGER].sort());
+  assert.deepEqual(tables, [...TABLES].sort());
   const views = sql("select string_agg(viewname, ',' order by viewname) from pg_views where schemaname = 'public'").trim().split(",");
   assert.deepEqual(views, ["gtm_post_metrics_latest"]);
   const fns = sql("select string_agg(proname, ',' order by proname) from pg_proc where pronamespace = 'public'::regnamespace and prorettype <> 'trigger'::regtype").trim().split(",");
-  assert.deepEqual(fns, [...RPCS, ...Object.keys(PIECE_RPCS)].sort());
+  assert.deepEqual(fns, [...RPCS, ...Object.keys(SERVICE_RPCS)].sort());
 });
 
-/** One row in every ledger table, on its own Story, written as the superuser (the tables take no direct writes). */
-const LEDGER_DELIVERY = "00000000-0000-4000-8000-0000000000d1";
-function seedLedger() {
-  sql(`set session_replication_role = replica;
-    insert into public.gtm_stories (id, title, link_url) values ('fx-ledger', 'Fixture ledger', 'https://example.com/fx-ledger');
-    insert into public.gtm_story_assets (id, story_id, title, kind, source, sha256, body) values ('fx-ledger-text', 'fx-ledger', 'Text', 'copy', 'copy.md', repeat('a', 64), 'Hello');
-    insert into public.gtm_story_assets (id, story_id, title, kind, source, sha256, storage_path, stage) values ('fx-ledger-video', 'fx-ledger', 'Video', 'video', 'v.mp4', repeat('b', 64), 'stories/fx-ledger/v.mp4', 'final');
-    insert into public.gtm_content_items (id, week, date, pillar, title, format, status, story_id, channels) values ('fx-ledger-linkedin', 1, '2099-01-05', 'proof', 'Ledger', 'video', 'approved', 'fx-ledger', '{linkedin}');
-    insert into public.gtm_piece_reviews (story_id, text_asset_id, video_asset_id, channels) values ('fx-ledger', 'fx-ledger-text', 'fx-ledger-video', '{linkedin}');
-    insert into public.gtm_piece_part_decisions (story_id, part, fingerprint, status) values ('fx-ledger', 'text', 'fp-text', 'pending');
-    insert into public.gtm_piece_fixes (story_id, part, asset_id, note, base_fingerprint, base_revision, base_asset) values ('fx-ledger', 'text', 'fx-ledger-text', 'Fixture fix', 'fp-text', 1, '{}');
-    insert into public.gtm_piece_deliveries (id, story_id, channel, calendar_id, slot_date, slot_time, timezone, review_snapshot) values ('${LEDGER_DELIVERY}', 'fx-ledger', 'linkedin', 'fx-ledger-linkedin', '2099-01-05', '14:00', 'Europe/Berlin', '{}');
-    insert into public.gtm_piece_delivery_attempts (id, delivery_id, story_id, channel, calendar_id, request) values (gen_random_uuid(), '${LEDGER_DELIVERY}', 'fx-ledger', 'linkedin', 'fx-ledger-linkedin', '{}');
-    insert into public.gtm_piece_decision_events (story_id, part, fingerprint, status, source_role) values ('fx-ledger', 'text', 'fp-text', 'pending', 'fixture');
-    set session_replication_role = origin;`);
-}
-const ledgerState = () => sql(`select ${PIECE_LEDGER.map((t) => `(select md5(coalesce(string_agg(x::text, ',' order by x::text), '')) from public.${t} x)`).join(" || ',' || ")}`).trim();
-
-test("piece review and delivery ledger: the owner and the secret key read, nobody else does, and nobody writes a table directly", async () => {
-  seedLedger();
-  const before = ledgerState();
-  for (const t of PIECE_LEDGER) {
-    const a = await db.anon.from(t).select("*");
-    assert.match(a.error?.message ?? `anon read ${JSON.stringify(a.data)}`, DENIED, `anon ${t}`);
-    for (const who of ["member", "impostor", "team"] as const) {
-      const r = await db[who].from(t).select("*");
-      assert.equal(r.error, null, `${who} ${t}: ${r.error?.message}`);
-      assert.deepEqual(r.data, [], `${who} sees no ${t} rows`);
-    }
-    for (const [who, client] of [["owner", db.owner], ["secret key", sr]] as const) {
-      const r = await client.from(t).select("*");
-      assert.equal(r.error, null, `${who} ${t}: ${r.error?.message}`);
-      assert.equal(r.data?.length, 1, `${who} reads the ${t} fixture`);
-    }
-    const key = t === "gtm_piece_deliveries" ? "id" : "story_id";
-    const value = t === "gtm_piece_deliveries" ? LEDGER_DELIVERY : "fx-ledger";
-    for (const [who, client] of [["anon", db.anon], ["member", db.member], ["impostor", db.impostor], ["team", db.team], ["owner", db.owner], ["secret key", sr]] as const) {
-      const ins = await client.from(t).insert({ story_id: "fx-ledger" });
-      assert.match(ins.error?.message ?? "insert allowed", DENIED, `${who} insert ${t}`);
-      const up = await client.from(t).update({ story_id: "fx-ledger" }).eq(key, value);
-      assert.match(up.error?.message ?? "update allowed", DENIED, `${who} update ${t}`);
-      const del = await client.from(t).delete().eq(key, value);
-      assert.match(del.error?.message ?? "delete allowed", DENIED, `${who} delete ${t}`);
-    }
-  }
-  assert.equal(ledgerState(), before, "no refused write changed a ledger row");
-});
-
-test("piece review and delivery functions: each role can run exactly what the migrations grant it", async () => {
+test("the send claim and its service check: each role can run exactly what the migrations grant it", async () => {
   const rows = sql(`select p.proname, bool_and(has_function_privilege('anon', p.oid, 'execute')), bool_and(has_function_privilege('authenticated', p.oid, 'execute')), bool_and(has_function_privilege('service_role', p.oid, 'execute'))
-    from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype <> 'trigger'::regtype and p.proname = any(array[${Object.keys(PIECE_RPCS).map((n) => `'${n}'`).join(",")}]) group by p.proname order by p.proname`)
+    from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prorettype <> 'trigger'::regtype and p.proname = any(array[${Object.keys(SERVICE_RPCS).map((n) => `'${n}'`).join(",")}]) group by p.proname order by p.proname`)
     .trim().split("\n").map((l) => l.split("|"));
   const actual = Object.fromEntries(rows.map(([n, a, u, s]) => [n, { anon: a === "t", authenticated: u === "t", service: s === "t" }]));
-  assert.deepEqual(actual, PIECE_RPCS);
-  // Through the API: anon is refused; a signed-in non-owner or impostor gets the owner check's 42501, the owner and the
-  // secret key read the piece.
-  assert.match((await db.anon.rpc("gtm_piece_snapshot", { p_story_id: "fx-ledger" })).error?.message ?? "no error", DENIED);
-  for (const who of ["member", "impostor", "team"] as const) assert.equal((await db[who].rpc("gtm_piece_snapshot", { p_story_id: "fx-ledger" })).error?.code, "42501", `${who} snapshot`);
-  for (const client of [db.owner, sr]) {
-    const r = await client.rpc("gtm_piece_snapshot", { p_story_id: "fx-ledger" });
-    assert.equal(r.error, null, r.error?.message ?? "");
-    assert.equal((r.data as { storyId: string }).storyId, "fx-ledger");
-  }
+  assert.deepEqual(actual, SERVICE_RPCS);
   for (const who of ["member", "owner"] as const) {
-    assert.match((await db[who].rpc("gtm_claim_piece_delivery", { p_id: LEDGER_DELIVERY, p_retry: false })).error?.message ?? "no error", DENIED, `${who} cannot claim a delivery`);
+    assert.match((await db[who].rpc("gtm_claim_legacy_send", { p_calendar_id: "none", p_expected: {} })).error?.message ?? "no error", DENIED, `${who} cannot claim a send`);
   }
-  assert.match((await sr.rpc("gtm_decide_piece_part", { p_story_id: "fx-ledger", p_part: "text", p_decision: "approved", p_note: "", p_expected_fingerprint: "x", p_expected_revision: 1 })).error?.message ?? "no error", DENIED, "the secret key never decides");
 });
 
 test("review-link functions: anon is refused, and without a claimed invite nobody reviews anything", async () => {

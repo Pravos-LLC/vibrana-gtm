@@ -79,25 +79,13 @@ export async function decideAsset(input: {
   if (note.length > 5000)
     return { ok: false, error: "Notes are limited to 5000 characters." };
   const db = await sessionDb();
-  const selected = await adminDb()
-    .from("gtm_story_assets")
-    .select("metadata")
-    .eq("id", input.assetId)
-    .maybeSingle();
-  if (selected.error)
-    return { ok: false, error: "Review scope unavailable. Refresh to retry." };
-  const { error } = await db.rpc(
-    selected.data?.metadata?.shared_review === true
-      ? "gtm_reviewer_decide_piece_video"
-      : "gtm_reviewer_decide_asset",
-    {
-      p_asset_id: input.assetId,
-      p_decision: input.decision,
-      p_note: note,
-      p_sha256: input.sha256,
-      p_revision: input.revision,
-    },
-  );
+  const { error } = await db.rpc("gtm_reviewer_decide_asset", {
+    p_asset_id: input.assetId,
+    p_decision: input.decision,
+    p_note: note,
+    p_sha256: input.sha256,
+    p_revision: input.revision,
+  });
   if (error) return { ok: false, error: message(error) };
   const admin = adminDb();
   const { data: asset } = await admin
@@ -154,26 +142,14 @@ export async function decideAssetByLink(
   if (note.length > 5000)
     return { ok: false, error: "Notes are limited to 5000 characters." };
   const admin = adminDb();
-  const selected = await admin
-    .from("gtm_story_assets")
-    .select("metadata")
-    .eq("id", input.assetId)
-    .maybeSingle();
-  if (selected.error)
-    return { ok: false, error: "Review scope unavailable. Refresh to retry." };
-  const { error } = await admin.rpc(
-    selected.data?.metadata?.shared_review === true
-      ? "gtm_reviewer_decide_piece_video"
-      : "gtm_reviewer_decide_asset_by_link",
-    {
-      p_token_sha256: tokenSha256(token),
-      p_asset_id: input.assetId,
-      p_decision: input.decision,
-      p_note: note,
-      p_sha256: input.sha256,
-      p_revision: input.revision,
-    },
-  );
+  const { error } = await admin.rpc("gtm_reviewer_decide_asset_by_link", {
+    p_token_sha256: tokenSha256(token),
+    p_asset_id: input.assetId,
+    p_decision: input.decision,
+    p_note: note,
+    p_sha256: input.sha256,
+    p_revision: input.revision,
+  });
   if (error) return { ok: false, error: message(error) };
   const { data: asset } = await admin
     .from("gtm_story_assets")

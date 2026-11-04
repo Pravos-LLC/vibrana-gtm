@@ -8,11 +8,6 @@ import { isValidTime, weekOfDate, zonedToUtc } from "./calendar";
 import { calendarConfig, updateItemDb } from "./calendar-db";
 import { must } from "./db";
 import { getPost, zernio, ZernioError } from "./zernio";
-
-import {
-  loadPieceDeliveries,
-  reconcilePieceDeliveries,
-} from "./piece-delivery";
 import { readPages } from "./db-read";
 
 const LEAD_MS = 5 * 60_000;
@@ -68,18 +63,6 @@ export async function moveCalendarItem(
     throw new Error(`${id} already went out; it cannot move`);
   if (row.status === "skipped")
     throw new Error(`${id} is skipped; un-skip it before moving it`);
-  const frozen = must(
-    await db
-      .from("gtm_piece_deliveries")
-      .select("id")
-      .eq("calendar_id", id)
-      .maybeSingle(),
-    "frozen delivery check",
-  );
-  if (frozen)
-    throw new Error(
-      "This channel has a frozen delivery. Its queued version and slot are retained; use the shared review delivery controls for an unsent failure.",
-    );
   const from = { date: String(row.date).slice(0, 10), time: row.time };
   const time = to.time === undefined ? row.time : to.time;
   const now = (opts.now ?? new Date()).getTime();
@@ -156,11 +139,6 @@ export async function reconcileCalendar(
   opts: { fix?: boolean; now?: Date } = {},
 ): Promise<Reconciled> {
   const { timezone } = calendarConfig();
-  const frozen =
-    opts.fix === false
-      ? await loadPieceDeliveries(db)
-      : await reconcilePieceDeliveries(db);
-  const frozenIds = new Set(frozen.map((d) => d.calendar_id));
   const rows = (
     await readPages<Row & { published_at: string | null }>(
       (from, to) =>
@@ -173,23 +151,8 @@ export async function reconcileCalendar(
           .range(from, to),
       "linked calendar items",
     )
-  ).filter((row) => !frozenIds.has(row.id));
+  );
   const out: Reconciled = { checked: 0, drift: [], published: [], failed: [] };
-  for (const d of frozen) {
-    out.checked++;
-    if (d.state === "published")
-      out.published.push({
-        id: d.calendar_id,
-        publishedAt: "",
-        date: d.slot_date,
-      });
-    if (d.error)
-      out.failed.push({
-        id: d.calendar_id,
-        zernioPostId: d.provider_id ?? "pending",
-        error: d.error,
-      });
-  }
   const now = (opts.now ?? new Date()).getTime();
   for (const row of rows) {
     if (!row.zernio_post_id || row.zernio_post_id === "pending") continue;

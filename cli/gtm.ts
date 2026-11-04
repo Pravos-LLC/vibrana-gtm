@@ -176,7 +176,7 @@ const commands: Record<string, () => Promise<void>> = {
     throw new Error("unknown packaging command");
   },
   async piece() {
-    const { adminDb }=await import("../lib/db"),db=adminDb(),ops=await import("../lib/piece-review");
+    const { adminDb }=await import("../lib/db"),db=adminDb();
     // gtm piece kill <story-id>: John's "kill it" (lib/kill-piece.ts). Every row skipped, unsent Zernio posts deleted,
     // open notes resolved, the kill recorded. --dry-run lists the rows it would take off.
     if(rest[0]==="kill"){
@@ -192,36 +192,7 @@ const commands: Record<string, () => Promise<void>> = {
     const r = await killPiece(db, rest[1], flag("--reason") ? { reason: flag("--reason")! } : {});
     return out(r, () => console.log(`killed ${r.story}: ${r.skipped.length} rows skipped, ${Object.keys(r.deleted).length} Zernio posts deleted, ${r.notesResolved} notes resolved${r.published.length ? `; already out, left alone: ${r.published.join(", ")}` : ""}`));
     }
-    if(rest[0]==="status")return out(await ops.loadPieceReview(db,rest[1]));
-    if(rest[0]==="complete-fix") {
-      const fingerprint=flag("--fingerprint"),revision=Number(flag("--revision")),actor=flag("--actor"),verification=flag("--verification");
-      if(!rest[1]||!fingerprint||!Number.isSafeInteger(revision)||revision<1||!actor||!verification||!argv.includes("--only-authorised-changes"))throw new Error("usage: gtm piece complete-fix <fix-id> --fingerprint <verified-version> --revision <n> --actor <worker> --verification <evidence> --only-authorised-changes");
-      const snapshot=await ops.completePieceFix(db,{fixId:rest[1],fingerprint,revision,actor,verification,onlyAuthorisedChanges:true});
-      // What scheduling did is part of the answer (review #147 N4): a refusal is printed, never dropped.
-      const delivery=await ops.sharedDeliveryInstalled(db);
-      // A refused schedule is not success: the exit code says so as well as schedule.refused (review #147 F5).
-      if(!snapshot.ready||!delivery.ok){process.exitCode=1;return out({...snapshot,schedule:snapshot.ready?{refused:`not scheduled: ${!delivery.ok?delivery.reason:""}`}:{refused:`not scheduled: ${snapshot.blockers.join("; ")}`}});}
-      const r=await (await import("../lib/auto-schedule")).autoSchedule(db,{storyId:snapshot.storyId});
-      if(r.failed.length)process.exitCode=1;
-      return out({...snapshot,schedule:{scheduled:r.scheduled,skipped:r.skipped,failed:r.failed}},()=>{console.log(`fix recorded for ${snapshot.storyId}`);for(const f of r.failed)console.error(`NOT SCHEDULED ${f.id}: ${f.error}`);for(const k of r.skipped)console.log(`skipped ${k.id}: ${k.reason}`);});
-    }
-    // Operator paths for one channel delivery (review #151 B1): never a dead end, never a second post.
-    if(["recover","release","retry","replace"].includes(rest[0])&&rest[1]){
-      const pd=await import("../lib/piece-delivery");
-      if(rest[0]==="replace"){
-        const d=(await pd.loadPieceDeliveries(db)).find(x=>x.id===rest[1]);
-        const r=await pd.retireDeadDelivery(db,rest[1]);
-        const sched=d?await (await import("../lib/piece-schedule")).scheduleSharedPieces(db,{storyId:d.story_id}):null;
-        if(sched?.failed.length)process.exitCode=1;
-        return out({...r,schedule:sched},()=>{console.log(r.detail);for(const f of sched?.failed??[])console.error(`NOT SCHEDULED ${f.id}: ${f.error}`);for(const k of sched?.skipped??[])console.log(`skipped ${k.id}: ${k.reason}`);});
-      }
-      if(rest[0]==="recover"){const r=await pd.recoverUncertainDelivery(db,rest[1],await (await import("../lib/calendar-db")).loadCalendarDb(db));return out(r,()=>console.log(`${r.action}: ${r.detail}`));}
-      if(rest[0]==="release"){const r=await pd.releaseUnsentDelivery(db,rest[1]);return out(r,()=>console.log(r.detail));}
-      const d=await (await import("../lib/piece-schedule")).retryPieceDelivery(db,rest[1]);
-      if(!d||!["scheduled","published"].includes(d.state))process.exitCode=1;
-      return out(d,()=>console.log(d?`${d.channel}: ${d.state}${d.error?` (${d.error})`:""}`:"not claimed: another worker holds this delivery"));
-    }
-    throw new Error("usage: gtm piece status <story-id> | complete-fix <fix-id> <verification flags> | recover|release|retry|replace <delivery-id> | kill <story-id> [--dry-run] [--reason text]");
+    throw new Error("usage: gtm piece kill <story-id> [--dry-run] [--reason text]");
   },
   async pipeline() {
     // gtm pipeline [short|carousel|text|episode|video] [--json]: the per-format pipelines (lib/pipelines.ts)
@@ -528,14 +499,6 @@ const commands: Record<string, () => Promise<void>> = {
       const { parseFixNote } = await import("../lib/approve-note");
       const { data: head,error:headError } = await db.from("gtm_story_feedback").select("body,asset_id").eq("id", rest[1]).maybeSingle();
       if(headError)throw new Error(headError.message);
-      if(head) {
-        await (await import("../lib/piece-review")).assertNotSharedFix(db, rest[1]);
-        const asset=(await db.from("gtm_story_assets").select("metadata").eq("id",head.asset_id).single());
-        if(asset.error)throw new Error(asset.error.message);
-        // Only an accepted-with-note fix needs the scoped completion; a plain "Request changes" note on a shared piece
-        // is resolved like any other note (review #147 N2).
-        if(asset.data.metadata?.shared_review===true&&parseFixNote(head.body))throw new Error("Shared review fixes use explicit gtm piece complete-fix authorisation; legacy resolve cannot release them");
-      }
       if (head && parseFixNote(head.body)) {
         const { resolveFixNote } = await import("../lib/approve-note-db");
         const r = { ...(await resolveFixNote(db, rest[1], reply)), ...(await advanceWork((d, w) => w.advanceOnResolve(d, [rest[1]]))) };
@@ -720,7 +683,7 @@ const commands: Record<string, () => Promise<void>> = {
     // A configured dry run may read legacy asset provenance but never writes. Offline dry runs
     // still validate complete new packages; they cannot attest to a DB-only legacy exemption.
     const stageDb = dry && (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SECRET_KEY) ? null : adminDb();
-    const staged = await stageStory(stageDb, rest[1], loadCalendar(), dry, argv.includes("--force"), flag("--stage"), { changes: flag("--changes"), reopen: argv.includes("--reopen"), heal: !argv.includes("--no-heal"), shared: argv.includes("--shared") });
+    const staged = await stageStory(stageDb, rest[1], loadCalendar(), dry, argv.includes("--force"), flag("--stage"), { changes: flag("--changes"), reopen: argv.includes("--reopen"), heal: !argv.includes("--no-heal") });
     // The piece's open jobs on the work board move to staged (or done, when every note is already answered).
     out(dry || "dryRun" in staged ? staged : { ...staged, ...(await advanceWork((db, w) => w.advanceOnStage(db, staged.id))) });
   },

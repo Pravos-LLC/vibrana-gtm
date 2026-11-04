@@ -52,33 +52,8 @@ select is_empty(
        from pg_proc p
       where p.pronamespace = 'public'::regnamespace
         and p.prosecdef
-        -- Reviewed delivery state machine, append-only decision evidence and canonical reviewer.
-        and p.oid <> 'public.gtm_replan_unsent_delivery(uuid,date,time,text)'::regprocedure
+        -- The surviving sender's checked claim.
         and p.oid <> 'public.gtm_claim_legacy_send(text,jsonb)'::regprocedure
-        and p.oid <> 'public.gtm_piece_record_decision_event()'::regprocedure
-        and p.oid <> 'public.gtm_prepare_piece_deliveries(text,jsonb,jsonb,text)'::regprocedure
-        and p.oid <> 'public.gtm_prepare_piece_delivery(text,text,date,time,text,jsonb,text)'::regprocedure
-        and p.oid <> 'public.gtm_claim_piece_delivery(uuid,boolean)'::regprocedure
-        and p.oid <> 'public.gtm_start_piece_send(uuid,uuid,jsonb)'::regprocedure
-        and p.oid <> 'public.gtm_record_piece_delivery(uuid,uuid,text,text,text,text,timestamp with time zone)'::regprocedure
-        and p.oid <> 'public.gtm_reviewer_decide_piece_video(text,text,text,text,bigint,text)'::regprocedure
-        and p.oid <> 'public.gtm_release_piece_delivery(uuid)'::regprocedure
-        and p.oid <> 'public.gtm_resend_uncertain_delivery(uuid,uuid)'::regprocedure
-        and p.oid <> 'public.gtm_resolve_uncertain_delivery(uuid,text)'::regprocedure
-        and p.oid <> 'public.gtm_retire_piece_delivery(uuid,text)'::regprocedure
-        and p.oid <> 'public.gtm_piece_record_release()'::regprocedure
-        -- Shared review RPCs: scoped owner decisions; checked service staging/fix completion.
-        and p.oid <> 'public.gtm_piece_asset_changed()'::regprocedure
-        and p.oid <> 'public.gtm_piece_snapshot(text)'::regprocedure
-        and p.oid <> 'public.gtm_piece_candidates(text)'::regprocedure
-        and p.oid <> 'public.gtm_configure_piece_review(text,text,text,text[],jsonb)'::regprocedure
-        and p.oid <> 'public.gtm_decide_piece_part(text,text,text,text,text,bigint)'::regprocedure
-        and p.oid <> 'public.gtm_complete_piece_fix(uuid,text,bigint,text,text,boolean)'::regprocedure
-        and p.oid <> 'public.gtm_save_piece_text(text,text,text,bigint)'::regprocedure
-        and p.oid <> 'public.gtm_convert_piece_legacy_fix(text,uuid,text,text,bigint)'::regprocedure
-        and p.oid <> 'public.gtm_piece_stage_reopened()'::regprocedure
-        and p.oid <> 'public.gtm_set_piece_dispatch(text,jsonb,boolean)'::regprocedure
-        and p.oid <> 'public.gtm_release_piece_review(text)'::regprocedure
         and p.oid <> 'public.gtm_decide_story_asset(text,text,text,text,text,bigint)'::regprocedure
         and p.oid <> 'public.gtm_add_story_feedback(text,text,text,uuid)'::regprocedure
         and p.oid <> 'public.gtm_update_season(text,text,text,date,date,text[])'::regprocedure
