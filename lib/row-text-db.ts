@@ -1,5 +1,5 @@
 // Fills each calendar row's text the one way (lib/row-text.ts): a Story row's text is its Story's copy until it is sent,
-// and after a send that recorded none (the shared delivery path freezes queued rows), still the Story's copy.
+// and after a send that recorded none, still the Story's copy.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { readChunks } from "./db-read";
 import { rowText, type CopyAsset, type TextRow } from "./row-text";

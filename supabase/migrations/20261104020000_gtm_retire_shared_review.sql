@@ -6,6 +6,10 @@
 -- was written; the guard below refuses to drop any row.
 begin;
 
+-- Nothing can write a row between the emptiness check and the drops.
+lock table public.gtm_piece_reviews, public.gtm_piece_part_decisions, public.gtm_piece_fixes,
+  public.gtm_piece_deliveries, public.gtm_piece_delivery_attempts, public.gtm_piece_decision_events in access exclusive mode;
+
 do $$
 begin
   if exists(select 1 from public.gtm_piece_reviews) or exists(select 1 from public.gtm_piece_part_decisions)
