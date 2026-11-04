@@ -117,8 +117,6 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
         <StatTile label="Sendable contacts" value={s.sendable == null ? null : fmt(s.sendable)} missing={crmMissing}
           note={s.total != null ? `of ${fmt(s.total)} they added: verified email, not marked unsendable (current state)` : undefined}
           tone={s.total && s.sendable === 0 ? "warn" : undefined} spark={r.stockSeries("sendable")} />
-        <StatTile label="Companies reviewed: kept" value={pct(s.keepRate)} missing={s.reviewed === 0 ? "no company they added has been reviewed yet" : crmMissing}
-          note={s.reviewed != null ? `${fmt(s.keep)} KEEP of ${fmt(s.reviewed)} reviewed; ${fmt(s.unreviewed)} awaiting review` : undefined} />
         <StatTile label="Active days" value={c.activeDays == null ? null : `${c.activeDays} / ${days}`} missing="not measured: no source connected"
           delta={delta(c.activeDays, p.activeDays, days)} spark={spark("activeDays")} note="days with a CRM addition, a GTM email or a desk send" />
       </div>
@@ -143,22 +141,13 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
       </Section>
 
       <Section title="Discipline">
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
           <StatTile label="Days from added to first email" value={r.daysToFirstTouch == null ? null : String(r.daysToFirstTouch)} missing={connected ? "none of their contacts emailed yet" : mailMissing} note="median, people they added and then emailed" />
           <StatTile label="Follow-up rate" value={c.followUp ? pct(c.followUp.rate) : null} missing={c.followUp ? "no unanswered first touch is 7 days old yet" : mailMissing}
             note={c.followUp ? `${c.followUp.n} unanswered first touches; a second email on day 3 to 7 counts` : undefined} />
-          <StatTile label="Research awaiting review" value={s.unreviewed == null ? null : fmt(s.unreviewed)} missing={crmMissing}
-            tone={(s.unreviewedOver14 ?? 0) > 0 ? "warn" : undefined} note={s.oldestUnreviewedDays != null ? `oldest ${s.oldestUnreviewedDays} days; ${fmt(s.unreviewedOver14)} older than 14 days` : undefined} />
           <StatTile label="Pipeline touched" value={r.pipeline == null ? null : r.pipeline.length ? r.pipeline.map((x) => `${x.currency} ${fmt(Math.round(x.amount))}`).join(" + ") : "0"}
             missing={crmMissing} note="open opportunities they created, or on a company or contact they added" />
         </div>
-      </Section>
-
-      <Section title="Research stages of the companies they added" note="current state">
-        {s.stageMix ? (
-          <Table head={["Stage", "Unreviewed", "Keep", "Maybe", "Pass"]} align={["l", "r", "r", "r", "r"]}
-            rows={Object.entries(s.stageMix).sort(([a], [b]) => a.localeCompare(b)).map(([stage, d]) => [stage === "none" ? "no stage" : stage, fmt(d.UNREVIEWED ?? 0), fmt(d.KEEP ?? 0), fmt(d.MAYBE ?? 0), fmt(d.PASS ?? 0)])} />
-        ) : <p className="text-sm text-ink-3">{crmMissing}</p>}
       </Section>
 
       <Section title="Hygiene">

@@ -8,7 +8,8 @@ import { TwentyError, type TwentyReader } from "../twenty";
 import { createdByFilter, type TeamMember } from "./members";
 
 export type ActivityPerson = { id: string; createdAt: string; hasEmail: boolean; verification: string | null; companyId: string | null; notSendable: boolean; lastContactedAt: string | null };
-export type ActivityCompany = { id: string; createdAt: string; stage: string | null; decision: string | null; hasOwner: boolean };
+// The account-review labels (revResearchStage, revDecision) are triage only and deprecated as inputs (VIB-481); not read here.
+export type ActivityCompany = { id: string; createdAt: string; hasOwner: boolean };
 export type ActivityOpportunity = { id: string; createdAt: string; stage: string | null; amount: number | null; currency: string | null; companyId: string | null; personId: string | null; mine: boolean };
 export type ActivityTask = { id: string; status: string | null; dueAt: string | null; createdAt: string };
 export type Activity = {
@@ -26,7 +27,7 @@ export type Activity = {
 };
 
 type PersonNode = { id: string; createdAt: string; emails: { primaryEmail: string | null } | null; revEmailVerification: string | null; companyId: string | null; prospectNotSendable: boolean | null; lastContactedAt: string | null };
-type CompanyNode = { id: string; createdAt: string; revResearchStage: string | null; revDecision: string | null; accountOwnerId: string | null };
+type CompanyNode = { id: string; createdAt: string; accountOwnerId: string | null };
 type OppNode = { id: string; createdAt: string; stage: string | null; amount: { amountMicros: number | null; currencyCode: string | null } | null; companyId: string | null; pointOfContactId: string | null; createdBy: { source: string | null; name: string | null; workspaceMemberId: string | null } | null };
 
 /** Reads one member's activity. Each object is read on its own; a failure is recorded and the others still land. */
@@ -44,8 +45,8 @@ export async function collectActivity(reader: TwentyReader, member: TeamMember, 
     .map((p) => ({ id: p.id, createdAt: p.createdAt, hasEmail: !!p.emails?.primaryEmail, verification: p.revEmailVerification, companyId: p.companyId,
       notSendable: p.prospectNotSendable === true, lastContactedAt: p.lastContactedAt })), [] as ActivityPerson[]);
   const companies = await attempt("companies", async () => (await reader.all<CompanyNode>("companies",
-    "id createdAt revResearchStage revDecision accountOwnerId", mine, "CompanyFilterInput"))
-    .map((c) => ({ id: c.id, createdAt: c.createdAt, stage: c.revResearchStage, decision: c.revDecision, hasOwner: !!c.accountOwnerId })), [] as ActivityCompany[]);
+    "id createdAt accountOwnerId", mine, "CompanyFilterInput"))
+    .map((c) => ({ id: c.id, createdAt: c.createdAt, hasOwner: !!c.accountOwnerId })), [] as ActivityCompany[]);
   const notes = await attempt("notes", async () => (await reader.all<{ createdAt: string }>("notes", "createdAt", mine, "NoteFilterInput")), [] as { createdAt: string }[]);
   const myPeople = new Set(people.map((p) => p.id)), myCompanies = new Set(companies.map((c) => c.id));
   // Opportunities are few (a dozen); read them all and keep the ones the member created or whose company or contact they added.

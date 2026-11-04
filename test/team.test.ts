@@ -134,10 +134,10 @@ const activity = (over: Partial<import("../lib/team/crm.ts").Activity> = {}) => 
     { id: "p3", createdAt: d(3), hasEmail: false, verification: "UNVERIFIED", companyId: null, notSendable: false, lastContactedAt: null },
   ],
   companies: [
-    { id: "c1", createdAt: d(30), stage: "R2", decision: "UNREVIEWED", hasOwner: false },
-    { id: "c2", createdAt: d(10), stage: "R2", decision: "KEEP", hasOwner: true },
-    { id: "c3", createdAt: d(2), stage: null, decision: null, hasOwner: false },
-    { id: "c4", createdAt: d(40), stage: "R3", decision: "PASS", hasOwner: true },
+    { id: "c1", createdAt: d(30), hasOwner: false },
+    { id: "c2", createdAt: d(10), hasOwner: true },
+    { id: "c3", createdAt: d(2), hasOwner: false },
+    { id: "c4", createdAt: d(40), hasOwner: true },
   ], ...over,
 });
 const base = { desk: [], memberEmail: "abe@team.test", stock: [], periodDays: 30, now: NOW };
@@ -151,13 +151,11 @@ test("not connected is not measured, never zero", () => {
   assert.equal(partial.cur.companiesAdded, 3);
 });
 
-test("stock: sendable needs a verified email and no not-sendable flag; KEEP rate is over reviewed companies only", () => {
+test("stock: sendable needs a verified email and no not-sendable flag; review labels are not measured", () => {
   const s = M.stock(activity(), NOW);
   assert.equal(s.sendable, 1); assert.equal(s.verified, 2); assert.equal(s.unverified, 1);
-  assert.equal(s.reviewed, 2); assert.equal(s.keep, 1); assert.equal(s.keepRate, 0.5);
-  assert.equal(s.unreviewed, 2); assert.equal(s.oldestUnreviewedDays, 30); assert.equal(s.unreviewedOver14, 1);
   assert.equal(s.companiesNoOwner, 2);
-  assert.deepEqual(s.stageMix, { R2: { UNREVIEWED: 1, KEEP: 1 }, none: { UNREVIEWED: 1 }, R3: { PASS: 1 } });
+  for (const k of ["reviewed", "keep", "keepRate", "unreviewed", "unreviewedOver14", "stageMix"]) assert.equal(k in s, false, `${k} is not measured`);
 });
 
 const ev = (kind: "outreach" | "reply" | "bounce" | "other_crm", daysAgo: number, thread: string, person_ids: string[] = []) => ({ kind, at: d(daysAgo), thread_id: thread, person_ids });
