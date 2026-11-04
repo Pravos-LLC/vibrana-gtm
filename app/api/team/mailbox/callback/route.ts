@@ -31,7 +31,11 @@ export async function GET(request: Request) {
   try { granted = await exchangeCode(cfg, code, verifier, await redirectUri()); } catch { return back("google-refused"); }
   // Google revokes per account and client, not per token: revoking would also kill a live connection of that address
   // (another member's mailbox, or this one's own reconnect). Only a grant nobody uses is revoked (review of #23, N-f).
-  const inUse = async () => !!(await adminDb().from("gtm_team_mailboxes").select("member").eq("address", granted.email).limit(1)).data?.length;
+  // A failed lookup counts as "in use": when unsure, keep the grant rather than risk killing a live connection.
+  const inUse = async () => {
+    const { data, error } = await adminDb().from("gtm_team_mailboxes").select("member").eq("address", granted.email).limit(1);
+    return !!error || !!data?.length;
+  };
   if (!v.member.mailboxes.includes(granted.email)) {
     if (!(await inUse())) await revokeToken(granted.refreshToken);
     return back("wrong-mailbox");
