@@ -73,6 +73,11 @@ function probe(t: (typeof TABLES)[number]): { row: Record<string, unknown>; key:
     case "gtm_yt_channel_daily": { const day = new Date(Date.UTC(2001, 0, 1 + Math.floor(Math.random() * 3000))).toISOString().slice(0, 10); return { row: { date: day, views: 1 }, key: ["date", day], patch: { views: 2 } }; }
     case "gtm_yt_dim_daily": return { row: { date: "2001-01-01", dimension: "country", key: id.slice(0, 40), views: 1 }, key: ["key", id.slice(0, 40)], patch: { views: 2 } };
     case "gtm_yt_report_files": return { row: { report_id: id, report_type: "t" }, key: ["report_id", id], patch: { rows_ingested: 2 } };
+    case "gtm_deal_milestones": { const u = randomUUID(); return { row: { opportunity_id: u, label: "Probe", amount: 1, currency: "USD" }, key: ["opportunity_id", u], patch: { note: "changed" } }; }
+    case "gtm_deal_stage_history": { const u = randomUUID(); return { row: { opportunity_id: u, stage: "PROPOSAL" }, key: ["opportunity_id", u], patch: { stage: "SIGNED" } }; }
+    case "gtm_linkedin_connections": { const h = randomUUID().replace(/-/g, "").repeat(2); return { row: { owner: "PROBE", profile_hash: h, connected_on: "2026-01-01" }, key: ["profile_hash", h], patch: { icp: true } }; }
+    case "gtm_linkedin_threads": { const h = randomUUID().replace(/-/g, "").repeat(2); return { row: { owner: "PROBE", thread_hash: h, first_at: "2026-01-01T00:00:00Z", last_at: "2026-01-01T00:00:00Z", started_by_owner: true, two_way: false, messages: 1, owner_messages: 1 }, key: ["thread_hash", h], patch: { two_way: true } }; }
+    case "gtm_web_daily": return { row: { site: "probe.example.com", day: "2001-01-01", visitors: 1, pageviews: 1 }, key: ["site", "probe.example.com"], patch: { visitors: 2 } };
     case "gtm_sync_state": { const k = id.replace(/-/g, "_"); return { row: { key: k, value: {} }, key: ["key", k], patch: { value: { x: 1 } } }; }
     case "gtm_settings": return { row: { key: id, value: {} }, key: ["key", id], patch: { value: { x: 1 } } };
     case "gtm_settings_history": return { row: { key: id, value: {} }, key: ["key", id], patch: { value: { x: 1 } } };

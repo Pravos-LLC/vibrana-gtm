@@ -37,6 +37,8 @@ The generated release stamp binds the actual provider repository, project, prote
 
 Existing Supabase configuration and owner/team/reviewer claim boundaries remain in force. The website repository owns production schema; the vendored migration snapshot supports isolated local tests and demos. Do not reset production, import sample data or replay sanitized history as a cutover step.
 
-The six existing Vercel cron routes remain configured in `vercel.json`; retain their authentication and provider approval boundaries. This cutover does not authorize a test email, campaign or duplicate scheduled job.
+The Vercel cron routes are configured in `vercel.json` (ten, with the pipeline and YouTube crons); retain their authentication and provider approval boundaries. This cutover does not authorize a test email, campaign or duplicate scheduled job.
+
+`/api/cron/pipeline` (hourly at :50) stores the pipeline dashboard's numbers: the first time each opportunity is seen at a stage, reply and bounce outcomes for accepted desk emails from the HQ outreach mailbox (read-only), `lastContactedAt` on the Twenty people the desk wrote to (the cockpit's one Twenty write, forward-only), and one finished day of site traffic per site from the Vercel Web Analytics API. Each step is nonfatal and reports its own result. Site traffic needs `VERCEL_ANALYTICS_TOKEN`, `VERCEL_TEAM_ID` and `VERCEL_ANALYTICS_SITES` in production; without them the Traffic tab says it is not connected. Wise reconciliation of payment milestones is local only (`gtm sales reconcile`).
 
 Legacy private-archive Actions, including Sunday draft/smoke workflows, are disabled. Relocated private-hub workflow replacements remain manual and held behind false guards. There is no automatic Sunday drafting claim in this operating context; activating a held workflow is a separate authorized operation.

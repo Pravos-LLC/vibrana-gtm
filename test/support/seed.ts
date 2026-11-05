@@ -173,6 +173,7 @@ export const TABLES = [
   "gtm_red_flag_resolutions", "client_feedback",
   "gtm_team_mailboxes", "gtm_team_mail_events", "gtm_team_stock_daily",
   "gtm_yt_videos", "gtm_yt_video_daily", "gtm_yt_channel_daily", "gtm_yt_dim_daily", "gtm_yt_report_files",
+  "gtm_deal_milestones", "gtm_deal_stage_history", "gtm_linkedin_connections", "gtm_linkedin_threads", "gtm_web_daily",
   "review_batches", "review_assets", "review_comments", "review_publications", "review_publication_cancellations",
 ] as const;
 
@@ -290,6 +291,18 @@ export async function seed() {
   must(await db.from("gtm_yt_channel_daily").insert({ date: "2026-11-04", views: 1 }), "yt channel day");
   must(await db.from("gtm_yt_dim_daily").insert({ date: "2026-11-04", dimension: "traffic_source", key: "SAMPLE", views: 1 }), "yt dim day");
   must(await db.from("gtm_yt_report_files").insert({ report_id: "sample-report", report_type: "channel_reach_basic_a1" }), "yt report file");
+  // Pipeline (VIB-499): a paid deposit and a scheduled payment on the sample won deal, its stage, a LinkedIn
+  // connection and thread (hashes only), and two days of site traffic. Dates are relative, so the page reads the same any day.
+  const ago = (days: number) => new Date(Date.now() - days * 86400_000);
+  must(await db.from("gtm_deal_milestones").insert([
+    { opportunity_id: "00000000-0000-4000-8000-0000000000a4", label: "Deposit (50%)", amount: 8000, currency: "USD", due_on: ago(20).toISOString().slice(0, 10), invoiced_at: ago(20).toISOString(), paid_at: new Date().toISOString(), paid_amount: 8000 },
+    { opportunity_id: "00000000-0000-4000-8000-0000000000a4", label: "Acceptance (50%)", amount: 8000, currency: "USD", due_on: ago(-40).toISOString().slice(0, 10) },
+  ]), "deal milestones");
+  must(await db.from("gtm_deal_stage_history").insert({ opportunity_id: "00000000-0000-4000-8000-0000000000a4", stage: "SIGNED", first_seen_at: ago(20).toISOString() }), "stage history");
+  must(await db.from("gtm_linkedin_connections").insert({ owner: "JOHN", profile_hash: "a".repeat(64), connected_on: ago(3).toISOString().slice(0, 10), icp: true }), "linkedin connection");
+  must(await db.from("gtm_linkedin_threads").insert({ owner: "JOHN", thread_hash: "b".repeat(64), first_at: ago(3).toISOString(), last_at: ago(2).toISOString(), started_by_owner: true, two_way: true, icp: true, messages: 3, owner_messages: 2 }), "linkedin thread");
+  must(await db.from("gtm_web_daily").insert([1, 2].map((d) => ({ site: "brand.example.com", day: ago(d).toISOString().slice(0, 10), visitors: 40 + d, pageviews: 60 + d, high_intent: 5,
+    paths: [{ key: "/", n: 30 }, { key: "/ai-build-sprint", n: 5 }], referrers: [{ key: "linkedin.com", n: 12 }], utm: [] }))), "site days");
   // A saved setting; its trigger writes the history row.
   must(await db.from("gtm_settings").insert({ key: "fixture.setting", value: { x: 0 }, updated_by: "fixture" }), "setting");
   // Analytics > Reports: one published weekly review (the synthetic document in test/fixtures), already emailed.

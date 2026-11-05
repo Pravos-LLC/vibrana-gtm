@@ -215,7 +215,7 @@ export async function captureHealth(now = new Date(), timeoutMs = 15_000): Promi
   return health;
 }
 
-/* ------------------------------------------------- people and deals for Today and the CRM page */
+/* ------------------------------------------------- people for Today and Pipeline > Deals (deals: lib/sales/deals.ts) */
 // Read live on each page view (owner-only pages). Names and photos are rendered, never stored or logged.
 // A short timeout: a hung CRM must cost the page a few seconds, not the whole function budget.
 export const PAGE_TIMEOUT = 5_000;
@@ -223,10 +223,6 @@ export const PAGE_TIMEOUT = 5_000;
 export type Contact = {
   id: string; name: string; jobTitle: string | null; avatar: string | null; company: string | null; domain: string | null;
   relationship: string | null; warmth: string | null; channel: string | null; lastExchangedAt: string | null; nextStep: string | null; url: string;
-};
-export type Deal = {
-  id: string; name: string; stage: string; company: string | null; domain: string | null; amount: number | null; currency: string | null;
-  contact: string | null; updatedAt: string | null; url: string;
 };
 
 const domainOf = (link?: string | null) => {
@@ -255,27 +251,6 @@ export async function recentConversations(limit = 8): Promise<Contact[]> {
     company: n.company?.name || null, domain: domainOf(n.company?.domainName?.primaryLinkUrl),
     relationship: n.gtmRelationship, warmth: n.warmth, channel: n.lastChannel, lastExchangedAt: n.gtmLastExchangedAt,
     nextStep: n.gtmNextStep || null, url: `${BASE}/object/person/${n.id}`,
-  }));
-}
-
-/** Every opportunity with its company and point of contact, most recently touched first. */
-export async function opportunities(): Promise<Deal[]> {
-  type Node = {
-    id: string; name: string | null; stage: string; updatedAt: string | null;
-    amount: { amountMicros: number | null; currencyCode: string | null } | null;
-    company: { name: string | null; domainName: { primaryLinkUrl: string | null } | null } | null;
-    pointOfContact: { name: { firstName: string; lastName: string } | null } | null;
-  };
-  const d = await gql<{ opportunities: { edges: { node: Node }[] } }>(
-    `{ opportunities(first:200, orderBy:[{updatedAt:DescNullsLast}]) { edges { node { id name stage updatedAt amount { amountMicros currencyCode }
-      company { name domainName { primaryLinkUrl } } pointOfContact { name { firstName lastName } } } } } }`,
-    PAGE_TIMEOUT,
-  );
-  return d.opportunities.edges.map(({ node: n }) => ({
-    id: n.id, name: n.name || n.company?.name || "Untitled", stage: n.stage, company: n.company?.name || null,
-    domain: domainOf(n.company?.domainName?.primaryLinkUrl),
-    amount: n.amount?.amountMicros != null ? n.amount.amountMicros / 1_000_000 : null, currency: n.amount?.currencyCode || null,
-    contact: fullName(n.pointOfContact?.name) || null, updatedAt: n.updatedAt, url: `${BASE}/object/opportunity/${n.id}`,
   }));
 }
 

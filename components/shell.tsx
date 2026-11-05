@@ -1,7 +1,7 @@
 import { Suspense, cache } from "react";
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { BookOpen, CalendarDays, DoorOpen, FileChartColumn, Film, Home, Lightbulb, ListChecks, LogOut, Mail, MessagesSquare, PenLine, PieChart, Radar, Receipt, Settings2, Sparkles, UserCheck, Users } from "lucide-react";
+import { BookOpen, CalendarDays, FileChartColumn, Film, Home, Lightbulb, ListChecks, LogOut, Mail, MessagesSquare, PenLine, PieChart, Radar, Receipt, Settings2, Sparkles, Target, UserCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarInset, SidebarLabel, SidebarMenu, SidebarMenuButton, SidebarProvider, SidebarTrigger, type NavBadge } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/toaster";
@@ -28,12 +28,13 @@ const NAV = [
     { href: "/performance/reports", label: "Reports", icon: FileChartColumn },
     { href: "/performance/team", label: "Team", icon: UserCheck },
   ] },
-  { group: "Outreach", items: [
+  // Sales (VIB-499): the pipeline against the take-home goal, then the outreach tools that feed it. The old CRM and
+  // Front doors pages are tabs of Pipeline now (Deals, Traffic) and redirect there.
+  { group: "Sales", items: [
+    { href: "/pipeline", label: "Pipeline", icon: Target },
     { href: "/outreach/write", label: "Writing desk", icon: PenLine },
     { href: "/outreach/inbox", label: "Inbox", icon: Mail },
     { href: "/outreach", label: "Outreach", icon: Mail },
-    { href: "/funnel", label: "CRM", icon: Users },
-    { href: "/front-doors", label: "Front doors", icon: DoorOpen },
   ] },
   { group: "Reference", items: [
     { href: "/guide", label: "Content Guide", icon: BookOpen },

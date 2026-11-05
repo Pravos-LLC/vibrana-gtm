@@ -97,12 +97,12 @@ export default async function Performance({ searchParams }: { searchParams: Prom
           </ul>
           {d.manualChannels.length > 0 && <ManualEntry week={week.from} weekLabel={weekLabel(week.from)} channels={d.manualChannels} initial={d.manualChannels.find((c) => !c.complete)?.slug} />}
         </div>
-        <Link href="/funnel" className="group mt-8 flex flex-wrap items-baseline gap-x-6 gap-y-1 rounded-lg border border-dashed border-line px-4 py-3 text-sm" data-testid="funnel-strip">
+        <Link href="/pipeline" className="group mt-8 flex flex-wrap items-baseline gap-x-6 gap-y-1 rounded-lg border border-dashed border-line px-4 py-3 text-sm" data-testid="funnel-strip">
           <span className="text-xs font-medium text-ink-3">Later-phase signal, tracked not judged</span>
           <span className="text-ink-2"><b className="font-semibold text-ink">{d.funnel.clicks == null ? "—" : num(d.funnel.clicks)}</b> link clicks from this week&apos;s posts</span>
-          <span className="text-ink-2"><b className="font-semibold text-ink">—</b> site visits to the assessment <span className="text-ink-3">(UTM visits are not in the cockpit yet)</span></span>
+          <span className="text-ink-2">site visits and high-intent pages <span className="text-ink-3">(Pipeline &gt; Traffic)</span></span>
           <span className="text-ink-2"><b className="font-semibold text-ink">{d.funnel.warmDelta == null ? "—" : `${d.funnel.warmDelta > 0 ? "+" : ""}${d.funnel.warmDelta}`}</b> warm or hot contacts in the CRM{d.funnel.warmDelta == null ? <span className="text-ink-3"> (needs two CRM snapshots)</span> : ""}</span>
-          <span className="ml-auto inline-flex items-center gap-1 text-ink-2 group-hover:text-ink">CRM <ArrowRight className="size-3.5" aria-hidden /></span>
+          <span className="ml-auto inline-flex items-center gap-1 text-ink-2 group-hover:text-ink">Pipeline <ArrowRight className="size-3.5" aria-hidden /></span>
         </Link>
       </Section>
 

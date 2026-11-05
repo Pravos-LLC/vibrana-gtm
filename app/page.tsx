@@ -4,12 +4,18 @@ import { Card } from "@/components/ui/card";
 import { StatTile } from "@/components/stat-tile";
 import { latestReport, waitingCandidates } from "@/lib/analytics/load";
 import { PostThumb, StatusBadge, channelLabel } from "@/components/content/post-card";
-import { ConversationList, CrmError, DealBoard, TwentyLink } from "@/components/crm/people";
+import { ConversationList, CrmError, TwentyLink } from "@/components/crm/people";
+import { SalesDealBoard } from "@/components/sales/deal-board";
+import { ActionList, GoalBar } from "@/components/sales/parts";
+import { usd } from "@/components/sales/nav";
+import { goalView } from "@/lib/sales/economics";
+import { loadDeals, loadMilestones, loadSettings } from "@/lib/sales/load";
+import { needsAction } from "@/lib/sales/metrics";
 import { Section, Shell } from "@/components/shell";
 import { DONE, reviewHref, type Post } from "@/lib/posts";
 import { loadPosts, todayIn } from "@/lib/posts-db";
 import { reviewSummary } from "@/lib/review-summary";
-import { crmRead, opportunities, recentConversations } from "@/lib/twenty";
+import { PAGE_TIMEOUT, crmRead, recentConversations } from "@/lib/twenty";
 import { addDays } from "@/lib/week";
 import { sessionDb } from "@/lib/supabase/server";
 
@@ -25,19 +31,25 @@ export const metadata = { title: "Today" };
 export default async function Today() {
   const db = await sessionDb();
   const today = todayIn();
-  const [{ posts, error }, review, people, deals, report, candidates] = await Promise.all([
+  const [{ posts, error }, review, people, deals, report, candidates, sales, milestones] = await Promise.all([
     loadPosts(db, { to: addDays(today, 7) }),
     reviewSummary(db),
     crmRead(() => recentConversations(8)),
-    crmRead(() => opportunities()),
+    loadDeals(PAGE_TIMEOUT),
     latestReport(db),
     waitingCandidates(db),
+    loadSettings(db),
+    loadMilestones(db),
   ]);
   const overdue = posts.filter((p) => p.date < today && !DONE.includes(p.status));
   const next7 = posts.filter((p) => p.date >= today && p.status !== "skipped" && p.status !== "banked");
   const blocked = next7.filter((p) => p.linkProblems.length > 0 || ["idea", "drafted"].includes(p.status));
   const live = posts.filter((p) => p.status === "published" && p.date >= addDays(today, -14)).reverse();
-  const openDeals = (deals.data ?? []).filter((d) => d.stage !== "LOST" && d.stage !== "SIGNED").length;
+  const dealList = deals.data?.deals ?? [];
+  const openDeals = dealList.filter((d) => d.stage !== "LOST" && d.stage !== "SIGNED").length;
+  const now = new Date();
+  const goal = goalView(dealList, milestones.data ?? [], sales.settings, now);
+  const actions = deals.data ? needsAction(dealList, milestones.data ?? [], now) : [];
 
   return (
     <Shell title="Today" active="/">
@@ -73,7 +85,7 @@ export default async function Today() {
           <Card glow={false} className="px-4 py-1">
             {people.error ? <div className="py-3"><CrmError message={people.error} /></div> : <ConversationList contacts={people.data ?? []} />}
           </Card>
-          <More href="/funnel">CRM and funnel</More>
+          <More href="/pipeline">Pipeline and CRM</More>
         </section>
         <section>
           <div className="mb-4 flex items-baseline justify-between gap-4">
@@ -98,8 +110,14 @@ export default async function Today() {
         </section>
       </div>
 
-      <Section title="Opportunities" note={deals.data ? `${openDeals} open` : undefined}>
-        {deals.error ? <CrmError message={deals.error} /> : <DealBoard deals={deals.data ?? []} />}
+      <Section title="Pipeline" note={`${usd(goal.projectedThisMonthUsd)} of ${usd(sales.settings.goalUsd)} take-home this month if what is due arrives${deals.data ? ` · ${openDeals} open deals` : ""}`}>
+        <GoalBar collected={goal.current.takeHomeUsd} due={goal.projectedThisMonthUsd - goal.current.takeHomeUsd} goal={sales.settings.goalUsd} />
+        <div className="mt-6">
+          {deals.error ? <CrmError message={`Twenty could not be read: ${deals.error}`} /> : <ActionList actions={actions.slice(0, 5)} empty="No deal needs action." />}
+          {actions.length > 5 && <p className="mt-2 text-xs text-ink-3">and {actions.length - 5} more</p>}
+        </div>
+        {deals.data && <div className="mt-6"><SalesDealBoard deals={dealList.filter((d) => d.stage !== "LOST")} fx={sales.settings.fx} now={now} /></div>}
+        <More href="/pipeline">Open Pipeline</More>
       </Section>
     </Shell>
   );

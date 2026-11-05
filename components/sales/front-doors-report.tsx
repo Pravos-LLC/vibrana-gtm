@@ -1,44 +1,24 @@
-import { redirect } from "next/navigation";
-import { Section, Shell, Table } from "@/components/shell";
+// The website front doors report (assessments, EU AI Act, ROI calculator, sprint requests, call clicks), shown on
+// Pipeline > Traffic. Counts come from the site's own tables (lib/front-doors.ts); the page checks the owner first.
+import { Section, Table } from "@/components/shell";
 import { StatTile } from "@/components/stat-tile";
-import { adminDb } from "@/lib/db";
-import { DOOR_LABELS, loadFrontDoors, type FrontDoorWeek } from "@/lib/front-doors";
-import { todayIn } from "@/lib/posts-db";
-import { sessionDb } from "@/lib/supabase/server";
-
-export const dynamic = "force-dynamic";
-export const maxDuration = 30;
-
-const WEEKS = 8;
+import { DOOR_LABELS, type FrontDoorReport, type FrontDoorWeek } from "@/lib/front-doors";
 
 const judge = (w: FrontDoorWeek) => (w.quality.meanJudge == null ? "none" : `${w.quality.meanJudge.toFixed(2)} / 5`);
 
-export const metadata = { title: "Front doors" };
-
-/**
- * Front doors: the weekly funnel for the AI Readiness and EU AI Act Readiness assessments, the ROI calculator and the Sprint page
- * (hub gtm/programs/ai-readiness/plan.md §8). Counts come from the site's tables (lib/front-doors.ts).
- */
-export default async function FrontDoors() {
-  const session = await sessionDb();
-  const { data: claims } = await session.auth.getClaims();
-  // The site's lead tables are service-role only, so the owner claim is checked here before the secret-key read.
-  if ((claims?.claims?.app_metadata as { gtm_owner?: boolean } | undefined)?.gtm_owner !== true) redirect("/login");
-
-  const report = await loadFrontDoors(adminDb(), { today: todayIn("UTC"), weeks: WEEKS });
+export function FrontDoorsReport({ report, weeks }: { report: FrontDoorReport; weeks: number }) {
+  const WEEKS = weeks;
   const [now, prev] = report.weeks;
   const oldestFirst = [...report.weeks].reverse();
   const spark = (pick: (w: FrontDoorWeek) => number | null) => oldestFirst.map(pick);
   const delta = (pick: (w: FrontDoorWeek) => number) => ({ value: pick(now) - pick(prev), label: "vs last week", goodWhen: "up" as const });
-
   const doorRows = report.weeks.flatMap((w) =>
     report.active
       .filter((d) => Object.values(w.doors[d]).some((n) => n > 0))
       .map((d) => [w.week, DOOR_LABELS[d], w.doors[d].completions, w.doors[d].euAssessments, w.doors[d].roiLeads, w.doors[d].sprintInquiries, w.doors[d].callClicks]),
   );
-
   return (
-    <Shell title="Front doors" active="/front-doors">
+    <>
       {report.errors.map((e) => (
         <p key={e.table} className="mb-4 text-sm text-red-strong">Could not read {e.table}: {e.error}. Its counts show as 0.</p>
       ))}
@@ -72,6 +52,6 @@ export default async function FrontDoors() {
           <li>Definitions and every event: brand.example.com <code>docs/funnel-measurement.md</code>. Terminal: <code>gtm front-doors [--weeks N] [--json]</code>.</li>
         </ul>
       </Section>
-    </Shell>
+    </>
   );
 }

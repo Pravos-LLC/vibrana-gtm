@@ -49,7 +49,7 @@ test("a gtm_team member (Abe) gets the Signal Desk only: every other page sends 
   // The sidebar offers Signals alone.
   await expect(page.getByRole("link", { name: "Signals" })).toBeVisible();
   for (const name of ["Review", "Ideas", "Outreach", "Writing desk", "Calendar", "CRM", "Costs"]) await expect(page.getByRole("link", { name, exact: true })).toHaveCount(0);
-  for (const path of ["/", "/content", "/costs", "/calendar", "/funnel", "/performance/team", "/team/mailbox", "/inspiration", "/ideas", "/outreach", "/outreach/write", "/guide", "/engage", "/stories/fx-story"]) {
+  for (const path of ["/", "/content", "/costs", "/calendar", "/pipeline", "/pipeline/deals", "/performance/team", "/team/mailbox", "/inspiration", "/ideas", "/outreach", "/outreach/write", "/guide", "/engage", "/stories/fx-story"]) {
     await page.goto(path);
     await expect(page, path).toHaveURL(/\/signals$/);
   }
@@ -202,9 +202,11 @@ test.describe("owner", () => {
     await admin().from("gtm_manual_metrics").delete().eq("week_start", week).eq("channel", "youtube");
   });
 
-  test("CRM shows the latest snapshot and enrichment runs, with snapshot opportunities when Twenty is down", async ({ page }) => {
+  test("Deals shows the latest snapshot and enrichment runs, with snapshot opportunities when Twenty is down; /funnel redirects there", async ({ page }) => {
     await page.goto("/funnel");
-    await expect(page.getByRole("heading", { name: "CRM", exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/\/pipeline\/deals$/);
+    await expect(page.getByRole("heading", { name: "Deals", exact: true })).toBeVisible();
+    await expect(page.getByText(/Twenty could not be read \(/)).toBeVisible();
     await expectKpi(page, "Enrichment attempted", "321");
     await expectKpi(page, "Enriched", "173");
     await expectKpi(page, "Contacted", "27");
@@ -218,6 +220,52 @@ test.describe("owner", () => {
     await expect(page.getByText("1 note seen but not finished after 24h")).toBeVisible();
     await expect(page.getByText("Not onboarded")).toBeVisible();
     await shot(page, "funnel");
+  });
+
+  test("Pipeline: the goal from paid milestones, the reverse funnel, each tab, and assumptions saved in Settings", async ({ page }) => {
+    await page.goto("/pipeline");
+    await expect(page.getByRole("heading", { name: "Pipeline", exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Pipeline sections" }).getByRole("link")).toHaveCount(6);
+    // $8,000 paid today on the sample won deal.
+    await expectKpi(page, "Cash collected this month", "$8,000");
+    await expect(page.getByText(/Twenty could not be read/)).toBeVisible();
+    await expect(page.getByRole("cell", { name: "Discovery meetings held" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "First touches (if all outbound)" })).toBeVisible();
+    await expect(page.getByText(/Email opens: there is no tracking pixel/)).toBeVisible();
+    await shot(page, "pipeline");
+
+    await page.getByRole("navigation", { name: "Owner" }).getByRole("link", { name: "Abe" }).click();
+    await expect(page).toHaveURL(/owner=ABE/);
+    await page.getByRole("navigation", { name: "Pipeline sections" }).getByRole("link", { name: "Conversations" }).click();
+    await expect(page).toHaveURL(/\/pipeline\/conversations\?owner=ABE/);
+    await page.goto("/pipeline/conversations");
+    await expectKpi(page, "New connections", "1");
+    await expectKpi(page, "Two-way with ICP", "1");
+    await expect(page.getByText(/No LinkedIn export imported yet/)).toBeVisible();
+    await shot(page, "pipeline-conversations");
+
+    await page.goto("/front-doors");
+    await expect(page).toHaveURL(/\/pipeline\/traffic$/);
+    await expect(page.getByRole("heading", { name: "brand.example.com" })).toBeVisible();
+    await expectKpi(page, "Visitors", "83");
+    await expectKpi(page, "High-intent visits", "10");
+    await expect(page.getByText("Assessments completed", { exact: true })).toBeVisible();
+    await shot(page, "pipeline-traffic");
+
+    await page.goto("/pipeline/meetings");
+    await expect(page.getByText(/Twenty could not be read/)).toBeVisible();
+    await page.goto("/pipeline/people");
+    await expect(page.getByRole("cell", { name: "Open deals", exact: true })).toBeVisible();
+
+    await page.goto("/settings#pipeline");
+    const goal = page.getByLabel("Take-home goal a month");
+    await goal.fill("12000");
+    await page.getByRole("button", { name: "Save assumptions" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Saved" })).toBeVisible();
+    await expect.poll(async () => ((await admin().from("gtm_settings").select("value").eq("key", "pipeline").maybeSingle()).data?.value as { goalUsd?: number } | undefined)?.goalUsd).toBe(12000);
+    await page.goto("/pipeline");
+    await expect(page.getByText(/\$12,000 a month take-home/)).toBeVisible();
+    await admin().from("gtm_settings").delete().eq("key", "pipeline");
   });
 
   test("Costs shows seeded spend, vendors and unclassified charges", async ({ page }) => {

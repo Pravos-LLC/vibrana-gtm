@@ -19,6 +19,9 @@ const config: NextConfig = {
   async redirects() {
     return [
       { source: "/season", destination: "/content", permanent: true },
+      // The CRM and front doors pages became tabs of Pipeline (VIB-499).
+      { source: "/funnel", destination: "/pipeline/deals", permanent: true },
+      { source: "/front-doors", destination: "/pipeline/traffic", permanent: true },
       { source: "/review", destination: "/content", permanent: true },
       { source: "/review/:path*", destination: "/content", permanent: true },
       { source: "/stories", destination: "/content", permanent: true },
