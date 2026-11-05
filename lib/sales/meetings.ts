@@ -7,6 +7,9 @@ import { TwentyError } from "../twenty";
 import type { Owner } from "./deals";
 import type { Meeting } from "./metrics";
 
+/** The name meeting capture gives a row it had to withdraw (vibrana-crm meeting_ledger.retract). */
+export const RETRACTED = "Retracted meeting";
+
 export type MeetingRead = { installed: true; meetings: Meeting[]; sample: boolean } | { installed: false; reason: string };
 
 type Node = {
@@ -29,7 +32,8 @@ export async function salesMeetings(since: Date, opts: { timeoutMs?: number; que
   try {
     const d = await run(`{ meetings(first:300, filter:{mtgAt:{gte:"${since.toISOString()}"}}, orderBy:[{mtgAt:DescNullsLast}]) {
       edges { node { id name mtgAt mtgOwner mtgKind mtgCompany { name } mtgOpportunity { id stage } } } } }`) as { meetings: { edges: { node: Node }[] } };
-    const meetings = d.meetings.edges.map(({ node: n }) => n).filter((n) => n.mtgAt).map((n): Meeting => ({
+    // A retracted row (an opt-out after it was written) waits for an admin delete; it is not a meeting.
+    const meetings = d.meetings.edges.map(({ node: n }) => n).filter((n) => n.mtgAt && n.name !== RETRACTED).map((n): Meeting => ({
       id: n.id, name: n.name || "Meeting", at: n.mtgAt!, owner: n.mtgOwner === "JOHN" || n.mtgOwner === "ABE" ? (n.mtgOwner as Owner) : null,
       kind: n.mtgKind, company: n.mtgCompany?.name || null, opportunityId: n.mtgOpportunity?.id ?? null, opportunityStage: n.mtgOpportunity?.stage ?? null,
       url: `${base}/object/meeting/${n.id}`,

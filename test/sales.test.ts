@@ -256,6 +256,11 @@ test("deals: pipeline fields map; a zero amount is unset; a missing field falls 
 test("meetings: the ledger maps; a missing object reads as not installed", async () => {
   const r = await meetingsMod.salesMeetings(NOW, { query: async () => ({ meetings: { edges: [{ node: { id: "m", name: "Call", mtgAt: "2026-11-04T09:00:00Z", mtgOwner: "JOHN", mtgKind: "CLIENT", mtgCompany: { name: "Fabrikam" }, mtgOpportunity: null } }] } }) });
   assert.ok(r.installed && r.meetings[0].kind === "CLIENT" && r.meetings[0].company === "Fabrikam");
+  const withRetracted = await meetingsMod.salesMeetings(NOW, { query: async () => ({ meetings: { edges: [
+    { node: { id: "m1", name: "Retracted meeting", mtgAt: "2026-11-04T09:00:00Z", mtgOwner: "JOHN", mtgKind: "OTHER", mtgCompany: null, mtgOpportunity: null } },
+    { node: { id: "m2", name: "2026-11-04 meeting: Fabrikam", mtgAt: "2026-11-04T10:00:00Z", mtgOwner: "JOHN", mtgKind: "CLIENT", mtgCompany: { name: "Fabrikam" }, mtgOpportunity: null } },
+  ] } }) });
+  assert.ok(withRetracted.installed && withRetracted.meetings.map((m) => m.id).join() === "m2", "a retracted row is not a meeting");
   const none = await meetingsMod.salesMeetings(NOW, { query: async () => { throw new TwentyError("x", [{ message: 'Cannot query field "meetings" on type "Query".' }]); } });
   assert.equal(none.installed, false);
 });
