@@ -1712,7 +1712,10 @@ const commands: Record<string, () => Promise<void>> = {
       const days = flag("--days") ? Number(flag("--days")) : 7;
       if (!Number.isInteger(days) || days < 1 || days > 400) throw new Error("--days must be 1 to 400");
       const r = await syncYouTube(adminDb(), { today: today(), days });
-      return out(r, () => console.log(`synced through ${r.through}: ${r.channelDays} channel days, ${r.videoDays} video days, ${r.dims} traffic/country rows, ${r.reach.rows} reach rows from ${r.reach.files} new report files${r.reach.jobCreated ? " (reach job just created: impressions and CTR appear within about a day)" : ""}; ${r.weeks} weeks rolled into /performance; subscribers ${r.subscribers ?? "hidden"}`));
+      return out(r, () => {
+        console.log(`synced through ${r.through}: ${r.channelDays} channel days, ${r.videoDays} video days, ${r.dims} traffic/country rows, ${r.reach.rows} reach rows from ${r.reach.files} new report files${r.reach.jobCreated ? " (reach job just created: impressions and CTR appear within about a day)" : ""}; ${r.weeks} weeks rolled into /performance; subscribers ${r.subscribers ?? "hidden"}`);
+        for (const e of r.reachErrors) console.error(`reach file skipped: ${e}`);
+      });
     }
     if (sub === "import") {
       const paths = rest.slice(1);

@@ -9,7 +9,7 @@ The weekly YouTube entry (impressions, click-through rate) and the Substack subs
 | YouTube Analytics API | views, watch time, average view duration and percentage, subscribers gained and lost, likes, comments, shares; by day, by video, by traffic source, by country | daily cron `/api/cron/youtube` |
 | YouTube Reporting API, report `channel_reach_basic_a1` | thumbnail impressions and click-through rate per video per day (the Analytics API does not expose them; the reach reports were added January 2026) | same cron; the report job is created on first run and files appear within about a day |
 | YouTube Data API | live subscriber total, titles, durations, publish dates | same cron |
-| Studio export zips | daily views per video, traffic source and country, video metadata. A fallback and a backfill; impressions are period totals in the export, so they are not imported | `gtm youtube import <zip>...` |
+| Studio export zips | daily views per video, traffic source and country, video metadata. A fallback and a backfill that only fills days and videos the API has not already written (existing rows are skipped); impressions are period totals in the export, so they are not imported | `gtm youtube import <zip>...` |
 | Substack exports | subscribers at week end, new subscribers and unique visitors per week. Substack has no API; opens and post views are in neither export and stay manual | `gtm substack import` |
 
 Tables: `gtm_yt_videos`, `gtm_yt_video_daily`, `gtm_yt_channel_daily`, `gtm_yt_dim_daily`, `gtm_yt_report_files` (schema owned by the website repository). Each finished week's impressions and CTR are written to `gtm_manual_metrics` (`entered_by = youtube-api`), so the existing YouTube row completes itself. A week John typed by hand is never overwritten.
@@ -24,7 +24,7 @@ Tables: `gtm_yt_videos`, `gtm_yt_video_daily`, `gtm_yt_channel_daily`, `gtm_yt_d
 
 ## Check the first sync against Studio
 
-The reach report returns CTR as a fraction; `parseReach` converts it to percent. Confirm once: for 7 Oct to 3 Nov 2026 the Studio table showed 1,925 impressions at 2.44% CTR. After a sync, the weighted total on /performance for the same window should match. If CTR is off by 100x, fix `parseReach`.
+The reach report returns CTR as a fraction; `parseReach` converts it to percent. Confirm once: for 7 Oct to 3 Nov 2026 the Studio table showed 1,925 impressions at 2.44% CTR. After a sync, the weighted total on /performance for the same window should match. The parser refuses a file whose CTR is above 1 (it expects a fraction) or whose columns changed. The sync skips that file, reports it as `reach file skipped`, keeps going, and retries it on the next run; fix `parseReach` once you know the real scale.
 
 ## Substack
 

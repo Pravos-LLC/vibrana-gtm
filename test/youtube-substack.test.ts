@@ -187,3 +187,23 @@ test("sync: country is queried per day, a deleted video gets a placeholder, a re
   assert.equal(country.length, 10);
   assert.ok(!m.calls.some((c) => c.url.includes("dimensions=day%2Ccountry")));
 });
+
+test("sync: one bad reach file is skipped and reported, the views are still written, and the file is retried later", async () => {
+  const m = installFetchMock([
+    { method: "POST", url: "https://oauth2.googleapis.com/token", json: { access_token: "at" } },
+    { url: "https://www.googleapis.com/youtube/v3/channels", json: { items: [{}] } },
+    { url: "https://www.googleapis.com/youtube/v3/videos", json: { items: [{ id: "live_video_1", snippet: { title: "Live" }, contentDetails: { duration: "PT30S" } }] } },
+    { url: "https://youtubereporting.googleapis.com/v1/jobs/job1/reports", json: { reports: [{ id: "bad", startTime: "2026-10-26T00:00:00Z", endTime: "2026-10-27T00:00:00Z", createTime: "2026-10-28T00:00:00Z", downloadUrl: "https://youtubereporting.googleapis.com/dl/bad" }] } },
+    { url: "https://youtubereporting.googleapis.com/v1/jobs", json: { jobs: [{ id: "job1", reportTypeId: "channel_reach_basic_a1" }] } },
+    { url: "https://youtubereporting.googleapis.com/dl/bad", body: "date,channel_id,video_id,video_thumbnail_impressions,video_thumbnail_impressions_ctr\n20261026,UC1,live_video_1,10,5.5\n" },
+    { url: "https://youtubeanalytics.googleapis.com/v2/reports", json: { columnHeaders: [{ name: "video" }, { name: "views" }], rows: [["live_video_1", 9]] } },
+  ]);
+  restore = m.restore;
+  const { db, t } = fakeDb();
+  const { syncYouTube } = await import("../lib/youtube/sync.ts");
+  const r = await syncYouTube(db, { today: "2026-11-05", days: 2, env: { YOUTUBE_CLIENT_ID: "i", YOUTUBE_CLIENT_SECRET: "s", YOUTUBE_REFRESH_TOKEN: "r" } });
+  assert.equal(r.reachErrors.length, 1);
+  assert.match(r.reachErrors[0], /not a fraction/);
+  assert.equal((t.gtm_yt_report_files ?? []).length, 0);                  // not marked read: retried next run
+  assert.ok((t.gtm_yt_video_daily ?? []).some((d) => d.views === 9));    // the views still landed
+});

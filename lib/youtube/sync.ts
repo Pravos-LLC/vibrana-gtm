@@ -64,7 +64,7 @@ export async function rollUpManual(db: SupabaseClient, throughDate: string, sinc
   return weeks.length;
 }
 
-export type SyncResult = { videos: number; videoDays: number; channelDays: number; dims: number; reach: { files: number; rows: number; jobCreated: boolean }; subscribers: number | null; weeks: number; through: string };
+export type SyncResult = { videos: number; videoDays: number; channelDays: number; dims: number; reach: { files: number; rows: number; jobCreated: boolean }; subscribers: number | null; weeks: number; through: string; reachErrors: string[] };
 
 /** `today` is the UTC date; the API settles about two days late, so the window ends two days before it. */
 export async function syncYouTube(db: SupabaseClient, opts: { today: string; days?: number; env?: Record<string, string | undefined> }): Promise<SyncResult> {
@@ -98,10 +98,17 @@ export async function syncYouTube(db: SupabaseClient, opts: { today: string; day
   for (const f of listed) { const k = f.startTime.slice(0, 10); const cur = newest.get(k); if (!cur || f.createTime > cur.createTime) newest.set(k, f); }
   const fresh = [...newest.values()];
   const reach: ReachRow[] = [], perFile = new Map<string, number>();
-  for (const f of fresh) { const rows = parseReach(await downloadReport(token, f.downloadUrl)); perFile.set(f.id, rows.length); reach.push(...rows); }
+  // One bad file (a CTR scale or column change) must not stop the views, titles and roll-up. It is reported, not marked
+  // as read, so it is retried once the parser is fixed.
+  const reachErrors: string[] = [], bad = new Set<string>();
+  for (const f of fresh) {
+    try { const rows = parseReach(await downloadReport(token, f.downloadUrl)); perFile.set(f.id, rows.length); reach.push(...rows); }
+    catch (e) { bad.add(f.id); reachErrors.push(`${f.startTime.slice(0, 10)}: ${(e as Error).message}`); console.error(`youtube sync: reach file ${f.id}: ${(e as Error).message}`); }
+  }
   for (const r of reach) ids.add(r.video_id);
 
-  const known = new Set((must(await db.from("gtm_yt_videos").select("video_id"), "yt videos read") as { video_id: string }[]).map((v) => v.video_id));
+  // Placeholders for deleted videos are looked up again, so a video that comes back gets its real title.
+  const known = new Set((must(await db.from("gtm_yt_videos").select("video_id,title"), "yt videos read") as { video_id: string; title: string }[]).filter((v) => !v.title.startsWith("(deleted or private")).map((v) => v.video_id));
   const unknown = [...ids].filter((i) => !known.has(i));
   if (unknown.length) {
     const found = await videoDetails(token, unknown);
@@ -119,7 +126,7 @@ export async function syncYouTube(db: SupabaseClient, opts: { today: string; day
   const perDay = new Map<string, { imp: number; clicks: number; known: number }>();
   for (const r of reach) { const a = perDay.get(r.date) ?? { imp: 0, clicks: 0, known: 0 }; a.imp += r.impressions; if (r.ctr != null) { a.clicks += r.impressions * (r.ctr / 100); a.known += r.impressions; } perDay.set(r.date, a); }
   if (perDay.size) await upsertChannelDays(db, [...perDay].map(([date, a]) => ({ date, impressions: a.imp, ctr: a.known ? Math.round((a.clicks / a.known) * 10000) / 100 : null })), "api");
-  for (const f of fresh) must(await db.from("gtm_yt_report_files").upsert({ report_id: f.id, report_type: "channel_reach_basic_a1", start_date: f.startTime.slice(0, 10), end_date: f.endTime.slice(0, 10), rows_ingested: perFile.get(f.id) ?? 0 }, { onConflict: "report_id" }), "yt report file");
+  for (const f of fresh.filter((x) => !bad.has(x.id))) must(await db.from("gtm_yt_report_files").upsert({ report_id: f.id, report_type: "channel_reach_basic_a1", start_date: f.startTime.slice(0, 10), end_date: f.endTime.slice(0, 10), rows_ingested: perFile.get(f.id) ?? 0 }, { onConflict: "report_id" }), "yt report file");
   // Reissued files we skipped are marked seen too, so they are not downloaded again.
   for (const f of listed.filter((x) => !fresh.includes(x))) must(await db.from("gtm_yt_report_files").upsert({ report_id: f.id, report_type: "channel_reach_basic_a1", start_date: f.startTime.slice(0, 10), end_date: f.endTime.slice(0, 10), rows_ingested: 0 }, { onConflict: "report_id" }), "yt report file");
 
@@ -140,5 +147,5 @@ export async function syncYouTube(db: SupabaseClient, opts: { today: string; day
   } catch (e) { console.error(`youtube sync: country: ${(e as Error).message}`); }
   await upsertDims(db, dims, "api");
 
-  return { videos: unknown.length, videoDays: merged.size, channelDays: channelRows.length, dims: dims.length, reach: { files: fresh.length, rows: reach.length, jobCreated: job.created }, subscribers: info.subscribers, weeks, through: end };
+  return { videos: unknown.length, videoDays: merged.size, channelDays: channelRows.length, dims: dims.length, reach: { files: fresh.length, rows: reach.length, jobCreated: job.created }, subscribers: info.subscribers, weeks, through: end, reachErrors };
 }
