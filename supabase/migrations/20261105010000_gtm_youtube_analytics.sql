@@ -76,7 +76,7 @@ alter table public.gtm_yt_channel_daily enable row level security;
 alter table public.gtm_yt_dim_daily enable row level security;
 alter table public.gtm_yt_report_files enable row level security;
 revoke all on public.gtm_yt_videos, public.gtm_yt_video_daily, public.gtm_yt_channel_daily, public.gtm_yt_dim_daily, public.gtm_yt_report_files from anon, authenticated;
-grant select on public.gtm_yt_videos, public.gtm_yt_video_daily, public.gtm_yt_channel_daily, public.gtm_yt_dim_daily to authenticated;
+grant select on public.gtm_yt_videos, public.gtm_yt_video_daily, public.gtm_yt_channel_daily, public.gtm_yt_dim_daily, public.gtm_yt_report_files to authenticated;
 grant all on public.gtm_yt_videos, public.gtm_yt_video_daily, public.gtm_yt_channel_daily, public.gtm_yt_dim_daily, public.gtm_yt_report_files to service_role;
 
 create policy gtm_yt_videos_owner_read on public.gtm_yt_videos for select to authenticated
@@ -86,4 +86,6 @@ create policy gtm_yt_video_daily_owner_read on public.gtm_yt_video_daily for sel
 create policy gtm_yt_channel_daily_owner_read on public.gtm_yt_channel_daily for select to authenticated
   using (coalesce(((select auth.jwt()) -> 'app_metadata' ->> 'gtm_owner')::boolean, false));
 create policy gtm_yt_dim_daily_owner_read on public.gtm_yt_dim_daily for select to authenticated
+  using (coalesce(((select auth.jwt()) -> 'app_metadata' ->> 'gtm_owner')::boolean, false));
+create policy gtm_yt_report_files_owner_read on public.gtm_yt_report_files for select to authenticated
   using (coalesce(((select auth.jwt()) -> 'app_metadata' ->> 'gtm_owner')::boolean, false));
