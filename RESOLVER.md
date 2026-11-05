@@ -7,6 +7,7 @@
 | Setup, architecture and available services | [README.md](README.md) |
 | Current production/preview boundaries, releases and scheduled jobs | [Deployment context](docs/deployment.md) |
 | Private data schema, pins, transport and release binding | [Private data loading](docs/private-overlay.md) |
+| YouTube and Substack stats on /performance (API setup, imports) | [YouTube analytics](docs/youtube-analytics.md) |
 | Synthetic local dashboard and CLI | [Local demo](docs/demo.md) |
 | Changes and required validation | [Contributing](CONTRIBUTING.md), [Testing](docs/testing.md), `.github/workflows/ci.yml`, `.github/workflows/security.yml` |
 | Vulnerability reporting and confidential information | [Security](SECURITY.md) |
