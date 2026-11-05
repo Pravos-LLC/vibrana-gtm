@@ -1,6 +1,6 @@
-// Meetings for the pipeline dashboard: the Twenty `meeting` ledger that meeting capture writes for every Granola meeting
-// (vibrana-crm qualification/meeting_capture.py; kinds DISCOVERY, CLIENT, PARTNER, INTERNAL, OTHER, decided there and
-// correctable in Twenty). Read live per page view. Until the object exists the page says "not installed", never 0.
+// Meetings for the pipeline dashboard: the Twenty `meeting` ledger. Meeting capture (vibrana-crm
+// qualification/meeting_capture.py) writes a row only for a Granola meeting it judged business with someone the CRM knows
+// (kinds DISCOVERY, CLIENT, PARTNER, OTHER); people add calls Granola did not record, and correct kinds, in Twenty. Read live per page view. Until the object exists the page says "not installed", never 0.
 import { demoMode } from "../demo";
 import { schemaMiss } from "../meeting-capture";
 import { TwentyError } from "../twenty";

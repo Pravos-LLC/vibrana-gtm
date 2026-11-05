@@ -14,8 +14,11 @@ export type StageRow = { opportunity_id: string; stage: string; first_seen_at: s
  * date, anything else at its creation. Never updatedAt: any edit (an owner filled in) moves it, which made every
  * existing deal look as if it qualified the day the fields were backfilled (found on production, 2026-11-05).
  */
-export const firstSeenFor = (d: Pick<SalesDeal, "stage" | "closeDate" | "createdAt">) =>
-  (d.stage === "SIGNED" || d.stage === "LOST") && d.closeDate ? d.closeDate : d.createdAt;
+export const firstSeenFor = (d: Pick<SalesDeal, "stage" | "closeDate" | "createdAt">, now: Date = new Date()) => {
+  const at = (d.stage === "SIGNED" || d.stage === "LOST") && d.closeDate ? d.closeDate : d.createdAt;
+  // An expected close date left in the future on a closed deal is not when it closed: never date history ahead of now.
+  return Date.parse(at) > now.getTime() ? now.toISOString() : at;
+};
 
 export function newStageRows(deals: Pick<SalesDeal, "id" | "stage" | "updatedAt" | "createdAt" | "closeDate">[], history: StageRow[], now: Date): StageRow[] {
   const known = new Map<string, Set<string>>();
@@ -24,7 +27,7 @@ export function newStageRows(deals: Pick<SalesDeal, "id" | "stage" | "updatedAt"
   for (const d of deals) {
     const stages = known.get(d.id);
     if (stages?.has(d.stage)) continue;
-    out.push({ opportunity_id: d.id, stage: d.stage, first_seen_at: stages ? now.toISOString() : firstSeenFor(d) });
+    out.push({ opportunity_id: d.id, stage: d.stage, first_seen_at: stages ? now.toISOString() : firstSeenFor(d, now) });
   }
   return out;
 }
