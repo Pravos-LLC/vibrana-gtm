@@ -9,6 +9,7 @@ import { TrendChart } from "@/components/performance/trend-chart";
 import { Sparkline } from "@/components/stat-tile";
 import { COMPARE_LABEL, PLATFORM_LABEL, PLATFORMS, UNIT_LABEL, compact, countDelta, resolveWeek, weekLabel, type CompareMode, type SortKey } from "@/lib/analytics/dashboard";
 import { loadPerformance } from "@/lib/analytics/load";
+import { loadYouTube } from "@/lib/youtube/view";
 import { localDate } from "@/lib/reports/week";
 import { sessionDb } from "@/lib/supabase/server";
 import { addDays } from "@/lib/week";
@@ -36,7 +37,7 @@ export default async function Performance({ searchParams }: { searchParams: Prom
   const q: Query = { week: week.current ? undefined : week.from, compare, platform, sort };
 
   const db = await sessionDb();
-  const d = await loadPerformance(db, { week, compare, platform, sort, now });
+  const [d, yt] = await Promise.all([loadPerformance(db, { week, compare, platform, sort, now }), !platform || platform === "youtube" ? loadYouTube(db, addDays(week.to, 0)) : Promise.resolve(null)]);
   const t = d.tiles.current;
   const cmp = COMPARE_LABEL[compare];
   // Every tile is a count, so its delta is a whole number.
@@ -119,6 +120,36 @@ export default async function Performance({ searchParams }: { searchParams: Prom
       <Section title="Best time to post" note={label ?? "all platforms"}>
         <BestTimeHeatmap cells={d.best.cells} max={d.best.max} source={d.best.source} gap={d.best.gap} posts={d.best.posts} tz={d.tz} />
       </Section>
+
+      {yt && (
+        <Section title="YouTube" note={`${short(yt.from)} to ${short(yt.to)}, from ${yt.sources.join(" and ") === "api" ? "the YouTube API" : yt.sources.join(" and ")}`}>
+          <p className="text-sm text-ink-2" data-testid="yt-summary">
+            <b className="font-semibold text-ink">{num(yt.views)}</b> views{yt.watchHours != null ? <>, <b className="font-semibold text-ink">{yt.watchHours}</b> watch hours</> : null}
+            {yt.impressions != null ? <>, <b className="font-semibold text-ink">{num(yt.impressions)}</b> thumbnail impressions{yt.ctr != null ? <> at <b className="font-semibold text-ink">{yt.ctr}%</b> click-through</> : null}</> : <span className="text-ink-3"> (impressions arrive with the API reach report)</span>}
+            {yt.subs != null ? <>, <b className="font-semibold text-ink">{yt.subs}</b> subscribers gained</> : null}
+          </p>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-sm" data-testid="yt-videos">
+              <thead className="text-xs text-ink-3"><tr><th className="py-1 pr-4 font-medium">Video</th><th className="px-2 font-medium">Views</th><th className="px-2 font-medium">Impressions</th><th className="px-2 font-medium">CTR</th><th className="px-2 font-medium">Avg % viewed</th><th className="px-2 font-medium">Subs</th><th className="px-2 font-medium">Day 1 share</th></tr></thead>
+              <tbody>
+                {yt.videos.slice(0, 12).map((v) => (
+                  <tr key={v.video_id} className="border-t border-line">
+                    <td className="max-w-[22rem] truncate py-1.5 pr-4 text-ink">{v.title}{v.short ? <span className="ml-2 text-xs text-ink-3">Short</span> : null}</td>
+                    <td className="px-2 tabular-nums">{num(v.views)}</td>
+                    <td className="px-2 tabular-nums">{v.impressions == null ? "—" : num(v.impressions)}</td>
+                    <td className="px-2 tabular-nums">{v.ctr == null ? "—" : `${v.ctr}%`}</td>
+                    <td className="px-2 tabular-nums">{v.avgPctViewed == null ? "—" : `${v.avgPctViewed}%`}</td>
+                    <td className="px-2 tabular-nums">{v.subs == null ? "—" : v.subs}</td>
+                    <td className="px-2 tabular-nums">{v.viewsDay1Share == null ? "—" : `${v.viewsDay1Share}%`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {yt.traffic.length > 0 && <p className="mt-4 text-sm text-ink-2" data-testid="yt-traffic">Views by source: {yt.traffic.slice(0, 6).map((t) => `${t.key} ${t.share}%`).join(", ")}</p>}
+          <p className="mt-2 text-xs text-ink-3">Rates are per video over the window; CTR is weighted by impressions. A dash means the source did not report it, not zero. Under about 100 impressions a rate is noise.</p>
+        </Section>
+      )}
 
       <Section title="Twelve weeks" note="posts published each week, in each platform's own units">
         <div className="space-y-8" data-testid="small-multiples">

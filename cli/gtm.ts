@@ -46,7 +46,7 @@ const flag = (name: string) => {
     process.env.GTM_OWNER_EMAIL = as;
   }
 }
-const positional = argv.filter((a, i) => !a.startsWith("--") && !(argv[i - 1] ?? "").match(/^--(as|week|iso-week|track|season|days|since|only|round|series|title|description|starts|ends|pillars|batch|assets|asset|note|linkedin|instagram|youtube|kind|tags|tag|why|pillar|out|by|status|lane|limit|format|story|to|from|account|who|stage|changes|summary|effort|impact|source|owner|lens|slug|addresses|replies|motion-sha|motion-path|credits|balance-after|job|skill|from|category|rule|do-not-use|only|party|sha|render|keys|notes|eta|agent|storyboard|manifest|brand|theme|brief|prompt-file|reference|art-dir|asset-root|shape|weeks|email|file|reason|url|text|version)$/));
+const positional = argv.filter((a, i) => !a.startsWith("--") && !(argv[i - 1] ?? "").match(/^--(as|week|iso-week|track|season|days|since|only|round|series|title|description|starts|ends|pillars|batch|assets|asset|note|linkedin|instagram|youtube|kind|tags|tag|why|pillar|out|by|status|lane|limit|format|story|to|from|account|who|stage|changes|summary|effort|impact|source|owner|lens|slug|addresses|replies|motion-sha|motion-path|credits|balance-after|job|skill|from|category|rule|do-not-use|only|party|sha|render|keys|notes|eta|agent|storyboard|manifest|brand|theme|brief|prompt-file|reference|art-dir|asset-root|shape|weeks|email|file|reason|url|text|version|list)$/));
 const [cmd, ...rest] = positional;
 
 // In `gtm sync`, commands hand their result to a sink instead of printing.
@@ -1691,9 +1691,72 @@ const commands: Record<string, () => Promise<void>> = {
     console.log(JSON.stringify(results, null, 2));
     if (Object.values(results).some((r) => r && typeof r === "object" && "error" in r)) process.exitCode = 1;
   },
+  async youtube() {
+    const sub = rest[0];
+    const { adminDb } = await import("../lib/db");
+    if (sub === "auth") {
+      const { pkce, authUrl, startLoopback, exchangeCode } = await import("../lib/youtube/auth");
+      const { writeFileSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const id = process.env.YOUTUBE_CLIENT_ID, secret = process.env.YOUTUBE_CLIENT_SECRET;
+      if (!id || !secret) throw new Error("set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET (a Desktop OAuth client with the YouTube Analytics and Data APIs enabled) first");
+      const p = pkce(), lb = await startLoopback(p.state);
+      console.log(`Open this URL signed in as the channel owner:\n${authUrl(id, lb.redirect, p.challenge, p.state)}\nWaiting up to 5 minutes...`);
+      const token = await exchangeCode(id, secret, await lb.code, lb.redirect, p.verifier);
+      const file = join(tmpdir(), `yt-refresh-${process.pid}.txt`);
+      writeFileSync(file, token, { mode: 0o600 });
+      return console.log(`connected. The refresh token is in ${file} (not printed). Store it, then delete the file:\n  dotenvx set YOUTUBE_REFRESH_TOKEN "$(cat ${file})" -f .env.team && rm ${file}`);
+    }
+    if (sub === "sync") {
+      const { syncYouTube } = await import("../lib/youtube/sync");
+      const days = flag("--days") ? Number(flag("--days")) : 7;
+      if (!Number.isInteger(days) || days < 1 || days > 400) throw new Error("--days must be 1 to 400");
+      const r = await syncYouTube(adminDb(), { today: today(), days });
+      return out(r, () => {
+        console.log(`synced through ${r.through}: ${r.channelDays} channel days, ${r.videoDays} video days, ${r.dims} traffic/country rows, ${r.reach.rows} reach rows from ${r.reach.files} new report files${r.reach.jobCreated ? " (reach job just created: impressions and CTR appear within about a day)" : ""}; ${r.weeks} weeks rolled into /performance; subscribers ${r.subscribers ?? "hidden"}`);
+        for (const e of r.reachErrors) console.error(`reach file skipped: ${e}`);
+      });
+    }
+    if (sub === "import") {
+      const paths = rest.slice(1);
+      if (!paths.length) throw new Error("usage: gtm youtube import <Content.zip|dir> [<Traffic.zip|dir> <Geography.zip|dir>] [--dry-run]");
+      const { readStudioExport } = await import("../lib/youtube/import");
+      const r = readStudioExport(paths);
+      if (!dry) {
+        const sync = await import("../lib/youtube/sync");
+        const db = adminDb();
+        await sync.upsertVideos(db, r.videos, { ignoreExisting: true });
+        await sync.upsertVideoDays(db, r.videoDays, "studio-export", { ignoreExisting: true });
+        await sync.upsertDims(db, r.dims, "studio-export", { ignoreExisting: true });
+        await sync.upsertChannelDays(db, r.channelDays, "studio-export", { ignoreExisting: true });
+      }
+      return out({ dry_run: dry, videos: r.videos.length, video_days: r.videoDays.length, dims: r.dims.length, channel_days: r.channelDays.length, range: r.range }, () => console.log(`${dry ? "dry run: would import" : "imported"} ${r.videos.length} videos, ${r.videoDays.length} video days, ${r.dims.length} traffic/country rows, ${r.channelDays.length} channel days (${r.range.join(" to ")})`));
+    }
+    throw new Error("usage: gtm youtube auth | sync [--days N] | import <export.zip|dir>... [--dry-run]");
+  },
+  async substack() {
+    if (rest[0] !== "import") throw new Error("usage: gtm substack import --list personal|regenera [--file subscribers.csv] [--growth growth.csv] [--as-of YYYY-MM-DD] [--dry-run]");
+    const list = flag("--list");
+    if (list !== "personal" && list !== "regenera") throw new Error("--list must be personal or regenera");
+    const growthFile = flag("--growth"), subsFile = flag("--file");
+    if (!growthFile && !subsFile) throw new Error("give --file (subscriber export) and/or --growth (growth sources export)");
+    const { parseSubscribers, parseGrowth, weeklyStats, saveSubstackStats } = await import("../lib/substack/ingest");
+    const { manualChannels } = await import("../lib/analytics/manual");
+    const channel = manualChannels().find((c) => (list === "regenera" ? c.slug === "substack_regenera" : c.slug !== "substack_regenera" && c.slug.startsWith("substack")));
+    if (!channel) throw new Error(`no manual channel for ${list}`);
+    const subs = subsFile ? parseSubscribers(readFileSync(subsFile, "utf8")) : [];
+    const growth = growthFile ? parseGrowth(readFileSync(growthFile, "utf8")) : [];
+    const stats = weeklyStats(subs, growth, flag("--as-of") ?? today());
+    const written = dry ? 0 : await saveSubstackStats((await import("../lib/db")).adminDb(), channel.slug, stats);
+    return out({ dry_run: dry, channel: channel.slug, written, stats }, () => { for (const s of stats) console.log(JSON.stringify(s)); console.log(`${dry ? "dry run" : `wrote ${written} weeks`} to ${channel.label}`); });
+  },
 };
 
 const help = `gtm <command> [--json]
+  youtube auth|sync [--days N]|import <export.zip|dir>... [--dry-run]
+                           YouTube channel analytics: auth = one-time consent, sync = pull from the API, import = Studio export
+  substack import --list personal|regenera [--file subs.csv] [--growth growth.csv] [--dry-run]
+                           weekly Substack numbers from the two dashboard exports
   guide [section] [slug]   the Content Guide as JSON: phase, why, pillars, stories, voice, regenera, personal, assets, signals,
                            channels, inspiration, pipeline (e.g. gtm guide pillars proof)
   accounts                 connected Zernio accounts + followers

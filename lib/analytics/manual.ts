@@ -23,6 +23,8 @@ const SAMPLE_MANUAL_CHANNELS: ManualChannel[] = [
       { key: "subscribers", label: "Subscribers at week end", kind: "count" },
       { key: "opens", label: "Email opens this week", kind: "count" },
       { key: "views", label: "Post views this week", kind: "count" },
+      { key: "new_subscribers", label: "New subscribers this week", kind: "count", hint: "Filled by `gtm substack import`" },
+      { key: "visitors", label: "Unique visitors this week", kind: "count", hint: "Filled by `gtm substack import`" },
     ],
   },
   {
@@ -31,6 +33,8 @@ const SAMPLE_MANUAL_CHANNELS: ManualChannel[] = [
       { key: "subscribers", label: "Subscribers at week end", kind: "count" },
       { key: "opens", label: "Email opens this week", kind: "count" },
       { key: "views", label: "Post views this week", kind: "count" },
+      { key: "new_subscribers", label: "New subscribers this week", kind: "count", hint: "Filled by `gtm substack import`" },
+      { key: "visitors", label: "Unique visitors this week", kind: "count", hint: "Filled by `gtm substack import`" },
     ],
   },
 ];

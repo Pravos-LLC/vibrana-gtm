@@ -172,6 +172,7 @@ export const TABLES = [
   "gtm_outreach_angle_runs", "gtm_outreach_angle_edits", "gtm_outreach_lessons", "gtm_outreach_learn_runs",
   "gtm_red_flag_resolutions", "client_feedback",
   "gtm_team_mailboxes", "gtm_team_mail_events", "gtm_team_stock_daily",
+  "gtm_yt_videos", "gtm_yt_video_daily", "gtm_yt_channel_daily", "gtm_yt_dim_daily", "gtm_yt_report_files",
   "review_batches", "review_assets", "review_comments", "review_publications", "review_publication_cancellations",
 ] as const;
 
@@ -284,6 +285,11 @@ export async function seed() {
   must(await db.from("gtm_team_mailboxes").insert({ member: "SAMPLE", address: "teammate@example.com", token_ciphertext: "fixture-not-a-real-sealed-token-".repeat(2), backfill_done: true }), "team mailbox");
   must(await db.from("gtm_team_mail_events").insert({ member: "SAMPLE", gmail_message_id: "f1a7", thread_id: "f1a7", kind: "outreach", at: new Date().toISOString(), person_ids: ["fx-person"], recipient_hashes: ["fixture"] }), "team mail event");
   must(await db.from("gtm_team_stock_daily").insert({ member: "SAMPLE", date: "2026-11-04", metrics: { sendable: 0 } }), "team stock");
+  must(await db.from("gtm_yt_videos").insert({ video_id: "sampleyt001", title: "Sample video" }), "yt video");
+  must(await db.from("gtm_yt_video_daily").insert({ date: "2026-11-04", video_id: "sampleyt001", views: 1 }), "yt video day");
+  must(await db.from("gtm_yt_channel_daily").insert({ date: "2026-11-04", views: 1 }), "yt channel day");
+  must(await db.from("gtm_yt_dim_daily").insert({ date: "2026-11-04", dimension: "traffic_source", key: "SAMPLE", views: 1 }), "yt dim day");
+  must(await db.from("gtm_yt_report_files").insert({ report_id: "sample-report", report_type: "channel_reach_basic_a1" }), "yt report file");
   // A saved setting; its trigger writes the history row.
   must(await db.from("gtm_settings").insert({ key: "fixture.setting", value: { x: 0 }, updated_by: "fixture" }), "setting");
   // Analytics > Reports: one published weekly review (the synthetic document in test/fixtures), already emailed.

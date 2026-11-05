@@ -68,6 +68,11 @@ function probe(t: (typeof TABLES)[number]): { row: Record<string, unknown>; key:
     case "gtm_team_mailboxes": { const m = `P${id.slice(6, 12).toUpperCase().replace(/[^A-Z0-9]/g, "A")}`; return { row: { member: m, address: "probe@example.com", token_ciphertext: "x".repeat(60) }, key: ["member", m], patch: { last_error: "changed" } }; }
     case "gtm_team_mail_events": { const g = randomUUID().replace(/-/g, "").slice(0, 16); return { row: { member: "PROBE", gmail_message_id: g, thread_id: g, kind: "outreach", at: "2026-01-01T00:00:00Z" }, key: ["gmail_message_id", g], patch: { kind: "reply" } }; }
     case "gtm_team_stock_daily": { const m = `P${id.slice(6, 12).toUpperCase().replace(/[^A-Z0-9]/g, "A")}`; return { row: { member: m, date: "2026-01-01", metrics: {} }, key: ["member", m], patch: { metrics: { x: 1 } } }; }
+    case "gtm_yt_videos": { const v = `p${id.replace(/[^A-Za-z0-9]/g, "").slice(0, 10).padEnd(10, "0")}`; return { row: { video_id: v, title: "t" }, key: ["video_id", v], patch: { title: "changed" } }; }
+    case "gtm_yt_video_daily": return { row: { date: "2001-01-01", video_id: "sampleyt001", views: 1 }, key: ["date", "2001-01-01"], patch: { views: 2 } };
+    case "gtm_yt_channel_daily": { const day = new Date(Date.UTC(2001, 0, 1 + Math.floor(Math.random() * 3000))).toISOString().slice(0, 10); return { row: { date: day, views: 1 }, key: ["date", day], patch: { views: 2 } }; }
+    case "gtm_yt_dim_daily": return { row: { date: "2001-01-01", dimension: "country", key: id.slice(0, 40), views: 1 }, key: ["key", id.slice(0, 40)], patch: { views: 2 } };
+    case "gtm_yt_report_files": return { row: { report_id: id, report_type: "t" }, key: ["report_id", id], patch: { rows_ingested: 2 } };
     case "gtm_sync_state": { const k = id.replace(/-/g, "_"); return { row: { key: k, value: {} }, key: ["key", k], patch: { value: { x: 1 } } }; }
     case "gtm_settings": return { row: { key: id, value: {} }, key: ["key", id], patch: { value: { x: 1 } } };
     case "gtm_settings_history": return { row: { key: id, value: {} }, key: ["key", id], patch: { value: { x: 1 } } };

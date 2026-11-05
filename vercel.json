@@ -7,6 +7,7 @@
     { "path": "/api/cron/content-report", "schedule": "0 0 * * 0" },
     { "path": "/api/cron/engage", "schedule": "0 23 * * *" },
     { "path": "/api/cron/media-audit", "schedule": "30 5 * * *" },
-    { "path": "/api/cron/analytics-reports", "schedule": "40 * * * *" }
+    { "path": "/api/cron/analytics-reports", "schedule": "40 * * * *" },
+    { "path": "/api/cron/youtube", "schedule": "10 7 * * *" }
   ]
 }
