@@ -173,7 +173,8 @@ test("Writing desk, two streams: switch with G, both meters, each stream's sende
     await expect(queue.getByRole("button")).toHaveCount(4); // only clients, no guest
     await expect(queue.getByRole("button", { name: /Gia Fixture/ })).toHaveCount(0);
     await expect(page.getByTestId("desk-from")).toHaveText("user-045d73df3c9a@example.com");
-    await expect(page.getByTestId("export-stale")).toContainText("10 days old"); // Topa's export
+    await expect(page.getByTestId("export-stale")).toHaveCount(0); // no stale warning, only the quiet date
+    await expect(page.getByTestId("export-age")).toContainText("10 days ago"); // Topa's export
 
     // A client: one email, counted in the client meter only.
     await page.getByLabel("Subject", { exact: true }).fill("Your AI operations hire");
@@ -198,7 +199,7 @@ test("Writing desk, two streams: switch with G, both meters, each stream's sende
     await expect(dossier.getByTestId("desk-guest")).toContainText("Fixture central question?");
     await expect(dossier.getByTestId("desk-guest")).toContainText("Fixture prompt three");
     await expect(dossier.getByTestId("desk-guest")).toContainText("Fixture warm path.");
-    await expect(dossier.getByTestId("export-stale")).toHaveCount(0); // a fresh export
+    await expect(dossier.getByTestId("export-stale")).toHaveCount(0);
 
     // The template (profile.templates['01']): subject and first name filled, slots left for him; the body starts blank otherwise.
     const body = page.getByLabel("Email body");

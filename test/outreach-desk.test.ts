@@ -342,14 +342,11 @@ test("route send problems: an email needs an address, subject and body; a Linked
   assert.match(desk.routeSendProblems({ ...e, linkedin_note: "x".repeat(301) }, "linkedin").join(), /301 characters/);
 });
 
-test("export age: stale after 3 days, null without a date", () => {
+test("export age: whole days, null without a date", () => {
   const now = new Date("2026-10-19T12:00:00Z");
   assert.equal(desk.exportAgeDays("2026-10-19T08:00:00Z", now), 0);
   assert.equal(desk.exportAgeDays("2026-10-15T08:00:00Z", now), 4);
   assert.equal(desk.exportAgeDays(null, now), null);
-  assert.ok(!desk.exportIsStale("2026-10-16T12:00:00Z", now), "exactly 3 days old is not stale");
-  assert.ok(desk.exportIsStale("2026-10-16T11:59:00Z", now), "more than 3 days is");
-  assert.ok(!desk.exportIsStale(null, now) && !desk.exportIsStale("not a date", now));
 });
 
 // ---- where to find a guest -----------------------------------------------------------------------------------------------

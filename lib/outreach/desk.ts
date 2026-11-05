@@ -29,9 +29,8 @@ export const isTrack = (v: unknown): v is Track => v === "client" || v === "gues
 export const ROUTES = ["email", "linkedin", "intermediary"] as const;
 export type Route = (typeof ROUTES)[number];
 export const ROUTE_LABEL: Record<Route, string> = { email: "Email", linkedin: "LinkedIn", intermediary: "Via an intermediary" };
-/** A follow-up goes 7 days after the first message (outreach/05), and an export older than 3 days is stale. */
+/** A follow-up goes 7 days after the first message (outreach/05). */
 export const FOLLOW_UP_DAYS = 7;
-export const STALE_DAYS = 3;
 /** His two gold examples run 118 and 162 words. Advisory only. */
 export const WORDS = { low: 90, high: 180 } as const;
 
@@ -354,14 +353,10 @@ export function matchesFilter(i: QueueItem, f: DeskFilter, tz: string, now: Date
   return i.state === f;
 }
 
-/** How old a dossier export is, in whole days (null when it carries no date), and whether it is stale. */
+/** How old a dossier export is, in whole days (null when it carries no date). */
 export const exportAgeDays = (builtAt: string | null | undefined, now: Date = new Date()): number | null => {
   const t = builtAt ? Date.parse(builtAt) : NaN;
   return Number.isNaN(t) ? null : Math.max(0, Math.floor((now.getTime() - t) / 86_400_000));
-};
-export const exportIsStale = (builtAt: string | null | undefined, now: Date = new Date()) => {
-  const t = builtAt ? Date.parse(builtAt) : NaN;
-  return !Number.isNaN(t) && now.getTime() - t > STALE_DAYS * 86_400_000;
 };
 
 // ---- the composer ------------------------------------------------------------------------------------------------------
