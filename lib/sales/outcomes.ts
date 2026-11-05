@@ -9,7 +9,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
 import { readPages } from "../db-read";
-import { GmailReader, MAILBOX, mailboxConfig, type Conversation, type OutreachMail } from "../outreach/mailbox";
+import { GmailReader, hqAddress, mailboxConfig, type Conversation, type OutreachMail } from "../outreach/mailbox";
 
 export type OutcomeDraft = OutreachMail & {
   email_status: "none" | "queued" | "sent" | "replied"; email_sent_by: string | null;
@@ -39,7 +39,8 @@ export async function syncOutcomes(db: SupabaseClient, opts: { deadline: number;
   const run: OutcomeRun = { scanned: 0, matched: 0, sent: 0, replied: 0, bounced: 0, pages: 0, complete: true };
   const cfg = opts.reader ? null : mailboxConfig();
   if (!opts.reader && !cfg) return { ...run, complete: false, skipped: "the HQ outreach mailbox is not connected (OUTREACH_GMAIL_*)" };
-  const mailbox = opts.mailbox ?? cfg?.email ?? MAILBOX;
+  // The desk's sending address, never the connected account: that may be an inbox HQ mail is forwarded to.
+  const mailbox = opts.mailbox ?? (await hqAddress(db));
   const reader = opts.reader ?? (await GmailReader.connect(cfg!));
   const drafts = await readPages<OutcomeDraft>((from, to) => db.from("gtm_outreach_drafts")
     .select("id,subject,prospect,email_status,email_sent_at,email_sent_by,email_replied_at,email_bounced_at", { count: "exact" })

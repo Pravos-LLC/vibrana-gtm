@@ -373,3 +373,10 @@ test("reconcile: a second run never spends a credit an earlier run recorded", as
   const second = matchCredits([paid, final], [credit]);
   assert.deepEqual([second.matches.length, second.unmatched.length], [0, 0]);
 });
+
+test("outcomes read replies against the desk's sending address, not the connected inbox; the configured mailbox is the fallback", async () => {
+  const fake = (row: unknown) => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }) });
+  assert.equal(await mailbox.hqAddress(fake({ from_address: " John@HQ.Example.com " })), "john@hq.example.com");
+  assert.equal(await mailbox.hqAddress(fake(null)), mailbox.MAILBOX);
+  assert.equal(await mailbox.hqAddress(fake({ from_address: "not an address" })), mailbox.MAILBOX);
+});
