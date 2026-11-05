@@ -58,7 +58,7 @@ export function PipelineForm({ initial, source, save }: { initial: SalesSettings
           <span className="flex items-center gap-1">
             <Input value={newCode} maxLength={3} placeholder="CHF" onChange={(e) => setNewCode(e.target.value.toUpperCase())} className="h-9 w-20" />
             <Button type="button" variant="ghost" size="sm" disabled={!/^[A-Z]{3}$/.test(newCode) || newCode in v.fx}
-              onClick={() => { setV({ ...v, fx: { ...v.fx, [newCode]: 1 } }); setNewCode(""); }}>Add</Button>
+              onClick={() => { setV({ ...v, fx: { ...v.fx, [newCode]: 0 } }); setNewCode(""); }}>Add</Button>
           </span>
         </label>
       </fieldset>

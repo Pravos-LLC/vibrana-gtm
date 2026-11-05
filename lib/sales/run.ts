@@ -21,7 +21,8 @@ export async function runPipeline(db: SupabaseClient, opts: { now?: Date; deadli
   try { out.contacted = await writeContacted(db, new TwentyReader({ deadline: opts.deadline - 60_000 }), now); } catch (e) { out.contacted = failed(e); }
   try { out.web = await syncWeb(db, (await loadSalesSettings(db)).settings, now, { deadline: opts.deadline - 10_000 }); } catch (e) { out.web = failed(e); }
   // Kept so the pages can say when a step is failing: the cron's own response is seen by nobody.
-  await db.from("gtm_sync_state").upsert({ key: RUN_KEY, value: { at: now.toISOString(), result: out }, updated_at: now.toISOString() }, { onConflict: "key" });
+  const { error } = await db.from("gtm_sync_state").upsert({ key: RUN_KEY, value: { at: now.toISOString(), result: out }, updated_at: now.toISOString() }, { onConflict: "key" });
+  if (error) (out as PipelineRun & { saved?: string }).saved = `error: ${error.message.slice(0, 200)}`;
   return out;
 }
 

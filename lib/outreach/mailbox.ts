@@ -66,7 +66,7 @@ function matchForwarded(thread: MailThread, messages: MailMessage[], drafts: Out
   return { id: thread.id, draftId: draft.id, company: draft.prospect.company ?? "", subject: draft.subject,
     status: replies.some((m) => !automated(m)) ? "reply" : "automated", unread: replies.some((m) => m.labelIds?.includes("UNREAD")),
     lastAt: new Date(Number(latest.internalDate)).toISOString(), snippet: latest.snippet ?? "", forwarded: true, messageIds: replies.map((m) => m.id),
-    replyAt: replies.some((m) => !automated(m)) ? new Date(Number(replies.find((m) => !automated(m))!.internalDate)).toISOString() : undefined };
+    replyAt: (() => { const t = Number(replies.find((m) => !automated(m))?.internalDate); return Number.isFinite(t) && t > 0 ? new Date(t).toISOString() : undefined; })() };
 }
 
 /** Prefer an actual sent thread; forwarded replies use the more conservative sent-record match above. */

@@ -40,6 +40,7 @@ export default async function PipelineOverview({ searchParams }: { searchParams:
   ]);
   const { data: lastRun } = await db.from("gtm_sync_state").select("value").eq("key", RUN_KEY).maybeSingle();
   const cronProblems = runProblems((lastRun?.value ?? null) as Parameters<typeof runProblems>[0], now);
+  if (milestones.error) cronProblems.push(`Payment milestones could not be read (${milestones.error}), so take-home shows nothing collected.`);
 
   const allDeals = dealRead.data?.deals ?? [];
   const deals = ownerFilter(owner)(allDeals);
@@ -47,8 +48,9 @@ export default async function PipelineOverview({ searchParams }: { searchParams:
   const goal = goalView(allDeals, ms, s, now);
   const health = pipelineHealth(deals, s, now, history.data ?? []);
   const ownerOf = ownerOfSender();
-  const deskW = desk.data ? deskStats(desk.data, w, ownerOf, owner) : null;
-  const deskWeek = desk.data ? deskStats(desk.data, week, ownerOf, owner) : null;
+  // Client track only: guest replies come from a mailbox nothing reads, so guest sends would only dilute the rates.
+  const deskW = desk.data ? deskStats(desk.data, w, ownerOf, owner, "client") : null;
+  const deskWeek = desk.data ? deskStats(desk.data, week, ownerOf, owner, "client") : null;
   const li = linkedin.data ? linkedinStats(linkedin.data.connections, linkedin.data.threads, w, owner) : null;
   const liWeek = linkedin.data ? linkedinStats(linkedin.data.connections, linkedin.data.threads, week, owner) : null;
   const mtg = meetings.data?.installed ? meetingStats(meetings.data.meetings, w, now, owner) : null;
@@ -136,7 +138,7 @@ export default async function PipelineOverview({ searchParams }: { searchParams:
           <StatTile label="Positive conversations" value={positive(deskWeek, liWeek, week) == null ? null : String(positive(deskWeek, liWeek, week))} missing="not measured: desk could not be read"
             note={deskWeek ? `${deskWeek.positive} email · ${liWeek?.icpTwoWay ?? "?"} LinkedIn · ${inquiryCount(week)} site` : undefined} href="/pipeline/conversations" />
           <StatTile label="Proposals sent" value={ok ? String(proposalsWeek) : null} missing={noCrm} note="deals that reached Proposal" />
-          <StatTile label="First touches" value={deskWeek ? String(deskWeek.firstTouches) : null} missing="not measured"
+          <StatTile label="First touches (clients)" value={deskWeek ? String(deskWeek.firstTouches) : null} missing="not measured"
             note={clientTarget ? `client target ${clientTarget * 5} a working week` : undefined} tone={deskWeek && clientTarget && deskWeek.firstTouches < clientTarget * 5 ? "warn" : undefined} href="/outreach/write" />
         </div>
       </Section>

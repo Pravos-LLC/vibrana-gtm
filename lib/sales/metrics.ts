@@ -32,8 +32,8 @@ export type Measured = { value: number; n: number; measured: boolean };
 /** A measured rate replaces the planning one only with at least MIN_MEASURED observations. */
 const pick = (hits: number, n: number, planning: number): Measured => (n >= MIN_MEASURED ? { value: hits / n, n, measured: true } : { value: planning, n, measured: false });
 /**
- * A measured rate the funnel can divide by: above 0 and at most 1. Zero conversions so far, or a ratio over 1 (two
- * populations that only partly overlap), falls back to the planning rate, still showing how many were measured.
+ * A measured rate the funnel can divide by. Zero conversions so far falls back to the planning rate (still showing how
+ * many were measured); a ratio over 1 (two populations that only partly overlap) is capped at 100%.
  */
 export const usable = (m: Measured | undefined, planning: number): Measured =>
   !m || !m.measured || !(m.value > 0) ? { value: planning, n: m?.n ?? 0, measured: false } : { ...m, value: Math.min(1, m.value) };
@@ -47,9 +47,12 @@ export function pipelineHealth(deals: SalesDeal[], s: SalesSettings, now: Date, 
   const usd = (d: SalesDeal) => toUsd(d.fee, s.fx);
   const weighted = open.reduce((a, d) => a + (usd(d) ?? 0) * s.stageWeights[d.stage as OpenStage], 0);
   const unpriced = open.filter((d) => usd(d) == null).length;
+  // The same cohort on both sides: only deals the history saw qualified before they closed. Deals that closed before the
+  // history began are unknown either way, so they count neither as wins nor as losses.
   const qualifiedBefore = new Set(history.filter((h) => h.stage === "QUALIFIED" || h.stage === "PROPOSAL").map((h) => h.opportunity_id));
-  const won = deals.filter((d) => d.stage === "SIGNED"), lost = deals.filter((d) => d.stage === "LOST" && qualifiedBefore.has(d.id));
-  const winRate = usable(pick(won.length, won.length + lost.length, s.rates.winFromQualified), s.rates.winFromQualified);
+  const won = deals.filter((d) => d.stage === "SIGNED"), lost = deals.filter((d) => d.stage === "LOST");
+  const wonQ = won.filter((d) => qualifiedBefore.has(d.id)), lostQ = lost.filter((d) => qualifiedBefore.has(d.id));
+  const winRate = usable(pick(wonQ.length, wonQ.length + lostQ.length, s.rates.winFromQualified), s.rates.winFromQualified);
   const wonFees = won.map(usd).filter((v): v is number => v != null);
   const avgDeal = wonFees.length >= 3 ? wonFees.reduce((a, b) => a + b, 0) / wonFees.length : s.plannedDealUsd;
   const cycles = won.filter((d) => d.closeDate).map((d) => (Date.parse(d.closeDate!) - Date.parse(d.createdAt)) / DAY).filter((x) => x >= 0).sort((a, b) => a - b);

@@ -128,7 +128,7 @@ test("pipeline: weighted pipeline and coverage; win rate stays the planning rate
   assert.equal(h.unpriced, 1);
   assert.equal(h.coverageNeedUsd, 20_000);
   assert.equal(h.coverage, 13_000 / 20_000);
-  assert.deepEqual(h.winRate, { value: S.rates.winFromQualified, n: 1, measured: false }, "a lost lead that never qualified is not a lost sale");
+  assert.deepEqual(h.winRate, { value: S.rates.winFromQualified, n: 0, measured: false }, "no qualified history: no measured win rate");
   assert.equal(h.avgDealUsd, S.plannedDealUsd, "planning size until 3 won deals have fees");
   assert.equal(h.medianCycleDays, 30);
   assert.equal(h.qualifiedCount, 2);
@@ -136,9 +136,11 @@ test("pipeline: weighted pipeline and coverage; win rate stays the planning rate
 
 test("pipeline: ten closed deals that qualified make the win rate measured; zero wins falls back to planning", () => {
   const closed = [...Array(4)].map((_, i) => deal({ id: `w${i}`, stage: "SIGNED" })).concat([...Array(6)].map((_, i) => deal({ id: `l${i}`, stage: "LOST" })));
-  const hist = [...Array(6)].map((_, i) => ({ opportunity_id: `l${i}`, stage: "PROPOSAL" }));
+  const hist = closed.map((d) => ({ opportunity_id: d.id, stage: "PROPOSAL" }));
   assert.deepEqual(metrics.pipelineHealth(closed, S, NOW, hist).winRate, { value: 0.4, n: 10, measured: true });
-  assert.equal(metrics.pipelineHealth(closed, S, NOW).winRate.n, 4, "lost deals with no qualified history are left out");
+  assert.equal(metrics.pipelineHealth(closed, S, NOW).winRate.n, 0, "deals that closed before the history began count on neither side");
+  const wonOnly = hist.filter((h) => h.opportunity_id.startsWith("w"));
+  assert.deepEqual(metrics.pipelineHealth(closed, S, NOW, wonOnly).winRate, { value: S.rates.winFromQualified, n: 4, measured: false }, "never a measured 100% from one-sided history");
   const allLost = [...Array(10)].map((_, i) => deal({ id: `x${i}`, stage: "LOST" }));
   const h = metrics.pipelineHealth(allLost, S, NOW, allLost.map((d) => ({ opportunity_id: d.id, stage: "QUALIFIED" })));
   assert.deepEqual(h.winRate, { value: S.rates.winFromQualified, n: 10, measured: false });
@@ -252,8 +254,8 @@ test("deals: pipeline fields map; a zero amount is unset; a missing field falls 
 });
 
 test("meetings: the ledger maps; a missing object reads as not installed", async () => {
-  const r = await meetingsMod.salesMeetings(NOW, { query: async () => ({ meetings: { edges: [{ node: { id: "m", name: "Call", mtgAt: "2026-11-04T09:00:00Z", mtgOwner: "JOHN", mtgKind: "CLIENT", mtgCompany: { name: "Pikl" }, mtgOpportunity: null } }] } }) });
-  assert.ok(r.installed && r.meetings[0].kind === "CLIENT" && r.meetings[0].company === "Pikl");
+  const r = await meetingsMod.salesMeetings(NOW, { query: async () => ({ meetings: { edges: [{ node: { id: "m", name: "Call", mtgAt: "2026-11-04T09:00:00Z", mtgOwner: "JOHN", mtgKind: "CLIENT", mtgCompany: { name: "Fabrikam" }, mtgOpportunity: null } }] } }) });
+  assert.ok(r.installed && r.meetings[0].kind === "CLIENT" && r.meetings[0].company === "Fabrikam");
   const none = await meetingsMod.salesMeetings(NOW, { query: async () => { throw new TwentyError("x", [{ message: 'Cannot query field "meetings" on type "Query".' }]); } });
   assert.equal(none.installed, false);
 });
