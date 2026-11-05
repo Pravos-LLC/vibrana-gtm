@@ -22,7 +22,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   return <Shell title="Outreach inbox" active="/outreach/inbox" wide>
     <div className="mx-auto max-w-5xl space-y-5">
       <nav className="flex flex-wrap gap-4 text-sm"><Link href="/outreach/write" className="underline">Writing desk</Link><Link href="/outreach" className="underline">Draft review</Link></nav>
-      <div><h2 className="font-semibold">{await hqAddress(db)}</h2><p className="text-sm text-ink-2">Replies to your outreach, with conversation history. Label each reply: positive ones count as conversations on Pipeline. Open and click tracking are off.</p></div>
+      <div><h2 className="font-semibold">{await hqAddress(db).catch(() => "Outreach mailbox")}</h2><p className="text-sm text-ink-2">Replies to your outreach, with conversation history. Label each reply: positive ones count as conversations on Pipeline. Open and click tracking are off.</p></div>
       <Suspense fallback={<p role="status">Checking the inbox…</p>}><InboxContent page={typeof params.page === "string" ? params.page : ""} threadId={typeof params.thread === "string" ? params.thread : ""} /></Suspense>
     </div>
   </Shell>;
