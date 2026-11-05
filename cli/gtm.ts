@@ -1604,6 +1604,70 @@ const commands: Record<string, () => Promise<void>> = {
     throw new Error("usage: gtm playbook tag [--all] [--dry-run] [--limit N]");
   },
 
+  async sales() {
+    // The pipeline dashboard from the terminal (gtm.vibrana.ai/pipeline, VIB-499). `status` is the goal, coverage and the
+    // action list; `run` does the hourly cron's work now; `reconcile` matches Wise credits to unpaid payment milestones (`gtm sales ...`)
+    // (local only: Wise statements need John's signing key) and writes them with --apply.
+    const sub = rest[0];
+    const { adminDb } = await import("../lib/db");
+    const db = adminDb();
+    const { salesDeals } = await import("../lib/sales/deals");
+    const { loadSalesSettings } = await import("../lib/sales/settings");
+    const { goalView } = await import("../lib/sales/economics");
+    const { needsAction, pipelineHealth } = await import("../lib/sales/metrics");
+    const { selectAll } = await import("../lib/team/mailbox");
+    type M = import("../lib/sales/economics").Milestone;
+    const milestones = async () => (await selectAll<M>((from, to) => db.from("gtm_deal_milestones").select("*").order("id").range(from, to), "milestones"))
+      .map((m) => ({ ...m, amount: Number(m.amount), paid_amount: m.paid_amount == null ? null : Number(m.paid_amount) }));
+    if (sub === "status") {
+      const now = new Date();
+      const { loadStageHistory } = await import("../lib/sales/stages");
+      const [{ settings }, read, ms, history] = await Promise.all([loadSalesSettings(db), salesDeals({ timeoutMs: 20_000 }), milestones(), loadStageHistory(db)]);
+      const goal = goalView(read.deals, ms, settings, now), health = pipelineHealth(read.deals, settings, now, history), actions = needsAction(read.deals, ms, now);
+      const usd = (n: number | null) => (n == null ? "-" : `$${Math.round(n).toLocaleString("en-US")}`);
+      out({ fields: read.fields, settings: { goalUsd: settings.goalUsd, overheadUsd: settings.overheadUsd, taxReserve: settings.taxReserve, fx: settings.fx }, goal, health, actions }, () => {
+        if (read.fields === "standard") console.log("note: Twenty has no pipeline fields yet (vibrana-crm pipeline_schema.py --apply)");
+        console.log(`goal              ${usd(settings.goalUsd)} a month take-home`);
+        console.log(`this month        ${usd(goal.projectedThisMonthUsd)} projected (${usd(goal.current.takeHomeUsd)} collected)`);
+        console.log(`last 3 months     ${usd(goal.trailingAvgUsd)} average`);
+        console.log(`next month        ${usd(goal.nextTakeHomeUsd)} scheduled`);
+        console.log(`coverage          ${health.coverage == null ? "-" : `${health.coverage.toFixed(1)}x`} (weighted ${usd(health.weightedUsd)} vs ${usd(health.coverageNeedUsd)})`);
+        console.log(`win rate          ${Math.round(health.winRate.value * 100)}% ${health.winRate.measured ? `measured on ${health.winRate.n}` : "planning"}`);
+        console.log(`open deals        ${health.openCount} (${health.qualifiedCount} qualified or proposal)`);
+        for (const a of actions) console.log(`${a.tone === "bad" ? "!!" : " !"} ${a.text}${a.detail ? ` (${a.detail})` : ""}`);
+      });
+      return;
+    }
+    if (sub === "run") {
+      const { runPipeline } = await import("../lib/sales/run");
+      const r = await runPipeline(db, { deadline: Date.now() + 280_000 });
+      out(r, () => console.log(JSON.stringify(r, null, 2)));
+      return;
+    }
+    if (sub === "reconcile") {
+      const { statement } = await import("../lib/wise");
+      const { matchCredits } = await import("../lib/sales/reconcile");
+      const daysArg = flag("--days");
+      const days = daysArg === undefined ? 60 : Number(daysArg);
+      if (!(Number.isInteger(days) && days >= 1 && days <= 365)) throw new Error("--days takes a whole number from 1 to 365");
+      const apply = argv.includes("--apply");
+      const to = new Date().toISOString().slice(0, 10), from = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+      const credits = (await statement(from, to)).filter((t) => t.amount > 0).map((t) => ({ id: t.id, date: t.date, currency: t.currency, amount: t.amount, description: t.description }));
+      const { matches, unmatched } = matchCredits(await milestones(), credits);
+      if (apply) for (const m of matches) {
+        const { error } = await db.from("gtm_deal_milestones").update({ paid_at: `${m.credit.date}T12:00:00Z`, paid_amount: m.credit.amount, payment_ref: `wise:${m.credit.id}`.slice(0, 120), updated_at: new Date().toISOString() })
+          .eq("id", m.milestone.id).is("paid_at", null);
+        if (error) throw new Error(`save milestone ${m.milestone.id}: ${error.message}`);
+      }
+      out({ applied: apply, matches: matches.map((m) => ({ milestone: m.milestone.id, label: m.milestone.label, credit: m.credit.id, date: m.credit.date, amount: m.credit.amount, currency: m.credit.currency, shortfall: m.shortfall })), unmatched: unmatched.length }, () => {
+        for (const m of matches) console.log(`${apply ? "PAID" : "would mark paid"}  #${m.milestone.id} ${m.milestone.label}  ${m.credit.currency} ${m.credit.amount} on ${m.credit.date}${m.shortfall ? ` (${m.shortfall} short: fees?)` : ""}`);
+        console.log(`${matches.length} matched, ${unmatched.length} incoming credits not matched to a milestone${apply ? "" : " (dry run: --apply writes)"}`);
+      });
+      return;
+    }
+    throw new Error("usage: gtm sales status|run|reconcile [--days 60] [--apply] [--json]");
+  },
+
   async "front-doors"() {
     // The weekly funnel for the AI Readiness, EU AI Act and Build Sprint front doors (the /front-doors page): assessment
     // completions, ROI leads, sprint requests and call clicks per front door, unsubscribes and report quality.
@@ -1890,6 +1954,11 @@ const help = `gtm <command> [--json]
                            simulator, direct): assessment completions, ROI leads, sprint requests, call clicks (clicks, not
                            bookings: Google Calendar reports nothing back), unsubscribes and report quality (analyses stored
                            or failed, mean judge score). Same numbers as /front-doors; read-only
+  sales status [--json]    the take-home goal (this month, last 3 months, next month), coverage, win rate and the action
+                           list; the same numbers as /pipeline
+  sales run                do the hourly pipeline cron's work now: stage history, HQ inbox outcomes, lastContactedAt, site days
+  sales reconcile [--days 60] [--apply]   match incoming Wise credits to unpaid payment milestones (same currency,
+                           95 to 100% of the amount); dry run unless --apply
   crm                      snapshot the Twenty funnel
   enrichment               push local enrichment run progress
   costs [--since DATE] [--dry-run]   classify Wise card spend into subscriptions

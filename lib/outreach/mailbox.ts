@@ -10,7 +10,9 @@ export type MailMessage = { id: string; internalDate?: string; labelIds?: string
 export type MailThread = { id: string; messages?: MailMessage[] };
 export type OutreachMail = { id: string; subject: string; email_sent_at?: string | null; prospect: { email?: string | null; company?: string | null } };
 export type MailStatus = "reply" | "automated" | "delivery-failure" | "awaiting-reply";
-export type Conversation = { id: string; draftId: string; company: string; subject: string; status: MailStatus; unread: boolean; lastAt: string; snippet: string; forwarded?: boolean; messageIds?: string[] };
+export type Conversation = { id: string; draftId: string; company: string; subject: string; status: MailStatus; unread: boolean; lastAt: string; snippet: string; forwarded?: boolean; messageIds?: string[];
+  /** When the outreach email left the mailbox (sent threads only), the first reply and the failure notice: the pipeline cron stores these. */
+  sentAt?: string; replyAt?: string; failedAt?: string };
 export type MailboxConfig = { email: string; clientId: string; clientSecret: string; refreshToken: string };
 export const MAILBOX = loadRuntimeConfig().mail.mailbox;
 export const PAGE_SIZE = 25;
@@ -63,7 +65,8 @@ function matchForwarded(thread: MailThread, messages: MailMessage[], drafts: Out
   const latest = replies.filter((m) => !automated(m)).at(-1) ?? replies.at(-1)!;
   return { id: thread.id, draftId: draft.id, company: draft.prospect.company ?? "", subject: draft.subject,
     status: replies.some((m) => !automated(m)) ? "reply" : "automated", unread: replies.some((m) => m.labelIds?.includes("UNREAD")),
-    lastAt: new Date(Number(latest.internalDate)).toISOString(), snippet: latest.snippet ?? "", forwarded: true, messageIds: replies.map((m) => m.id) };
+    lastAt: new Date(Number(latest.internalDate)).toISOString(), snippet: latest.snippet ?? "", forwarded: true, messageIds: replies.map((m) => m.id),
+    replyAt: (() => { const t = Number(replies.find((m) => !automated(m))?.internalDate); return Number.isFinite(t) && t > 0 ? new Date(t).toISOString() : undefined; })() };
 }
 
 /** Prefer an actual sent thread; forwarded replies use the more conservative sent-record match above. */
@@ -79,9 +82,11 @@ export function matchConversation(thread: MailThread, drafts: OutreachMail[], ma
   const replies = incoming.filter((m) => !automated(m) && addresses(header(m, "From")).includes(draft.prospect.email!.toLowerCase()));
   const latest = replies.at(-1) ?? failed ?? incoming.at(-1) ?? messages.at(-1)!;
   const timestamp = Number(latest.internalDate);
+  const iso = (m: MailMessage | undefined) => { const t = Number(m?.internalDate); return m && Number.isFinite(t) && t > 0 ? new Date(t).toISOString() : undefined; };
   return { id: thread.id, draftId: draft.id, company: draft.prospect.company ?? "", subject: header(outgoing, "Subject"),
     status: replies.length ? "reply" : failed ? "delivery-failure" : incoming.some(automated) ? "automated" : "awaiting-reply",
-    unread: incoming.some((m) => m.labelIds?.includes("UNREAD")), lastAt: Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "", snippet: latest.snippet ?? "" };
+    unread: incoming.some((m) => m.labelIds?.includes("UNREAD")), lastAt: Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "", snippet: latest.snippet ?? "",
+    sentAt: iso(outgoing), replyAt: iso(replies[0]), failedAt: replies.length ? undefined : iso(failed) };
 }
 
 /** Plain text only. HTML, remote images, attachments and their tracking pixels are never rendered or fetched. */

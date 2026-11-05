@@ -5,6 +5,8 @@ import { sessionDb } from "@/lib/supabase/server";
 import { readPages } from "@/lib/db-read";
 import { GmailReader, header, MAILBOX, mailboxConfig, matchConversation, plainBody, validThreadId, type OutreachMail, type MailStatus } from "@/lib/outreach/mailbox";
 import { InboxRefresh } from "@/components/outreach/inbox-refresh";
+import { ReplyLabel } from "@/components/outreach/reply-label";
+import { labelReply } from "@/app/pipeline/actions";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Outreach inbox" };
@@ -20,7 +22,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   return <Shell title="Outreach inbox" active="/outreach/inbox" wide>
     <div className="mx-auto max-w-5xl space-y-5">
       <nav className="flex flex-wrap gap-4 text-sm"><Link href="/outreach/write" className="underline">Writing desk</Link><Link href="/outreach" className="underline">Draft review</Link></nav>
-      <div><h2 className="font-semibold">{MAILBOX}</h2><p className="text-sm text-ink-2">Replies to your outreach, with conversation history. Open and click tracking are off.</p></div>
+      <div><h2 className="font-semibold">{MAILBOX}</h2><p className="text-sm text-ink-2">Replies to your outreach, with conversation history. Label each reply: positive ones count as conversations on Pipeline. Open and click tracking are off.</p></div>
       <Suspense fallback={<p role="status">Checking the inbox…</p>}><InboxContent page={typeof params.page === "string" ? params.page : ""} threadId={typeof params.thread === "string" ? params.thread : ""} /></Suspense>
     </div>
   </Shell>;
@@ -32,9 +34,10 @@ async function InboxContent({ page, threadId }: { page: string; threadId: string
   try {
     const [reader, drafts] = await Promise.all([
       GmailReader.connect(config),
-      readPages<OutreachMail>((from, to) => (sessionDb().then((db) => db.from("gtm_outreach_drafts").select("id,subject,prospect,email_sent_at", { count: "exact" }).eq("status", "accepted").order("id").range(from, to))), "outreach recipients"),
+      readPages<OutreachMail & { reply_sentiment: string | null }>((from, to) => (sessionDb().then((db) => db.from("gtm_outreach_drafts").select("id,subject,prospect,email_sent_at,reply_sentiment", { count: "exact" }).eq("status", "accepted").order("id").range(from, to))), "outreach recipients"),
     ]);
     const result = await reader.list(drafts, MAILBOX, page);
+    const sentiment = new Map(drafts.map((d) => [d.id, d.reply_sentiment]));
     let conversation = null;
     if (threadId) {
       if (!validThreadId(threadId)) throw new Error("Invalid conversation. Return to the inbox.");
@@ -51,7 +54,8 @@ async function InboxContent({ page, threadId }: { page: string; threadId: string
       <p className="text-xs text-ink-3">Checked {date(new Date().toISOString())} (Bali). This page checks again every minute while visible. Reading here leaves Gmail unread status unchanged.</p>
       {conversation}
       <section aria-label="Outreach conversations" className="divide-y divide-line rounded-lg border border-line">
-        {result.conversations.map((c) => <Link prefetch={false} key={c.id} href={`/outreach/inbox?${new URLSearchParams({ ...(page ? { page } : {}), thread: c.id })}`} className="block space-y-1 p-4 hover:bg-surface-card-hover"><div className="flex flex-wrap justify-between gap-2"><span className="font-medium">{c.subject}</span><span className={c.status === "reply" ? "text-sm text-violet-strong" : "text-sm text-ink-2"}>{labels[c.status]}{c.unread ? " · Unread in Gmail" : ""}</span></div><p className="text-xs text-ink-3">{c.company} · {date(c.lastAt)} (Bali)</p><p className="line-clamp-2 text-sm text-ink-2">{c.snippet}</p></Link>)}
+        {result.conversations.map((c) => <div key={c.id}><Link prefetch={false} href={`/outreach/inbox?${new URLSearchParams({ ...(page ? { page } : {}), thread: c.id })}`} className="block space-y-1 p-4 hover:bg-surface-card-hover"><div className="flex flex-wrap justify-between gap-2"><span className="font-medium">{c.subject}</span><span className={c.status === "reply" ? "text-sm text-violet-strong" : "text-sm text-ink-2"}>{labels[c.status]}{c.unread ? " · Unread in Gmail" : ""}</span></div><p className="text-xs text-ink-3">{c.company} · {date(c.lastAt)} (Bali)</p><p className="line-clamp-2 text-sm text-ink-2">{c.snippet}</p></Link>
+          {c.status === "reply" && <ReplyLabel draftId={c.draftId} current={(sentiment.get(c.draftId) ?? null) as Parameters<typeof ReplyLabel>[0]["current"]} label={labelReply} />}</div>)}
         {!result.conversations.length && <p className="p-5 text-sm text-ink-2">No matching outreach conversations on this page.</p>}
       </section>
       <p className="text-xs text-ink-3">Checked {result.scanned} HQ-related conversations from the last 90 days on this page. Forwarded replies require a matching sent record, sender, original HQ recipient and subject. Ambiguous matches are omitted. Forwarding does not include sent history or reliably identify separate bounce messages.</p>

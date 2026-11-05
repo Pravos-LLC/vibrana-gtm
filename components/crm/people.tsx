@@ -1,9 +1,9 @@
-// CRM people and deals from Twenty: who John is in conversation with, and the opportunities by stage.
+// CRM people from Twenty: who John is in conversation with. Deals are on Pipeline (components/sales/deal-board.tsx).
 // Photos come from Twenty's avatarUrl when it holds a real one; otherwise initials. Company marks are the
 // company domain's favicon (only the company domain leaves the page, never a person's details).
 import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import type { Contact, Deal } from "@/lib/twenty";
+import type { Contact } from "@/lib/twenty";
 import { cn } from "@/lib/ui/cn";
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "?";
@@ -59,45 +59,6 @@ export function ConversationList({ contacts }: { contacts: Contact[] }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-export const STAGES = ["IDENTIFIED", "CONTACTED", "QUALIFIED", "PROPOSAL", "SIGNED", "LOST"] as const;
-
-const money = (n: number, currency: string | null) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency: currency || "EUR", maximumFractionDigits: 0 }).format(n);
-
-/** Opportunities in stage columns. LOST is left out unless asked for: it is history, not pipeline. */
-export function DealBoard({ deals, withLost = false }: { deals: Deal[]; withLost?: boolean }) {
-  const stages = STAGES.filter((s) => withLost || s !== "LOST");
-  return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-      {stages.map((stage) => {
-        const list = deals.filter((d) => d.stage === stage);
-        return (
-          <section key={stage} className="rounded-lg border border-line bg-[color:var(--surface-frost)] p-2">
-            <h3 className="mb-2 flex items-baseline justify-between px-1 text-xs font-medium uppercase tracking-wide text-ink-2">
-              {stage.toLowerCase()} <span className="tabular-nums text-ink-3">{list.length}</span>
-            </h3>
-            <div className="space-y-2">
-              {list.map((d) => (
-                <a key={d.id} href={d.url} target="_blank" rel="noreferrer"
-                  className="block rounded-md border border-line bg-[color:var(--surface-card)] p-2 text-sm hover:border-[color:var(--border-strong)]">
-                  <div className="flex items-center gap-2">
-                    <CompanyMark domain={d.domain} />
-                    <span className="truncate font-medium text-ink">{d.name}</span>
-                  </div>
-                  <div className="mt-1 flex justify-between gap-2 text-xs text-ink-3">
-                    <span className="truncate">{d.contact ?? d.company ?? ""}</span>
-                    {d.amount != null && <span className="tabular-nums text-ink-2">{money(d.amount, d.currency)}</span>}
-                  </div>
-                </a>
-              ))}
-            </div>
-          </section>
-        );
-      })}
-    </div>
   );
 }
 
