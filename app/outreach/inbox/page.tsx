@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { Shell } from "@/components/shell";
 import { sessionDb } from "@/lib/supabase/server";
 import { readPages } from "@/lib/db-read";
-import { GmailReader, header, MAILBOX, mailboxConfig, matchConversation, plainBody, validThreadId, type OutreachMail, type MailStatus } from "@/lib/outreach/mailbox";
+import { GmailReader, header, hqAddress, mailboxConfig, matchConversation, plainBody, validThreadId, type OutreachMail, type MailStatus } from "@/lib/outreach/mailbox";
 import { InboxRefresh } from "@/components/outreach/inbox-refresh";
 import { ReplyLabel } from "@/components/outreach/reply-label";
 import { labelReply } from "@/app/pipeline/actions";
@@ -22,7 +22,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
   return <Shell title="Outreach inbox" active="/outreach/inbox" wide>
     <div className="mx-auto max-w-5xl space-y-5">
       <nav className="flex flex-wrap gap-4 text-sm"><Link href="/outreach/write" className="underline">Writing desk</Link><Link href="/outreach" className="underline">Draft review</Link></nav>
-      <div><h2 className="font-semibold">{MAILBOX}</h2><p className="text-sm text-ink-2">Replies to your outreach, with conversation history. Label each reply: positive ones count as conversations on Pipeline. Open and click tracking are off.</p></div>
+      <div><h2 className="font-semibold">{await hqAddress(db)}</h2><p className="text-sm text-ink-2">Replies to your outreach, with conversation history. Label each reply: positive ones count as conversations on Pipeline. Open and click tracking are off.</p></div>
       <Suspense fallback={<p role="status">Checking the inbox…</p>}><InboxContent page={typeof params.page === "string" ? params.page : ""} threadId={typeof params.thread === "string" ? params.thread : ""} /></Suspense>
     </div>
   </Shell>;
@@ -36,13 +36,14 @@ async function InboxContent({ page, threadId }: { page: string; threadId: string
       GmailReader.connect(config),
       readPages<OutreachMail & { reply_sentiment: string | null }>((from, to) => (sessionDb().then((db) => db.from("gtm_outreach_drafts").select("id,subject,prospect,email_sent_at,reply_sentiment", { count: "exact" }).eq("status", "accepted").order("id").range(from, to))), "outreach recipients"),
     ]);
-    const result = await reader.list(drafts, MAILBOX, page);
+    const HQ = await hqAddress(await sessionDb());
+    const result = await reader.list(drafts, HQ, page);
     const sentiment = new Map(drafts.map((d) => [d.id, d.reply_sentiment]));
     let conversation = null;
     if (threadId) {
       if (!validThreadId(threadId)) throw new Error("Invalid conversation. Return to the inbox.");
       const thread = await reader.thread(threadId);
-      const matched = matchConversation(thread, drafts, MAILBOX);
+      const matched = matchConversation(thread, drafts, HQ);
       if (!matched) throw new Error("This conversation does not match an accepted outreach email.");
       conversation = <section aria-label="Conversation" className="space-y-4 rounded-lg border border-line p-5"><h3 className="font-semibold">{matched.subject}</h3><Link href="/outreach/inbox" className="text-sm underline">Back to inbox</Link>
         {matched.forwarded && <p className="text-sm text-ink-2">Forwarded replies matched by sender, original HQ recipient, subject and your sent record. Sent history remains in HQ.</p>}

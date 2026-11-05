@@ -16,6 +16,17 @@ export type Conversation = { id: string; draftId: string; company: string; subje
 export type MailboxConfig = { email: string; clientId: string; clientSecret: string; refreshToken: string };
 export const MAILBOX = loadRuntimeConfig().mail.mailbox;
 export const PAGE_SIZE = 25;
+
+/**
+ * The address the client-track desk emails go out from (gtm_outreach_tracks.from_address), the one replies are matched
+ * against. The connected Gmail account may be a different inbox that HQ mail is forwarded to; the configured MAILBOX is
+ * the fallback when no track row says otherwise.
+ */
+export async function hqAddress(db: { from: (t: string) => any }): Promise<string> {
+  const { data } = await db.from("gtm_outreach_tracks").select("from_address").eq("track", "client").maybeSingle();
+  const a = (data as { from_address?: string | null } | null)?.from_address?.trim().toLowerCase();
+  return a && addresses(a).length === 1 ? a : MAILBOX;
+}
 export const validThreadId = (id: string) => /^[a-f0-9]{1,64}$/i.test(id);
 export const validPageToken = (token: string) => token.length <= 2048 && /^[a-zA-Z0-9_+=/.-]*$/.test(token);
 export const header = (message: MailMessage, name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";

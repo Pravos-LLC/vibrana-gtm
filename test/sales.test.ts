@@ -256,6 +256,11 @@ test("deals: pipeline fields map; a zero amount is unset; a missing field falls 
 test("meetings: the ledger maps; a missing object reads as not installed", async () => {
   const r = await meetingsMod.salesMeetings(NOW, { query: async () => ({ meetings: { edges: [{ node: { id: "m", name: "Call", mtgAt: "2026-11-04T09:00:00Z", mtgOwner: "JOHN", mtgKind: "CLIENT", mtgCompany: { name: "Fabrikam" }, mtgOpportunity: null } }] } }) });
   assert.ok(r.installed && r.meetings[0].kind === "CLIENT" && r.meetings[0].company === "Fabrikam");
+  const withRetracted = await meetingsMod.salesMeetings(NOW, { query: async () => ({ meetings: { edges: [
+    { node: { id: "m1", name: "Retracted meeting", mtgAt: "2026-11-04T09:00:00Z", mtgOwner: "JOHN", mtgKind: "OTHER", mtgCompany: null, mtgOpportunity: null } },
+    { node: { id: "m2", name: "2026-11-04 meeting: Fabrikam", mtgAt: "2026-11-04T10:00:00Z", mtgOwner: "JOHN", mtgKind: "CLIENT", mtgCompany: { name: "Fabrikam" }, mtgOpportunity: null } },
+  ] } }) });
+  assert.ok(withRetracted.installed && withRetracted.meetings.map((m) => m.id).join() === "m2", "a retracted row is not a meeting");
   const none = await meetingsMod.salesMeetings(NOW, { query: async () => { throw new TwentyError("x", [{ message: 'Cannot query field "meetings" on type "Query".' }]); } });
   assert.equal(none.installed, false);
 });
@@ -298,16 +303,23 @@ test("write-back: the latest send per Twenty person since the cursor, ignoring m
   assert.deepEqual([...m], [[P, "2026-11-04T00:00:00Z"]]);
 });
 
-test("stage history: a new deal is dated at its last change, a move at now, a known stage not again", () => {
+test("stage history: a new deal is dated at its close or creation (never its last edit), a move at now, a known stage not again", () => {
   const rows = stages.newStageRows([
-    { id: "a", stage: "PROPOSAL", updatedAt: "2026-10-20T00:00:00Z", createdAt: "2026-10-01T00:00:00Z" },
-    { id: "b", stage: "SIGNED", updatedAt: "2026-11-19T00:00:00Z", createdAt: "2026-10-01T00:00:00Z" },
-    { id: "c", stage: "QUALIFIED", updatedAt: null, createdAt: "2026-10-01T00:00:00Z" },
+    { id: "a", stage: "PROPOSAL", updatedAt: "2026-11-19T00:00:00Z", createdAt: "2026-10-01T00:00:00Z", closeDate: null },
+    { id: "b", stage: "SIGNED", updatedAt: "2026-11-19T00:00:00Z", createdAt: "2026-10-01T00:00:00Z", closeDate: null },
+    { id: "c", stage: "QUALIFIED", updatedAt: null, createdAt: "2026-10-01T00:00:00Z", closeDate: null },
+    { id: "d", stage: "SIGNED", updatedAt: "2026-11-19T00:00:00Z", createdAt: "2026-06-01T00:00:00Z", closeDate: "2026-09-08T00:00:00Z" },
   ], [{ opportunity_id: "b", stage: "PROPOSAL", first_seen_at: "x" }, { opportunity_id: "c", stage: "QUALIFIED", first_seen_at: "y" }], NOW);
   assert.deepEqual(rows, [
-    { opportunity_id: "a", stage: "PROPOSAL", first_seen_at: "2026-10-20T00:00:00Z" },
+    { opportunity_id: "a", stage: "PROPOSAL", first_seen_at: "2026-10-01T00:00:00Z" },
     { opportunity_id: "b", stage: "SIGNED", first_seen_at: NOW.toISOString() },
+    { opportunity_id: "d", stage: "SIGNED", first_seen_at: "2026-09-08T00:00:00Z" },
   ]);
+});
+
+test("pipeline: the typical won deal is the median, so one large engagement does not shrink the required pace", () => {
+  const won = [8_000, 9_000, 12_000, 140_000].map((n, i) => deal({ id: `w${i}`, stage: "SIGNED", fee: { amount: n, currency: "USD" } }));
+  assert.equal(metrics.pipelineHealth(won, S, NOW).avgDealUsd, 10_500);
 });
 
 /* ------------------------------------------------------------------------------------------------ site traffic */
@@ -372,4 +384,11 @@ test("reconcile: a second run never spends a credit an earlier run recorded", as
   const paid = { ...deposit, paid_at: "2026-11-02T12:00:00Z", paid_amount: 7_500, payment_ref: "wise:C1" };
   const second = matchCredits([paid, final], [credit]);
   assert.deepEqual([second.matches.length, second.unmatched.length], [0, 0]);
+});
+
+test("outcomes read replies against the desk's sending address, not the connected inbox; the configured mailbox is the fallback", async () => {
+  const fake = (row: unknown) => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }) });
+  assert.equal(await mailbox.hqAddress(fake({ from_address: " John@HQ.Example.com " })), "john@hq.example.com");
+  assert.equal(await mailbox.hqAddress(fake(null)), mailbox.MAILBOX);
+  assert.equal(await mailbox.hqAddress(fake({ from_address: "not an address" })), mailbox.MAILBOX);
 });
