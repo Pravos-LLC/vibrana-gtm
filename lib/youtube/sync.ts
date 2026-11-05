@@ -7,6 +7,16 @@ import { addDays, mondayOf } from "../week";
 import { accessToken, analyticsQuery, channelInfo, downloadReport, ensureReachJob, listReports, parseReach, uploadIds, videoDetails, type ReachRow, type Table } from "./api";
 import type { DimDay, VideoDay, VideoMeta } from "./studio";
 
+/**
+ * Splits rows into groups that share the same set of keys. PostgREST fills any column missing from a row with null
+ * when a batch mixes shapes, so a reach-only row (impressions, no views) would erase views stored earlier. One shape
+ * per upsert leaves the columns a row does not carry untouched.
+ */
+export function byShape<T extends Record<string, unknown>>(rows: T[]): T[][] {
+  const groups = new Map<string, T[]>();
+  for (const r of rows) { const k = Object.keys(r).sort().join(","); (groups.get(k) ?? groups.set(k, []).get(k)!).push(r); }
+  return [...groups.values()];
+}
 const chunk = <T,>(xs: T[], n = 500) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const col = (t: Table, name: string) => t.columns.indexOf(name);
@@ -29,15 +39,15 @@ export async function upsertVideos(db: SupabaseClient, videos: VideoMeta[]) {
 }
 
 export async function upsertVideoDays(db: SupabaseClient, days: (Partial<VideoDay> & { date: string; video_id: string; [k: string]: unknown })[], source: string) {
-  for (const c of chunk(days.map((d) => ({ ...d, source, updated_at: new Date().toISOString() })))) must(await db.from("gtm_yt_video_daily").upsert(c, { onConflict: "date,video_id" }), "yt video daily");
+  for (const c of byShape(days.map((d) => ({ ...d, source, updated_at: new Date().toISOString() }))).flatMap((g) => chunk(g))) must(await db.from("gtm_yt_video_daily").upsert(c, { onConflict: "date,video_id" }), "yt video daily");
 }
 
 export async function upsertDims(db: SupabaseClient, rows: (DimDay & { watch_minutes?: number | null })[], source: string) {
-  for (const c of chunk(rows.map((d) => ({ ...d, source, updated_at: new Date().toISOString() })))) must(await db.from("gtm_yt_dim_daily").upsert(c, { onConflict: "date,dimension,key" }), "yt dims");
+  for (const c of byShape(rows.map((d) => ({ ...d, source, updated_at: new Date().toISOString() }))).flatMap((g) => chunk(g))) must(await db.from("gtm_yt_dim_daily").upsert(c, { onConflict: "date,dimension,key" }), "yt dims");
 }
 
 export async function upsertChannelDays(db: SupabaseClient, rows: { date: string; [k: string]: unknown }[], source: string) {
-  for (const c of chunk(rows.map((d) => ({ ...d, source, updated_at: new Date().toISOString() })))) must(await db.from("gtm_yt_channel_daily").upsert(c, { onConflict: "date" }), "yt channel daily");
+  for (const c of byShape(rows.map((d) => ({ ...d, source, updated_at: new Date().toISOString() }))).flatMap((g) => chunk(g))) must(await db.from("gtm_yt_channel_daily").upsert(c, { onConflict: "date" }), "yt channel daily");
 }
 
 /** Writes each finished week's impressions and CTR into the manual row, keeping any number already typed in. */

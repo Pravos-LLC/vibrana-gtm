@@ -112,3 +112,10 @@ test("YouTube view: CTR is weighted by impressions, absent stays null, traffic s
   assert.equal(none.videos[0].ctr, null);
   assert.equal(none.impressions, null);
 });
+
+test("rows with different column sets are upserted in separate batches, so a reach-only row cannot null out stored views", async () => {
+  const { byShape } = await import("../lib/youtube/sync.ts");
+  const groups = byShape([{ date: "a", video_id: "v", views: 5 }, { date: "b", video_id: "v", impressions: 9 }, { date: "c", video_id: "v", views: 7 }]);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups.map((g) => g.length).sort(), [1, 2]);
+});
