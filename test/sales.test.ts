@@ -303,16 +303,23 @@ test("write-back: the latest send per Twenty person since the cursor, ignoring m
   assert.deepEqual([...m], [[P, "2026-11-04T00:00:00Z"]]);
 });
 
-test("stage history: a new deal is dated at its last change, a move at now, a known stage not again", () => {
+test("stage history: a new deal is dated at its close or creation (never its last edit), a move at now, a known stage not again", () => {
   const rows = stages.newStageRows([
-    { id: "a", stage: "PROPOSAL", updatedAt: "2026-10-20T00:00:00Z", createdAt: "2026-10-01T00:00:00Z" },
-    { id: "b", stage: "SIGNED", updatedAt: "2026-11-19T00:00:00Z", createdAt: "2026-10-01T00:00:00Z" },
-    { id: "c", stage: "QUALIFIED", updatedAt: null, createdAt: "2026-10-01T00:00:00Z" },
+    { id: "a", stage: "PROPOSAL", updatedAt: "2026-11-19T00:00:00Z", createdAt: "2026-10-01T00:00:00Z", closeDate: null },
+    { id: "b", stage: "SIGNED", updatedAt: "2026-11-19T00:00:00Z", createdAt: "2026-10-01T00:00:00Z", closeDate: null },
+    { id: "c", stage: "QUALIFIED", updatedAt: null, createdAt: "2026-10-01T00:00:00Z", closeDate: null },
+    { id: "d", stage: "SIGNED", updatedAt: "2026-11-19T00:00:00Z", createdAt: "2026-06-01T00:00:00Z", closeDate: "2026-09-08T00:00:00Z" },
   ], [{ opportunity_id: "b", stage: "PROPOSAL", first_seen_at: "x" }, { opportunity_id: "c", stage: "QUALIFIED", first_seen_at: "y" }], NOW);
   assert.deepEqual(rows, [
-    { opportunity_id: "a", stage: "PROPOSAL", first_seen_at: "2026-10-20T00:00:00Z" },
+    { opportunity_id: "a", stage: "PROPOSAL", first_seen_at: "2026-10-01T00:00:00Z" },
     { opportunity_id: "b", stage: "SIGNED", first_seen_at: NOW.toISOString() },
+    { opportunity_id: "d", stage: "SIGNED", first_seen_at: "2026-09-08T00:00:00Z" },
   ]);
+});
+
+test("pipeline: the typical won deal is the median, so one large engagement does not shrink the required pace", () => {
+  const won = [8_000, 9_000, 12_000, 140_000].map((n, i) => deal({ id: `w${i}`, stage: "SIGNED", fee: { amount: n, currency: "USD" } }));
+  assert.equal(metrics.pipelineHealth(won, S, NOW).avgDealUsd, 10_500);
 });
 
 /* ------------------------------------------------------------------------------------------------ site traffic */

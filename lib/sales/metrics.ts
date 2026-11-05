@@ -53,8 +53,11 @@ export function pipelineHealth(deals: SalesDeal[], s: SalesSettings, now: Date, 
   const won = deals.filter((d) => d.stage === "SIGNED"), lost = deals.filter((d) => d.stage === "LOST");
   const wonQ = won.filter((d) => qualifiedBefore.has(d.id)), lostQ = lost.filter((d) => qualifiedBefore.has(d.id));
   const winRate = usable(pick(wonQ.length, wonQ.length + lostQ.length, s.rates.winFromQualified), s.rates.winFromQualified);
-  const wonFees = won.map(usd).filter((v): v is number => v != null);
-  const avgDeal = wonFees.length >= 3 ? wonFees.reduce((a, b) => a + b, 0) / wonFees.length : s.plannedDealUsd;
+  // The typical won deal is the median: one large transformation engagement would otherwise make the goal look like it
+  // needs a fraction of a deal a month, when the work that pays the bills is the sprint.
+  const wonFees = won.map(usd).filter((v): v is number => v != null).sort((a, b) => a - b);
+  const median = (xs: number[]) => (xs.length % 2 ? xs[(xs.length - 1) / 2] : (xs[xs.length / 2 - 1] + xs[xs.length / 2]) / 2);
+  const avgDeal = wonFees.length >= 3 ? median(wonFees) : s.plannedDealUsd;
   const cycles = won.filter((d) => d.closeDate).map((d) => (Date.parse(d.closeDate!) - Date.parse(d.createdAt)) / DAY).filter((x) => x >= 0).sort((a, b) => a - b);
   const share = averageShare(deals, s.fx);
   const required = requiredFeeUsd(s, share);

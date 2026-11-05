@@ -121,7 +121,7 @@ export default async function PipelineOverview({ searchParams }: { searchParams:
             note={`weighted ${usd(health.weightedUsd)} vs ${usd(health.coverageNeedUsd)} (${s.coverageMonths} months)`} tone={health.coverage != null && health.coverage < 1 ? "bad" : health.coverage != null && health.coverage < 2 ? "warn" : undefined} href="/pipeline/deals" />
           <StatTile label="Open qualified deals" value={ok ? String(health.qualifiedCount) : null} missing={noCrm} note={`${health.openCount} open in all${health.unpriced ? `, ${health.unpriced} without a fee` : ""}`} />
           <StatTile label="Win rate" value={ok ? pct(health.winRate.value) : null} missing={noCrm} note={health.winRate.measured ? `won ÷ (won + lost after qualifying), ${health.winRate.n} closed` : `planning rate; ${health.winRate.n} closed after qualifying so far`} />
-          <StatTile label="Average won deal" value={ok ? usd(health.avgDealUsd) : null} missing={noCrm} note={health.avgDealMeasured ? "from won deals" : "planning size until 3 won deals have fees"} />
+          <StatTile label="Typical won deal" value={ok ? usd(health.avgDealUsd) : null} missing={noCrm} note={health.avgDealMeasured ? "median of won deals" : "planning size until 3 won deals have fees"} />
           <StatTile label="Days to close" value={!ok || health.medianCycleDays == null ? null : String(Math.round(health.medianCycleDays))} missing={ok ? "no won deal with a close date" : noCrm} note="median, created to won" />
         </div>
       </Section>
