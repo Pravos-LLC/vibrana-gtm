@@ -19,13 +19,18 @@ export const PAGE_SIZE = 25;
 
 /**
  * The address the client-track desk emails go out from (gtm_outreach_tracks.from_address), the one replies are matched
- * against. The connected Gmail account may be a different inbox that HQ mail is forwarded to; the configured MAILBOX is
- * the fallback when no track row says otherwise.
+ * against. The connected Gmail account may be a different inbox that HQ mail is forwarded to. Without a usable track row
+ * the desk's configured client sender is used, then the configured inbox MAILBOX.
  */
 export async function hqAddress(db: { from: (t: string) => any }): Promise<string> {
-  const { data } = await db.from("gtm_outreach_tracks").select("from_address").eq("track", "client").maybeSingle();
+  const { data, error } = await db.from("gtm_outreach_tracks").select("from_address").eq("track", "client").maybeSingle();
+  // A failed read must not quietly search the wrong mailbox and report "no replies": it throws, and the caller says so.
+  if (error) throw new Error(`outreach tracks: ${error.message}`);
   const a = (data as { from_address?: string | null } | null)?.from_address?.trim().toLowerCase();
-  return a && addresses(a).length === 1 ? a : MAILBOX;
+  if (a && addresses(a).length === 1 && addresses(a)[0] === a) return a;
+  // The desk's own configured client sender, then the inbox mailbox.
+  const fallback = loadRuntimeConfig().mail.trackFrom?.client?.trim().toLowerCase();
+  return fallback && addresses(fallback).length === 1 && addresses(fallback)[0] === fallback ? fallback : MAILBOX;
 }
 export const validThreadId = (id: string) => /^[a-f0-9]{1,64}$/i.test(id);
 export const validPageToken = (token: string) => token.length <= 2048 && /^[a-zA-Z0-9_+=/.-]*$/.test(token);

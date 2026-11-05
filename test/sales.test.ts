@@ -309,11 +309,13 @@ test("stage history: a new deal is dated at its close or creation (never its las
     { id: "b", stage: "SIGNED", updatedAt: "2026-11-19T00:00:00Z", createdAt: "2026-10-01T00:00:00Z", closeDate: null },
     { id: "c", stage: "QUALIFIED", updatedAt: null, createdAt: "2026-10-01T00:00:00Z", closeDate: null },
     { id: "d", stage: "SIGNED", updatedAt: "2026-11-19T00:00:00Z", createdAt: "2026-06-01T00:00:00Z", closeDate: "2026-09-08T00:00:00Z" },
+    { id: "e", stage: "LOST", updatedAt: null, createdAt: "2026-06-01T00:00:00Z", closeDate: "2027-01-31T00:00:00Z" },
   ], [{ opportunity_id: "b", stage: "PROPOSAL", first_seen_at: "x" }, { opportunity_id: "c", stage: "QUALIFIED", first_seen_at: "y" }], NOW);
   assert.deepEqual(rows, [
     { opportunity_id: "a", stage: "PROPOSAL", first_seen_at: "2026-10-01T00:00:00Z" },
     { opportunity_id: "b", stage: "SIGNED", first_seen_at: NOW.toISOString() },
     { opportunity_id: "d", stage: "SIGNED", first_seen_at: "2026-09-08T00:00:00Z" },
+    { opportunity_id: "e", stage: "LOST", first_seen_at: NOW.toISOString() },
   ]);
 });
 
@@ -391,4 +393,7 @@ test("outcomes read replies against the desk's sending address, not the connecte
   assert.equal(await mailbox.hqAddress(fake({ from_address: " John@HQ.Example.com " })), "john@hq.example.com");
   assert.equal(await mailbox.hqAddress(fake(null)), mailbox.MAILBOX);
   assert.equal(await mailbox.hqAddress(fake({ from_address: "not an address" })), mailbox.MAILBOX);
+  assert.equal(await mailbox.hqAddress(fake({ from_address: "x<a@b.co>" })), mailbox.MAILBOX, "only a bare address is used");
+  const failing = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "down" } }) }) }) }) };
+  await assert.rejects(mailbox.hqAddress(failing), /outreach tracks: down/, "a failed read is an error, not a silent fallback");
 });
