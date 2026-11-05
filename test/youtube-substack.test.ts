@@ -79,7 +79,7 @@ test("the reach job is created only when missing", async () => {
 
 test("substack exports: the owner row is not an audience member; weekly stats leave unknown weeks out", () => {
   const subs = parseSubscribers("Email,Name,Type,Activity,Start date,Revenue\no@x.com,Owner,Author,0,2024-03-27T11:36:00.532Z,$0.00\na@x.com,A,Free,0,2026-10-14T10:00:00.000Z,$0.00\nb@x.com,B,Free,1,2026-10-21T10:00:00.000Z,$0.00\n");
-  const growth = parseGrowth("Date,Source,Category,Unique visitors,New subscribers,New revenue\n2026/10/20,Direct,Other,5,1,0\n2026/10/22,Google,Search,3,0,0\n");
+  const growth = parseGrowth("Date,Source,Category,Unique visitors,New subscribers,New revenue\n2026/10/20,Direct,Other,5,1,0\n2026/10/22,Google,Search,3,0,0\n2026/11/01,Direct,Other,0,0,0\n");
   const s = weeklyStats(subs, growth, "2026-11-05", 4);
   assert.deepEqual(s.map((x) => x.week_start), ["2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26"]);
   const wk = (d: string) => s.find((x) => x.week_start === d)!;
@@ -88,6 +88,9 @@ test("substack exports: the owner row is not an audience member; weekly stats le
   assert.equal(wk("2026-10-19").visitors, undefined); // the week the file starts in may be cut off: unknown, not 0
   assert.equal(wk("2026-10-26").visitors, 0);
   assert.equal(wk("2026-10-26").new_subscribers, 0);
+  // Weeks after the file's last row are unknown, not zero.
+  const short = weeklyStats(subs, parseGrowth("Date,Source,Category,Unique visitors,New subscribers,New revenue\n2026/10/01,Direct,Other,2,0,0\n2026/10/09,Direct,Other,1,0,0\n"), "2026-11-05", 4);
+  assert.equal(short.find((x) => x.week_start === "2026-10-26")!.visitors, undefined);
 });
 
 test("a file that is not a Substack export fails loudly", () => {
@@ -118,4 +121,69 @@ test("rows with different column sets are upserted in separate batches, so a rea
   const groups = byShape([{ date: "a", video_id: "v", views: 5 }, { date: "b", video_id: "v", impressions: 9 }, { date: "c", video_id: "v", views: 7 }]);
   assert.equal(groups.length, 2);
   assert.deepEqual(groups.map((g) => g.length).sort(), [1, 2]);
+});
+
+test("reach CSV: a CTR above 1 or a renamed column is refused, a missing CTR stays null", () => {
+  const head = "date,channel_id,video_id,video_thumbnail_impressions,video_thumbnail_impressions_ctr\n";
+  assert.throws(() => api.parseReach(head + "20261029,UC1,vid,45,2.44\n"), /not a fraction/);
+  assert.throws(() => api.parseReach("date,video_id,impressions\n20261029,vid,45\n"), /unexpected columns/);
+  assert.equal(api.parseReach(head + "20261029,UC1,vid,45,\n")[0].ctr, null);
+});
+
+// A tiny in-memory stand-in for the Supabase client: select / eq / gte / lte / maybeSingle / upsert on named tables.
+function fakeDb() {
+  const t: Record<string, Record<string, unknown>[]> = {};
+  const keys: Record<string, string[]> = { gtm_yt_videos: ["video_id"], gtm_yt_video_daily: ["date", "video_id"], gtm_yt_channel_daily: ["date"], gtm_yt_dim_daily: ["date", "dimension", "key"], gtm_yt_report_files: ["report_id"], gtm_manual_metrics: ["week_start", "channel"] };
+  const from = (name: string) => {
+    const rows = (t[name] ??= []);
+    let filt: ((r: Record<string, unknown>) => boolean)[] = [];
+    const b: Record<string, unknown> = {
+      select: () => b, eq: (c: string, v: unknown) => (filt.push((r) => r[c] === v), b),
+      gte: (c: string, v: string) => (filt.push((r) => String(r[c]) >= v), b), lte: (c: string, v: string) => (filt.push((r) => String(r[c]) <= v), b),
+      maybeSingle: async () => ({ data: rows.find((r) => filt.every((f) => f(r))) ?? null, error: null }),
+      then: (res: (v: unknown) => unknown) => res({ data: rows.filter((r) => filt.every((f) => f(r))), error: null }),
+      upsert: async (batch: Record<string, unknown>[] | Record<string, unknown>, o: { ignoreDuplicates?: boolean } = {}) => {
+        for (const row of Array.isArray(batch) ? batch : [batch]) {
+          const k = keys[name], i = rows.findIndex((r) => k.every((c) => r[c] === row[c]));
+          if (i < 0) rows.push({ ...row }); else if (!o.ignoreDuplicates) rows[i] = { ...rows[i], ...row };
+        }
+        return { data: null, error: null };
+      },
+    };
+    return b;
+  };
+  return { db: { from } as never, t };
+}
+
+test("sync: country is queried per day, a deleted video gets a placeholder, a reissued report counts once, and the weekly row is written", async () => {
+  const G = "https://youtubeanalytics.googleapis.com/v2/reports";
+  const csv = (imp: number) => `date,channel_id,video_id,video_thumbnail_impressions,video_thumbnail_impressions_ctr\n20261026,UC1,gone_video_1,${imp},0.1\n20261026,UC1,live_video_1,${imp * 3},0.02\n`;
+  const m = installFetchMock([
+    { method: "POST", url: "https://oauth2.googleapis.com/token", json: { access_token: "at" } },
+    { url: "https://www.googleapis.com/youtube/v3/channels", json: { items: [{ statistics: { subscriberCount: "145" } }] } },
+    { url: "https://www.googleapis.com/youtube/v3/videos", json: { items: [{ id: "live_video_1", snippet: { title: "Live", publishedAt: "2026-10-20T00:00:00Z" }, contentDetails: { duration: "PT30S" } }] } },
+    { url: "https://youtubereporting.googleapis.com/v1/jobs/job1/reports", json: { reports: [
+      { id: "r1", startTime: "2026-10-26T00:00:00Z", endTime: "2026-10-27T00:00:00Z", createTime: "2026-10-28T00:00:00Z", downloadUrl: "https://youtubereporting.googleapis.com/dl/r1" },
+      { id: "r2", startTime: "2026-10-26T00:00:00Z", endTime: "2026-10-27T00:00:00Z", createTime: "2026-10-29T00:00:00Z", downloadUrl: "https://youtubereporting.googleapis.com/dl/r2" },
+    ] } },
+    { url: "https://youtubereporting.googleapis.com/v1/jobs", json: { jobs: [{ id: "job1", reportTypeId: "channel_reach_basic_a1" }] } },
+    { url: "https://youtubereporting.googleapis.com/dl/r2", body: csv(110) },
+    { url: G, regex: false, json: { columnHeaders: [{ name: "day" }, { name: "views" }], rows: [] } },
+  ]);
+  restore = m.restore;
+  const { db, t } = fakeDb();
+  const { syncYouTube } = await import("../lib/youtube/sync.ts");
+  // The weekly row needs Monday 2026-10-26 to be finished: today 2026-11-05 ends the window 2026-11-03.
+  const r = await syncYouTube(db, { today: "2026-11-05", days: 10, env: { YOUTUBE_CLIENT_ID: "i", YOUTUBE_CLIENT_SECRET: "s", YOUTUBE_REFRESH_TOKEN: "r" } });
+  assert.equal(r.reach.files, 1);                       // r1 was reissued as r2: only the newest is read
+  assert.equal(t.gtm_yt_report_files.length, 2);        // both are remembered, so neither downloads again
+  const ids = t.gtm_yt_videos.map((v) => v.video_id).sort();
+  assert.deepEqual(ids, ["gone_video_1", "live_video_1"]); // the deleted video has a placeholder row
+  assert.equal(t.gtm_yt_channel_daily.find((d) => d.date === "2026-10-26")!.impressions, 110 + 330); // counted once, not 210 + ...
+  const week = t.gtm_manual_metrics.find((x) => x.week_start === "2026-10-26" && x.channel === "youtube")!;
+  assert.equal((week.metrics as Record<string, number>).impressions, 440);
+  // Country was requested one day at a time (dimensions=country, never day,country).
+  const country = m.calls.filter((c) => c.url.includes("dimensions=country"));
+  assert.equal(country.length, 10);
+  assert.ok(!m.calls.some((c) => c.url.includes("dimensions=day%2Ccountry")));
 });

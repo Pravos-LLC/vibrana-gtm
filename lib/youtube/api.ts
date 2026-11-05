@@ -135,15 +135,26 @@ export async function downloadReport(token: string, url: string): Promise<string
   return res.text();
 }
 
-export type ReachRow = { date: string; video_id: string; impressions: number; ctr: number };
+export type ReachRow = { date: string; video_id: string; impressions: number; ctr: number | null };
 
-/** Reach CSV rows. `ctr` is returned in percent: the API reports a fraction, so 0.0244 becomes 2.44. */
+const REACH_COLUMNS = ["date", "video_id", "video_thumbnail_impressions", "video_thumbnail_impressions_ctr"];
+
+/**
+ * Reach CSV rows. The API reports CTR as a fraction, so 0.0244 becomes 2.44 percent. Anything above 1 means the scale
+ * is not what we assumed, and the file is refused rather than capped: a silent 100% would be worse than no number.
+ * A missing CTR stays null. An unrecognized header throws, so a renamed column cannot turn into silent data loss.
+ */
 export function parseReach(csv: string): ReachRow[] {
+  const rows = parseCsvObjects(csv);
+  if (rows.length && !REACH_COLUMNS.every((c) => c in rows[0])) throw new Error(`YouTube reach report: unexpected columns (${Object.keys(rows[0]).join(", ")})`);
   const out: ReachRow[] = [];
-  for (const r of parseCsvObjects(csv)) {
-    const d = r["date"], imp = Number(r["video_thumbnail_impressions"]), ctr = Number(r["video_thumbnail_impressions_ctr"]);
+  for (const r of rows) {
+    const d = r["date"], imp = Number(r["video_thumbnail_impressions"]);
     if (!/^\d{8}$/.test(d ?? "") || !r["video_id"] || !Number.isFinite(imp)) continue;
-    out.push({ date: `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`, video_id: r["video_id"], impressions: Math.round(imp), ctr: Number.isFinite(ctr) ? Math.min(100, Math.round(ctr * 10000) / 100) : 0 });
+    const raw = r["video_thumbnail_impressions_ctr"];
+    const ctr = raw === "" || raw == null ? null : Number(raw);
+    if (ctr != null && (!Number.isFinite(ctr) || ctr < 0 || ctr > 1)) throw new Error(`YouTube reach report: CTR ${raw} is not a fraction between 0 and 1; check the scale before importing`);
+    out.push({ date: `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`, video_id: r["video_id"], impressions: Math.round(imp), ctr: ctr == null ? null : Math.round(ctr * 10000) / 100 });
   }
   return out;
 }

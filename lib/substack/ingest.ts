@@ -43,7 +43,8 @@ export type WeekStats = { week_start: string; subscribers?: number; new_subscrib
 export function weeklyStats(subs: SubRow[], growth: GrowthRow[], asOf: string, weeks = 12): WeekStats[] {
   const lastSunday = addDays(mondayOf(asOf), -1);
   const audience = subs.filter((s) => !s.owner);
-  const growthFrom = growth.length ? growth.map((g) => g.date).sort()[0] : null;
+  const dates = growth.map((g) => g.date).sort();
+  const growthFrom = dates[0] ?? null, growthTo = dates.at(-1) ?? null;
   const out: WeekStats[] = [];
   for (let i = weeks - 1; i >= 0; i--) {
     const start = addDays(lastSunday, -6 - 7 * i), end = addDays(start, 6);
@@ -51,7 +52,7 @@ export function weeklyStats(subs: SubRow[], growth: GrowthRow[], asOf: string, w
     if (subs.length) w.subscribers = audience.filter((s) => s.date <= end).length;
     // A week counts only when it starts on or after the file's first row: an earlier week may be cut off by the export's
     // start date, and "0" there would really be "unknown". Weeks after the first row with no rows are true zeros.
-    if (growthFrom && growthFrom <= start) {
+    if (growthFrom && growthFrom <= start && end <= growthTo!) {
       const g = growth.filter((x) => x.date >= start && x.date <= end);
       w.visitors = g.reduce((a, x) => a + x.visitors, 0);
       w.new_subscribers = g.reduce((a, x) => a + x.newSubscribers, 0);
@@ -69,8 +70,13 @@ export async function saveSubstackStats(db: SupabaseClient, channel: string, sta
   for (const s of stats) {
     const { week_start, ...metrics } = s;
     if (!Object.keys(metrics).length) continue;
-    const prior = must(await db.from("gtm_manual_metrics").select("metrics,note").eq("week_start", week_start).eq("channel", channel).maybeSingle(), "manual read") as { metrics: Record<string, number>; note: string } | null;
-    must(await db.from("gtm_manual_metrics").upsert({ week_start, channel, metrics: { ...(prior?.metrics ?? {}), ...metrics }, note: prior?.note || NOTE, entered_by: actor, updated_at: new Date().toISOString() }, { onConflict: "week_start,channel" }), "manual write");
+    const prior = must(await db.from("gtm_manual_metrics").select("metrics,note,entered_by").eq("week_start", week_start).eq("channel", channel).maybeSingle(), "manual read") as { metrics: Record<string, number>; note: string; entered_by: string } | null;
+    // A subscriber count John typed himself is kept: the export undercounts past weeks (current subscribers only).
+    const handTyped = !!prior && prior.entered_by !== actor && typeof prior.metrics?.subscribers === "number";
+    const next: Record<string, number> = { ...metrics };
+    if (handTyped) delete next.subscribers;
+    if (!Object.keys(next).length) continue;
+    must(await db.from("gtm_manual_metrics").upsert({ week_start, channel, metrics: { ...(prior?.metrics ?? {}), ...next }, note: prior?.note || NOTE, entered_by: handTyped ? prior!.entered_by : actor, updated_at: new Date().toISOString() }, { onConflict: "week_start,channel" }), "manual write");
     written++;
   }
   return written;

@@ -43,10 +43,21 @@ export function buildYouTubeView(videos: VideoRow[], days: DayRow[], dims: DimRo
 /** Reads the 28 days ending at `to` for the owner's session; null when the tables are absent or empty. */
 export async function loadYouTube(db: SupabaseClient, to: string): Promise<YtView | null> {
   const from = addDays(to, -27);
+  // PostgREST caps a response (1,000 rows by default), so each read pages until a short page.
+  type Page = PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>;
+  const all = async (q: (a: number, b: number) => Page) => {
+    const rows: unknown[] = [];
+    for (let a = 0; ; a += 1000) {
+      const r = await q(a, a + 999);
+      if (r.error) return { data: null, error: r.error };
+      rows.push(...(r.data ?? []));
+      if ((r.data ?? []).length < 1000) return { data: rows, error: null };
+    }
+  };
   const [v, d, x] = await Promise.all([
-    db.from("gtm_yt_videos").select("video_id,title,published_at,duration_s,is_short"),
-    db.from("gtm_yt_video_daily").select("date,video_id,views,watch_minutes,avg_view_pct,subs_gained,impressions,ctr,source").gte("date", from).lte("date", to),
-    db.from("gtm_yt_dim_daily").select("date,dimension,key,views,watch_minutes").eq("dimension", "traffic_source").gte("date", from).lte("date", to),
+    all((a, b) => db.from("gtm_yt_videos").select("video_id,title,published_at,duration_s,is_short").order("video_id").range(a, b)),
+    all((a, b) => db.from("gtm_yt_video_daily").select("date,video_id,views,watch_minutes,avg_view_pct,subs_gained,impressions,ctr,source").gte("date", from).lte("date", to).order("date").order("video_id").range(a, b)),
+    all((a, b) => db.from("gtm_yt_dim_daily").select("date,dimension,key,views,watch_minutes").eq("dimension", "traffic_source").gte("date", from).lte("date", to).order("date").order("key").range(a, b)),
   ]);
   if (v.error || d.error || x.error || !(d.data ?? []).length) return null;
   const sources = [...new Set(((d.data ?? []) as { source: string }[]).map((r) => r.source))];

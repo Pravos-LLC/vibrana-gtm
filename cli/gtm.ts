@@ -1722,10 +1722,10 @@ const commands: Record<string, () => Promise<void>> = {
       if (!dry) {
         const sync = await import("../lib/youtube/sync");
         const db = adminDb();
-        await sync.upsertVideos(db, r.videos);
-        await sync.upsertVideoDays(db, r.videoDays, "studio-export");
-        await sync.upsertDims(db, r.dims, "studio-export");
-        await sync.upsertChannelDays(db, r.channelDays, "studio-export");
+        await sync.upsertVideos(db, r.videos, { ignoreExisting: true });
+        await sync.upsertVideoDays(db, r.videoDays, "studio-export", { ignoreExisting: true });
+        await sync.upsertDims(db, r.dims, "studio-export", { ignoreExisting: true });
+        await sync.upsertChannelDays(db, r.channelDays, "studio-export", { ignoreExisting: true });
       }
       return out({ dry_run: dry, videos: r.videos.length, video_days: r.videoDays.length, dims: r.dims.length, channel_days: r.channelDays.length, range: r.range }, () => console.log(`${dry ? "dry run: would import" : "imported"} ${r.videos.length} videos, ${r.videoDays.length} video days, ${r.dims.length} traffic/country rows, ${r.channelDays.length} channel days (${r.range.join(" to ")})`));
     }

@@ -33,21 +33,21 @@ export function weeklyReach(rows: { date: string; impressions: number | null; ct
   return [...by].filter(([w]) => addDays(w, 6) <= throughDate).map(([week_start, a]) => ({ week_start, impressions: a.imp, ctr: a.imp ? Math.round((a.clicks / a.imp) * 10000) / 100 : null }));
 }
 
-export async function upsertVideos(db: SupabaseClient, videos: VideoMeta[]) {
+export async function upsertVideos(db: SupabaseClient, videos: VideoMeta[], opts: { ignoreExisting?: boolean } = {}) {
   const rows = videos.map((v) => ({ ...v, is_short: v.duration_s == null ? null : v.duration_s <= 180, updated_at: new Date().toISOString() }));
-  for (const c of chunk(rows)) must(await db.from("gtm_yt_videos").upsert(c, { onConflict: "video_id" }), "yt videos");
+  for (const c of chunk(rows)) must(await db.from("gtm_yt_videos").upsert(c, { onConflict: "video_id", ignoreDuplicates: !!opts.ignoreExisting }), "yt videos");
 }
 
-export async function upsertVideoDays(db: SupabaseClient, days: (Partial<VideoDay> & { date: string; video_id: string; [k: string]: unknown })[], source: string) {
-  for (const c of byShape(days.map((d) => ({ ...d, source, updated_at: new Date().toISOString() }))).flatMap((g) => chunk(g))) must(await db.from("gtm_yt_video_daily").upsert(c, { onConflict: "date,video_id" }), "yt video daily");
+export async function upsertVideoDays(db: SupabaseClient, days: (Partial<VideoDay> & { date: string; video_id: string; [k: string]: unknown })[], source: string, opts: { ignoreExisting?: boolean } = {}) {
+  for (const c of byShape(days.map((d) => ({ ...d, source, updated_at: new Date().toISOString() }))).flatMap((g) => chunk(g))) must(await db.from("gtm_yt_video_daily").upsert(c, { onConflict: "date,video_id", ignoreDuplicates: !!opts.ignoreExisting }), "yt video daily");
 }
 
-export async function upsertDims(db: SupabaseClient, rows: (DimDay & { watch_minutes?: number | null })[], source: string) {
-  for (const c of byShape(rows.map((d) => ({ ...d, source, updated_at: new Date().toISOString() }))).flatMap((g) => chunk(g))) must(await db.from("gtm_yt_dim_daily").upsert(c, { onConflict: "date,dimension,key" }), "yt dims");
+export async function upsertDims(db: SupabaseClient, rows: (DimDay & { watch_minutes?: number | null })[], source: string, opts: { ignoreExisting?: boolean } = {}) {
+  for (const c of byShape(rows.map((d) => ({ ...d, source, updated_at: new Date().toISOString() }))).flatMap((g) => chunk(g))) must(await db.from("gtm_yt_dim_daily").upsert(c, { onConflict: "date,dimension,key", ignoreDuplicates: !!opts.ignoreExisting }), "yt dims");
 }
 
-export async function upsertChannelDays(db: SupabaseClient, rows: { date: string; [k: string]: unknown }[], source: string) {
-  for (const c of byShape(rows.map((d) => ({ ...d, source, updated_at: new Date().toISOString() }))).flatMap((g) => chunk(g))) must(await db.from("gtm_yt_channel_daily").upsert(c, { onConflict: "date" }), "yt channel daily");
+export async function upsertChannelDays(db: SupabaseClient, rows: { date: string; [k: string]: unknown }[], source: string, opts: { ignoreExisting?: boolean } = {}) {
+  for (const c of byShape(rows.map((d) => ({ ...d, source, updated_at: new Date().toISOString() }))).flatMap((g) => chunk(g))) must(await db.from("gtm_yt_channel_daily").upsert(c, { onConflict: "date", ignoreDuplicates: !!opts.ignoreExisting }), "yt channel daily");
 }
 
 /** Writes each finished week's impressions and CTR into the manual row, keeping any number already typed in. */
@@ -58,7 +58,7 @@ export async function rollUpManual(db: SupabaseClient, throughDate: string, sinc
     if (w.ctr == null) continue;
     const prior = must(await db.from("gtm_manual_metrics").select("metrics,note,entered_by").eq("week_start", w.week_start).eq("channel", "youtube").maybeSingle(), "manual read") as { metrics: Record<string, number>; note: string; entered_by: string } | null;
     // A hand-typed week is kept; only API-written or empty weeks are refreshed.
-    if (prior && prior.entered_by !== "youtube-api" && typeof prior.metrics?.impressions === "number") continue;
+    if (prior && prior.entered_by !== "youtube-api" && (typeof prior.metrics?.impressions === "number" || typeof prior.metrics?.ctr === "number")) continue;
     must(await db.from("gtm_manual_metrics").upsert({ week_start: w.week_start, channel: "youtube", metrics: { ...(prior?.metrics ?? {}), impressions: w.impressions, ctr: w.ctr }, note: prior?.note ?? "", entered_by: "youtube-api", updated_at: new Date().toISOString() }, { onConflict: "week_start,channel" }), "manual write");
   }
   return weeks.length;
@@ -89,35 +89,56 @@ export async function syncYouTube(db: SupabaseClient, opts: { today: string; day
     }
   }
 
-  // Impressions and CTR from the Reporting API; files not seen before.
+  // Impressions and CTR from the Reporting API. Google can reissue a day's report under a new id, so only the newest
+  // file per day counts and a day is never added twice.
   const job = await ensureReachJob(token);
   const seen = new Set((must(await db.from("gtm_yt_report_files").select("report_id"), "yt report files") as { report_id: string }[]).map((r) => r.report_id));
-  const reach: ReachRow[] = [];
-  const fresh = (await listReports(token, job.id)).filter((f) => !seen.has(f.id));
-  for (const f of fresh) reach.push(...parseReach(await downloadReport(token, f.downloadUrl)));
+  const listed = (await listReports(token, job.id)).filter((f) => !seen.has(f.id));
+  const newest = new Map<string, (typeof listed)[number]>();
+  for (const f of listed) { const k = f.startTime.slice(0, 10); const cur = newest.get(k); if (!cur || f.createTime > cur.createTime) newest.set(k, f); }
+  const fresh = [...newest.values()];
+  const reach: ReachRow[] = [], perFile = new Map<string, number>();
+  for (const f of fresh) { const rows = parseReach(await downloadReport(token, f.downloadUrl)); perFile.set(f.id, rows.length); reach.push(...rows); }
   for (const r of reach) ids.add(r.video_id);
 
   const known = new Set((must(await db.from("gtm_yt_videos").select("video_id"), "yt videos read") as { video_id: string }[]).map((v) => v.video_id));
   const unknown = [...ids].filter((i) => !known.has(i));
-  if (unknown.length) await upsertVideos(db, await videoDetails(token, unknown));
+  if (unknown.length) {
+    const found = await videoDetails(token, unknown);
+    // A deleted or private video has analytics rows but no Data API entry; a placeholder keeps its rows from failing the foreign key.
+    const got = new Set(found.map((v) => v.video_id));
+    await upsertVideos(db, [...found, ...unknown.filter((i) => !got.has(i)).map((i) => ({ video_id: i, title: "(deleted or private video)", published_at: null, duration_s: null }))]);
+  }
 
   // A reach row can name a video with no analytics row that day, so merge by (date, video).
   const merged = new Map<string, Record<string, unknown>>(days.map((d) => [`${d.date}|${d.video_id}`, d]));
   for (const r of reach) { const k = `${r.date}|${r.video_id}`; merged.set(k, { ...(merged.get(k) ?? { date: r.date, video_id: r.video_id }), impressions: r.impressions, ctr: r.ctr }); }
   await upsertVideoDays(db, [...merged.values()] as never, "api");
 
-  // Channel-level impressions: the sum of the per-video rows, CTR weighted by impressions.
-  const perDay = new Map<string, { imp: number; clicks: number }>();
-  for (const r of reach) { const a = perDay.get(r.date) ?? { imp: 0, clicks: 0 }; a.imp += r.impressions; a.clicks += r.impressions * (r.ctr / 100); perDay.set(r.date, a); }
-  if (perDay.size) await upsertChannelDays(db, [...perDay].map(([date, a]) => ({ date, impressions: a.imp, ctr: a.imp ? Math.round((a.clicks / a.imp) * 10000) / 100 : null })), "api");
-  for (const f of fresh) must(await db.from("gtm_yt_report_files").upsert({ report_id: f.id, report_type: "channel_reach_basic_a1", start_date: f.startTime.slice(0, 10), end_date: f.endTime.slice(0, 10), rows_ingested: 0 }, { onConflict: "report_id" }), "yt report file");
+  // Channel-level impressions: the sum of the per-video rows, CTR weighted by impressions (null when no row reported one).
+  const perDay = new Map<string, { imp: number; clicks: number; known: number }>();
+  for (const r of reach) { const a = perDay.get(r.date) ?? { imp: 0, clicks: 0, known: 0 }; a.imp += r.impressions; if (r.ctr != null) { a.clicks += r.impressions * (r.ctr / 100); a.known += r.impressions; } perDay.set(r.date, a); }
+  if (perDay.size) await upsertChannelDays(db, [...perDay].map(([date, a]) => ({ date, impressions: a.imp, ctr: a.known ? Math.round((a.clicks / a.known) * 10000) / 100 : null })), "api");
+  for (const f of fresh) must(await db.from("gtm_yt_report_files").upsert({ report_id: f.id, report_type: "channel_reach_basic_a1", start_date: f.startTime.slice(0, 10), end_date: f.endTime.slice(0, 10), rows_ingested: perFile.get(f.id) ?? 0 }, { onConflict: "report_id" }), "yt report file");
+  // Reissued files we skipped are marked seen too, so they are not downloaded again.
+  for (const f of listed.filter((x) => !fresh.includes(x))) must(await db.from("gtm_yt_report_files").upsert({ report_id: f.id, report_type: "channel_reach_basic_a1", start_date: f.startTime.slice(0, 10), end_date: f.endTime.slice(0, 10), rows_ingested: 0 }, { onConflict: "report_id" }), "yt report file");
 
-  const traffic = await analyticsQuery(token, { startDate: start, endDate: end, dimensions: ["day", "insightTrafficSourceType"], metrics: ["views", "estimatedMinutesWatched"] });
-  const country = await analyticsQuery(token, { startDate: start, endDate: end, dimensions: ["day", "country"], metrics: ["views", "estimatedMinutesWatched"] });
-  const dim = (t: Table, dimension: DimDay["dimension"], name: string) => t.rows.map((r) => ({ date: String(r[col(t, "day")]), dimension, key: String(r[col(t, name)]), views: num(r[col(t, "views")]) ?? 0, watch_minutes: num(r[col(t, "estimatedMinutesWatched")]) }));
-  const dims = [...dim(traffic, "traffic_source", "insightTrafficSourceType"), ...dim(country, "country", "country")];
+  // The weekly roll-up is the point of the sync, so it runs before the optional breakdowns and they cannot stop it.
+  const weeks = await rollUpManual(db, end, addDays(start, -7));
+
+  const dims: DimDay[] = [];
+  try {
+    const t = await analyticsQuery(token, { startDate: start, endDate: end, dimensions: ["day", "insightTrafficSourceType"], metrics: ["views", "estimatedMinutesWatched"] });
+    for (const r of t.rows) dims.push({ date: String(r[col(t, "day")]), dimension: "traffic_source", key: String(r[col(t, "insightTrafficSourceType")]), views: num(r[col(t, "views")]) ?? 0, watch_minutes: num(r[col(t, "estimatedMinutesWatched")]) } as DimDay);
+  } catch (e) { console.error(`youtube sync: traffic sources: ${(e as Error).message}`); }
+  // Country cannot be combined with day (it is a daily-report filter), so one call per day.
+  try {
+    for (let d = start; d <= end; d = addDays(d, 1)) {
+      const c = await analyticsQuery(token, { startDate: d, endDate: d, dimensions: ["country"], metrics: ["views", "estimatedMinutesWatched"], sort: "-views", maxResults: 250 });
+      for (const r of c.rows) dims.push({ date: d, dimension: "country", key: String(r[col(c, "country")]), views: num(r[col(c, "views")]) ?? 0, watch_minutes: num(r[col(c, "estimatedMinutesWatched")]) } as DimDay);
+    }
+  } catch (e) { console.error(`youtube sync: country: ${(e as Error).message}`); }
   await upsertDims(db, dims, "api");
 
-  const weeks = await rollUpManual(db, end, addDays(start, -7));
   return { videos: unknown.length, videoDays: merged.size, channelDays: channelRows.length, dims: dims.length, reach: { files: fresh.length, rows: reach.length, jobCreated: job.created }, subscribers: info.subscribers, weeks, through: end };
 }
