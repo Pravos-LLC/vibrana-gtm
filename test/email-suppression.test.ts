@@ -54,4 +54,8 @@ test("the change to a person: only the owned fields, never another address, noth
   assert.equal(o.data.gtmMarketingConsent, "UNSUBSCRIBED"); assert.match(o.data.gtmConsentEvidence, /^site signup\nUNSUBSCRIBED from an email reply on 2026-11-05/);
   assert.equal(S.changeFor(optOut, { ...base, gtmMarketingConsent: "UNSUBSCRIBED" }, now), null, "an existing opt-out is kept as it is");
   assert.equal(S.applyEnabled({}), false); assert.equal(S.applyEnabled({ EMAIL_SUPPRESSION_APPLY: "1" }), true);
+  const asText = { ...base, gtmEmailRestrictions: JSON.stringify({ version: 1, addresses: { "old@x.test": { reason: "ADDRESS_OPT_OUT" } }, holds: [{ reason: "OPT_OUT_REVIEW" }] }) };
+  const t = S.changeFor(op, asText, now) as { data: { gtmEmailRestrictions: { addresses: Record<string, unknown>; holds: unknown[] } } };
+  assert.deepEqual(Object.keys(t.data.gtmEmailRestrictions.addresses).sort(), ["ana@prospect.test", "old@x.test"], "a value stored as JSON text keeps its entries");
+  assert.equal(t.data.gtmEmailRestrictions.holds.length, 1, "and its holds");
 });

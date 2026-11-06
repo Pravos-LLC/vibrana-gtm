@@ -18,7 +18,7 @@ import { must } from "../db";
 import type { TwentyReader } from "../twenty";
 import { addressHash } from "../team/crypto";
 import { selectAll } from "../team/mailbox";
-import { personEmails, readRestrictions, RESTRICTIONS_FIELD } from "../team/restrictions";
+import { emailRefusals, personEmails, readRestrictions, RESTRICTIONS_FIELD, UNREADABLE } from "../team/restrictions";
 
 export const POLICY_VERSION = "suppression-v1";
 export const ORIGAMI_HELD = "Origami exclusion scope and queued-send behavior not verified yet (VIB-513, AC497-05)";
@@ -48,10 +48,10 @@ export function proposeOps(attempts: AttemptIn[], labels: LabelIn[], replySender
     if (l.superseded_at || !l.person_id || l.opt_out === "none") continue;
     const confirmed = l.source === "human" || l.source === "provider";
     if (l.opt_out === "person" && confirmed) {
-      out.push(...both({ op_key: `person:${l.person_id}:optout`, action: "person_opt_out", person_id: l.person_id, address_hash: null, reason: "UNSUBSCRIBED", evidence_event_id: l.event_id, label_id: l.id, observed_at: l.labeled_at }));
+      out.push(...both({ op_key: `person:${l.person_id}:optout:${l.id}`, action: "person_opt_out", person_id: l.person_id, address_hash: null, reason: "UNSUBSCRIBED", evidence_event_id: l.event_id, label_id: l.id, observed_at: l.labeled_at }));
     } else if (l.opt_out === "address" && confirmed && l.event_id != null && replySender.get(l.event_id)) {
       const h = replySender.get(l.event_id)!;
-      out.push(...both({ op_key: `addr:${l.person_id}:${h}:optout`.toLowerCase(), action: "address_opt_out", person_id: l.person_id, address_hash: h, reason: "ADDRESS_OPT_OUT", evidence_event_id: l.event_id, label_id: l.id, observed_at: l.labeled_at }));
+      out.push(...both({ op_key: `addr:${l.person_id}:${h}:optout:${l.id}`.toLowerCase(), action: "address_opt_out", person_id: l.person_id, address_hash: h, reason: "ADDRESS_OPT_OUT", evidence_event_id: l.event_id, label_id: l.id, observed_at: l.labeled_at }));
     } else {
       // A possible opt-out, or one whose scope is unclear: a person decides. Only the review exists, never an apply.
       out.push({ op_key: `review:${l.person_id}:${l.event_id ?? l.id}`, destination: "twenty", action: "person_opt_out", person_id: l.person_id, address_hash: null, reason: "OPT_OUT_REVIEW",
@@ -81,12 +81,21 @@ export async function detect(db: SupabaseClient) {
   }
   const ops = proposeOps(attempts, labels, sender);
   await recordProposals(db, ops);
+  // Operations whose evidence is no longer current (a decision corrected or superseded, a review resolved) are canceled
+  // before anything is applied; a new decision is a new operation needing its own approval (review of #33, finding 3).
+  // Written history (applied, confirmed) is never undone here.
+  const current = new Set(ops.map((o) => `${o.op_key}|${o.destination}`));
+  const open = must(await db.from("gtm_email_sync_ops").select("id,op_key,destination").in("state", ["pending_review", "approved", "failed", "held"]), "open operations") as { id: number; op_key: string; destination: string }[];
+  const stale = open.filter((o) => !current.has(`${o.op_key}|${o.destination}`)).map((o) => o.id);
+  for (let i = 0; i < stale.length; i += 200) {
+    must(await db.from("gtm_email_sync_ops").update({ state: "canceled", last_error: "evidence no longer current", updated_at: new Date().toISOString() }).in("id", stale.slice(i, i + 200)).in("state", ["pending_review", "approved", "failed", "held"]), "cancel stale operations");
+  }
   return ops;
 }
 
 /* ------------------------------------------------------------------------------------------------ dry run */
 
-export type StoredOp = Op & { id: number; approved_at: string | null; approval_ref: string | null; applied_at: string | null; confirmed_at: string | null; attempts: number; created_at: string };
+export type StoredOp = Omit<Op, "state"> & { state: string; id: number; approved_at: string | null; approval_ref: string | null; applied_at: string | null; confirmed_at: string | null; attempts: number; created_at: string };
 
 /** The dry-run report: counts only, no person, no address. Includes what a person opt-out also does elsewhere. */
 export function planReport(ops: StoredOp[]) {
@@ -130,7 +139,9 @@ export function changeFor(op: StoredOp, p: Live, now: Date): { data: Record<stri
   const address = personEmails(p).find((e) => addressHash(e) === op.address_hash);
   if (!address) return { error: "the address is no longer on the person" };
   if (r.addresses.has(address)) return null;
-  const raw = (typeof p.gtmEmailRestrictions === "object" && p.gtmEmailRestrictions) ? p.gtmEmailRestrictions as { addresses?: Record<string, unknown>; holds?: unknown[] } : {};
+  // The stored value may be an object or its JSON text; merge from exactly what was read (review of #33, finding 2).
+  const parsed = typeof p.gtmEmailRestrictions === "string" ? JSON.parse(p.gtmEmailRestrictions) : p.gtmEmailRestrictions;
+  const raw = (parsed && typeof parsed === "object") ? parsed as { addresses?: Record<string, unknown>; holds?: unknown[] } : {};
   return { data: { [RESTRICTIONS_FIELD]: { version: 1, holds: raw.holds ?? [], addresses: { ...(raw.addresses ?? {}),
     [address]: { reason: op.reason, source: "gtm", sourceRef: `gtm:op:${op.id}`, observedAt: op.observed_at, recordedAt: now.toISOString() } } } } };
 }
@@ -138,39 +149,47 @@ export function changeFor(op: StoredOp, p: Live, now: Date): { data: Record<stri
 export const applyEnabled = (env: Record<string, string | undefined> = process.env) => env.EMAIL_SUPPRESSION_APPLY === "1";
 
 /**
- * Applies approved Twenty operations one at a time through the paced reader: read the person live, compute the change,
- * re-read and compare updatedAt just before writing (a concurrent edit wins and the op retries later), write only the owned
- * fields, read back, and mark confirmed. Origami operations are never touched here.
+ * Applies approved Twenty operations one at a time through the paced reader, under the apply lease the cron and the CLI
+ * share. Each write is conditional on the person's updatedAt as read (Twenty's filtered update: one server-side UPDATE
+ * ... WHERE id AND updatedAt), so a concurrent human edit is never overwritten; the op retries next run (finding 1).
+ * Only the owned fields are written, and an op is confirmed only on read-back. An op left `applied` by a crash is resumed:
+ * read back first, written again only if the change is not there (finding 5). Origami operations are never touched here.
  */
 export async function applyTwenty(db: SupabaseClient, reader: TwentyReader, now: Date, limit = 25) {
   if (!applyEnabled()) return { skipped: "EMAIL_SUPPRESSION_APPLY is not 1" };
-  const ops = must(await db.from("gtm_email_sync_ops").select("*").eq("destination", "twenty").in("state", ["approved", "failed"]).not("approved_at", "is", null)
-    .lt("attempts", 5).order("id").limit(limit), "approved operations") as StoredOp[];
-  const out = { confirmed: 0, unchanged: 0, failed: 0 };
-  const person = async (id: string) => (await reader.all<Live>("people", READ, { id: { eq: id } }, "PersonFilterInput", 1, 1))[0] ?? null;
-  for (const op of ops) {
-    const mark = (patch: Record<string, unknown>) => db.from("gtm_email_sync_ops").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", op.id);
-    try {
-      const live = await person(op.person_id);
-      if (!live) throw new Error("the person is not in Twenty");
-      const c = changeFor(op, live, now);
-      if (c && "error" in c) throw new Error(c.error);
-      if (c) {
-        const again = await person(op.person_id);
-        if (!again || again.updatedAt !== live.updatedAt) throw new Error("the person changed while applying; retried next run");
-        await reader.read("mutation($id:UUID!,$d:PersonUpdateInput!){ updatePerson(id:$id, data:$d) { id } }", { id: op.person_id, d: c.data });
-        must(await mark({ state: "applied", applied_at: now.toISOString() }), "mark applied");
+  const holder = `apply-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
+  const lease = await db.rpc("gtm_take_lease", { p_job: "email.suppression.apply", p_holder: holder, p_seconds: 600 });
+  if (lease.error || lease.data !== true) return { skipped: "another apply holds the lease, or it could not be taken" };
+  try {
+    const ops = must(await db.from("gtm_email_sync_ops").select("*").eq("destination", "twenty").in("state", ["approved", "failed", "applied"]).not("approved_at", "is", null)
+      .lt("attempts", 5).order("id").limit(limit), "approved operations") as StoredOp[];
+    const out = { confirmed: 0, unchanged: 0, failed: 0 };
+    const person = async (id: string) => (await reader.all<Live>("people", READ, { id: { eq: id } }, "PersonFilterInput", 1, 1))[0] ?? null;
+    for (const op of ops) {
+      const mark = (patch: Record<string, unknown>) => db.from("gtm_email_sync_ops").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", op.id).eq("state", op.state);
+      try {
+        const live = await person(op.person_id);
+        if (!live) throw new Error("the person is not in Twenty");
+        const c = changeFor(op, live, now);
+        if (c && "error" in c) throw new Error(c.error);
+        if (c) {
+          const res = await reader.read<{ updatePeople: { id: string }[] }>("mutation($f:PersonFilterInput!,$d:PersonUpdateInput!){ updatePeople(filter:$f, data:$d) { id } }",
+            { f: { and: [{ id: { eq: op.person_id } }, { updatedAt: { eq: live.updatedAt } }] }, d: c.data });
+          if (!res.updatePeople?.length) throw new Error("the person changed while applying; retried next run");
+          must(await mark({ state: "applied", applied_at: now.toISOString() }), "mark applied");
+          op.state = "applied";
+        }
+        const back = await person(op.person_id);
+        if (!back || changeFor(op, back, now) !== null) throw new Error("read-back does not show the change");
+        must(await mark({ state: "confirmed", confirmed_at: new Date().toISOString(), last_error: null, applied_at: op.applied_at ?? now.toISOString() }), "mark confirmed");
+        if (c) out.confirmed++; else out.unchanged++;
+      } catch (e) {
+        out.failed++;
+        await mark({ state: "failed", attempts: op.attempts + 1, last_error: (e as Error).message.slice(0, 300).replace(/[^\s@]+@[^\s@]+/g, "[address]") });
       }
-      const back = await person(op.person_id);
-      if (!back || changeFor(op, back, now) !== null) throw new Error("read-back does not show the change");
-      must(await mark({ state: "confirmed", confirmed_at: new Date().toISOString(), last_error: null, applied_at: op.applied_at ?? now.toISOString() }), "mark confirmed");
-      if (c) out.confirmed++; else out.unchanged++;
-    } catch (e) {
-      out.failed++;
-      await mark({ state: "failed", attempts: op.attempts + 1, last_error: (e as Error).message.slice(0, 300).replace(/[^\s@]+@[^\s@]+/g, "[address]") });
     }
-  }
-  return out;
+    return out;
+  } finally { await db.rpc("gtm_release_lease", { p_job: "email.suppression.apply", p_holder: holder }); }
 }
 
 /* ------------------------------------------------------------------------------------------------ the desk guard */
@@ -180,13 +199,28 @@ export async function applyTwenty(db: SupabaseClient, reader: TwentyReader, now:
  * possible one under review), a restriction on the address, or a permanent failure already seen there. [] means no hold.
  * The desk cannot stop a send from Gmail itself; it refuses to record one and says why.
  */
-export async function emailHolds(db: SupabaseClient, personId: string, address: string | null): Promise<string[]> {
+export async function emailHolds(db: SupabaseClient, personId: string, address: string | null, reader?: TwentyReader): Promise<string[]> {
   const out: string[] = [];
+  // Twenty's own state first: a restriction or opt-out a person set there has no local operation (review of #33,
+  // finding 4). Fails closed: if Twenty cannot be read, the desk does not record the send.
+  if (reader) {
+    let live: Live | null;
+    try { live = (await reader.all<Live>("people", READ, { id: { eq: personId } }, "PersonFilterInput", 1, 1))[0] ?? null; } catch {
+      return ["the CRM could not be checked for email restrictions; try again"];
+    }
+    if (live) {
+      if (live.gtmMarketingConsent === "UNSUBSCRIBED") out.push("they opted out");
+      for (const r of emailRefusals(live, address)) {
+        const why = r === UNREADABLE ? "the CRM's email restrictions are unreadable" : r.startsWith("email_hold_") ? "email is on hold in the CRM" : r.startsWith("address_") && r !== "address_not_on_person" ? "this address is restricted in the CRM" : null;
+        if (why && !out.includes(why)) out.push(why);
+      }
+    }
+  }
   const ops = must(await db.from("gtm_email_sync_ops").select("action,reason,state,address_hash").eq("person_id", personId).eq("destination", "twenty").neq("state", "canceled"), "holds") as { action: string; reason: string; state: string; address_hash: string | null }[];
-  if (ops.some((o) => o.action === "person_opt_out")) out.push(ops.some((o) => o.reason === "UNSUBSCRIBED") ? "they opted out" : "a possible opt-out is waiting for review");
+  if (ops.some((o) => o.action === "person_opt_out")) { const why = ops.some((o) => o.reason === "UNSUBSCRIBED") ? "they opted out" : "a possible opt-out is waiting for review"; if (!out.includes(why)) out.push(why); }
   if (address) {
     const h = addressHash(address);
-    if (ops.some((o) => o.address_hash === h)) out.push("this address is restricted");
+    if (ops.some((o) => o.address_hash === h)) { if (!out.includes("this address is restricted")) out.push("this address is restricted"); }
     else {
       const failed = must(await db.from("gtm_email_attempts").select("id").eq("recipient_hash", h).eq("delivery", "failed_invalid_address").limit(1), "failed address") as unknown[];
       if (failed.length) out.push("this address bounced as invalid");

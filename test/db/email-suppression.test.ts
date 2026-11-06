@@ -58,16 +58,57 @@ test("without the flag nothing is written; with it the writer re-reads, writes t
   process.env.EMAIL_SUPPRESSION_APPLY = "1";
   const person = (r: unknown) => JSON.stringify({ data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: P, updatedAt: "u1", emails: { primaryEmail: "ana@prospect.test", additionalEmails: [] }, gtmMarketingConsent: "NONE", gtmConsentEvidence: null, gtmEmailRestrictions: r } }] } } });
   mock = installFetchMock([
-    { url: "https://crm.test/graphql", body: person(null), times: 2 },
-    { url: "https://crm.test/graphql", json: { data: { updatePerson: { id: P } } }, times: 1 },
+    { url: "https://crm.test/graphql", body: person(null), times: 1 },
+    { url: "https://crm.test/graphql", json: { data: { updatePeople: [{ id: P }] } }, times: 1 },
     { url: "https://crm.test/graphql", body: person({ version: 1, addresses: { "ana@prospect.test": { reason: "EMAIL_BOUNCED" } }, holds: [] }), times: 1 },
     DB,
   ]);
   const r = await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date());
   assert.deepEqual(r, { confirmed: 1, unchanged: 0, failed: 0 });
-  const write = mock.calls.find((c) => c.url.startsWith("https://crm.test") && /updatePerson/.test(c.body ?? ""))!;
+  const write = mock.calls.find((c) => c.url.startsWith("https://crm.test") && /updatePeople/.test(c.body ?? ""))!;
   const vars = JSON.parse(write.body!).variables;
   assert.deepEqual(Object.keys(vars.d), ["gtmEmailRestrictions"], "only the owned field is written");
+  assert.deepEqual(vars.f, { and: [{ id: { eq: P } }, { updatedAt: { eq: "u1" } }] }, "conditional on the version read");
   assert.equal((await ops())[0].state, "confirmed");
   assert.equal((await ops())[1].state, "held", "Origami is never touched");
+});
+
+const personBody = (r: unknown, updatedAt = "u1") => JSON.stringify({ data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: P, updatedAt, emails: { primaryEmail: "ana@prospect.test", additionalEmails: [] }, gtmMarketingConsent: "NONE", gtmConsentEvidence: null, gtmEmailRestrictions: r } }] } } });
+
+test("a concurrent edit makes the conditional write match nothing: the op fails and retries, nothing is overwritten", async () => {
+  await fresh(); await S.detect(admin());
+  await S.approve(admin(), (await ops()).map((o) => o.id), "dry run 2026-11-06 approved by test", new Date());
+  process.env.EMAIL_SUPPRESSION_APPLY = "1";
+  mock = installFetchMock([{ url: "https://crm.test/graphql", body: personBody(null), times: 1 }, { url: "https://crm.test/graphql", json: { data: { updatePeople: [] } }, times: 1 }, DB]);
+  assert.deepEqual(await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date()), { confirmed: 0, unchanged: 0, failed: 1 });
+  const [o] = await ops();
+  assert.equal(o.state, "failed"); assert.match(o.last_error!, /changed while applying/);
+});
+
+test("an op left applied by a crash is confirmed by read-back on the next run, without writing again", async () => {
+  await fresh(); await S.detect(admin());
+  await S.approve(admin(), (await ops()).map((o) => o.id), "dry run 2026-11-06 approved by test", new Date());
+  const id = (await ops())[0].id;
+  await admin().from("gtm_email_sync_ops").update({ state: "applied", applied_at: new Date().toISOString() }).eq("id", id);
+  process.env.EMAIL_SUPPRESSION_APPLY = "1";
+  const done = personBody({ version: 1, addresses: { "ana@prospect.test": { reason: "EMAIL_BOUNCED" } }, holds: [] });
+  mock = installFetchMock([{ url: "https://crm.test/graphql", body: done }, DB]);
+  assert.deepEqual(await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date()), { confirmed: 0, unchanged: 1, failed: 0 });
+  assert.ok(!mock.calls.some((c) => /updatePeople/.test(c.body ?? "")));
+  assert.equal((await ops())[0].state, "confirmed");
+});
+
+test("a corrected decision cancels its pending review; a CRM-only hold or opt-out still holds the desk; an unreadable CRM fails closed", async () => {
+  await fresh(); await S.detect(admin());
+  const db = admin();
+  await db.from("gtm_email_reply_labels").update({ superseded_at: new Date().toISOString() }).eq("person_id", P).eq("source", "deterministic");
+  await S.detect(db);
+  assert.equal((await ops()).find((o) => o.reason === "OPT_OUT_REVIEW")!.state, "canceled");
+  await db.from("gtm_email_sync_ops").delete().eq("person_id", P);
+  await db.from("gtm_email_attempts").update({ delivery: "no_failure_observed", delivery_at: null }).eq("person_id", P);
+  mock = installFetchMock([{ url: "https://crm.test/graphql", body: personBody({ version: 1, addresses: {}, holds: [{ reason: "OPT_OUT_REVIEW" }] }), times: 1 },
+    { url: "https://crm.test/graphql", status: 500, json: {} }, DB]);
+  const reader = new TwentyReader({ pauseMs: 0, retries: 0 });
+  assert.deepEqual(await S.emailHolds(db, P, "ana@prospect.test", reader), ["email is on hold in the CRM"]);
+  assert.deepEqual(await S.emailHolds(db, P, "ana@prospect.test", reader), ["the CRM could not be checked for email restrictions; try again"]);
 });

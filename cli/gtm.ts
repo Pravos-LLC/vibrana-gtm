@@ -1758,6 +1758,7 @@ const commands: Record<string, () => Promise<void>> = {
     }
     if (sub === "apply") {
       const { TwentyReader } = await import("../lib/twenty");
+      await S.detect(db);   // cancel operations whose evidence was corrected before anything is applied
       const r = await S.applyTwenty(db, new TwentyReader({ deadline: Date.now() + 240_000 }), now);
       return out(r, () => console.log(JSON.stringify(r)));
     }
