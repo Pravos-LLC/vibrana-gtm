@@ -185,7 +185,12 @@ test("desk: first touches, replies and labels by owner and track; rates wait for
   assert.equal(john.replies, 1);
   assert.equal(john.unlabeled, 1);
   assert.equal(john.bounces, 1);
-  assert.equal(john.replyRate, 1 / 12);
+  assert.equal(john.replyRate, null, "rates are by first touches at least 7 days old: fewer than 10 are mature yet");
+  const later = metrics.deskStats(rows, { ...W, end: new Date(Date.parse("2026-11-27T00:00:00Z")) }, ownerOf, "JOHN", "client");
+  assert.equal(later.replyRate, 1 / 12, "once the cohort is 7 days old, replied first touches over first touches");
+  const unknown = (by: string | null) => (by === "abe@hq.test" ? "ABE" as const : null);
+  assert.equal(metrics.deskStats(rows, W, unknown, "JOHN", "client").firstTouches, 0, "an unknown sender is nobody's, never John's by default");
+  assert.equal(metrics.deskStats(rows, W, unknown, null, "client").firstTouches, 13, "but still counted in the all-owners view");
   const abe = metrics.deskStats(rows, W, ownerOf, "ABE", "client");
   assert.deepEqual([abe.firstTouches, abe.positive, abe.replyRate], [1, 1, null]);
   assert.equal(metrics.deskStats(rows, W, ownerOf, null, "guest").firstTouches, 1);

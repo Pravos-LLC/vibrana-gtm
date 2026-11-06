@@ -2,6 +2,7 @@
 // Definitions: hub gtm/strategy/pipeline-metrics.md. A number with no source says so (null), never 0.
 import { averageShare, requiredFeeUsd, takeHomeShare, toUsd, type Milestone } from "./economics";
 import { OPEN_STAGES, MIN_MEASURED, type OpenStage, type SalesSettings } from "./settings";
+import { isPositive, MATURE_DAYS } from "../email/metrics";
 import type { Owner, SalesDeal, Source } from "./deals";
 
 const DAY = 86_400_000;
@@ -136,25 +137,31 @@ export type ChannelStats = {
   linkedinNotes: number; linkedinAccepted: number; acceptRate: number | null; unlabeled: number;
 };
 
-/** `ownerOf` maps the address that marked a send to an owner code (the desk records who clicked "Mark sent"). */
-export function deskStats(rows: DeskRow[], w: Window, ownerOf: (by: string | null) => Owner, owner: Owner | null, track?: string): ChannelStats {
+/**
+ * `ownerOf` maps the address that marked a send to an owner code (the desk records who clicked "Mark sent"); an address it
+ * does not know is unattributed (null): counted in the all-owners view, in nobody's own.
+ * Email contract v1 (VIB-496/VIB-512): counts are activity in the window; rates are by the cohort of first touches sent in
+ * the window and at least 7 days old, hidden below MIN_MEASURED. "Positive" includes the contract's "interested".
+ */
+export function deskStats(rows: DeskRow[], w: Window, ownerOf: (by: string | null) => Owner | null, owner: Owner | null, track?: string): ChannelStats {
   const mine = rows.filter((r) => (!track || (r.track ?? "client") === track));
   const email = mine.filter((r) => !owner || ownerOf(r.email_sent_by) === owner);
   const li = mine.filter((r) => !owner || ownerOf(r.linkedin_sent_by) === owner);
   const touches = email.filter((r) => inWindow(r.email_sent_at, w));
   const replies = email.filter((r) => inWindow(r.email_replied_at, w));
-  const repliedTouches = touches.filter((r) => r.email_replied_at).length;
+  const mature = touches.filter((r) => Date.parse(r.email_sent_at!) <= w.end.getTime() - MATURE_DAYS * 86_400_000);
+  const repliedTouches = mature.filter((r) => r.email_replied_at).length;
   const bounces = touches.filter((r) => r.email_bounced_at).length;
-  const positive = replies.filter((r) => r.reply_sentiment === "positive").length;
+  const positive = replies.filter((r) => isPositive(r.reply_sentiment)).length;
   const notes = li.filter((r) => inWindow(r.linkedin_sent_at, w));
   const accepted = notes.filter((r) => r.linkedin_status === "connected").length;
-  const n = touches.length;
+  const n = mature.length;
   return {
-    firstTouches: n, followUps: email.filter((r) => inWindow(r.follow_up_sent_at, w)).length,
+    firstTouches: touches.length, followUps: email.filter((r) => inWindow(r.follow_up_sent_at, w)).length,
     replies: replies.length, positive, bounces,
     replyRate: n >= MIN_MEASURED ? repliedTouches / n : null,
-    positiveRate: n >= MIN_MEASURED ? touches.filter((r) => r.reply_sentiment === "positive").length / n : null,
-    bounceRate: n >= MIN_MEASURED ? bounces / n : null,
+    positiveRate: n >= MIN_MEASURED ? mature.filter((r) => isPositive(r.reply_sentiment)).length / n : null,
+    bounceRate: touches.length >= MIN_MEASURED ? bounces / touches.length : null,
     linkedinNotes: notes.length, linkedinAccepted: accepted, acceptRate: notes.length >= MIN_MEASURED ? accepted / notes.length : null,
     unlabeled: replies.filter((r) => !r.reply_sentiment).length,
   };

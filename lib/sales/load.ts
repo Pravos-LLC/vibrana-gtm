@@ -18,13 +18,14 @@ const settle = async <T>(p: Promise<T>): Promise<Loaded<T>> => {
 export const parseOwner = (v: string | undefined): Owner | null => (v === "JOHN" || v === "ABE" ? v : null);
 export const parsePeriod = (v: string | undefined): PeriodKey => (v === "90" || v === "qtd" ? v : "30");
 
-/** Desk sends are marked by a login or sent from a mailbox; a team member's address means them, anything else is John. */
-export function ownerOfSender(): (by: string | null) => Owner {
+/** Desk sends are marked by a login or sent from a mailbox; a team member's address means them. Anything else is
+ *  unattributed (null), never assumed to be John (email contract v1, VIB-512). */
+export function ownerOfSender(): (by: string | null) => Owner | null {
   let members: ReturnType<typeof teamMembers> = [];
   try { members = teamMembers(); } catch { members = []; }
   const map = new Map<string, Owner>();
   for (const m of members) if (m.code === "ABE" || m.code === "JOHN") for (const a of [m.authEmail, ...m.mailboxes]) map.set(a.toLowerCase(), m.code);
-  return (by) => (by ? map.get(by.toLowerCase()) ?? "JOHN" : "JOHN");
+  return (by) => (by ? map.get(by.toLowerCase()) ?? null : null);
 }
 
 export const loadDeals = (timeoutMs = 8_000): Promise<Loaded<DealRead>> => settle(salesDeals({ timeoutMs }));
