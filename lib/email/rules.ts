@@ -14,7 +14,8 @@
 export type Delivery = "delayed" | "failed_invalid_address" | "failed_policy" | "failed_unclassified";
 export type FailureRecipient = { address: string; delivery: Delivery; status: string | null };
 
-const POLICY = /\b(spam|blocked|block list|blocklist|blacklist|reputation|policy|dmarc|dkim|spf|authenticat|rejected for security|not authorized to send|5\.7\.\d+)\b/i;
+// Sender-side wording wins over an address status: "550 5.1.1 authentication required" is the sender's problem (review of #32, F1).
+const POLICY = /\b(spam|blocked|block ?list|blacklist(ed)?|reputation|policy|dmarc|dkim|spf|(un)?authenticat\w*|rejected for security|not authori[sz]ed to send|5\.7\.\d+)\b/i;
 
 export function classifyStatus(status: string | null, action: string | null, diagnostic: string): Delivery | null {
   const s = (status ?? "").trim(), a = (action ?? "").trim().toLowerCase();
@@ -48,9 +49,12 @@ export function parseDeliveryStatus(text: string): FailureRecipient[] {
 export function newText(text: string): string {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
-  for (const l of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
     if (/^\s*>/.test(l)) continue;
-    if (/^\s*On .{3,200}wrote:\s*$/i.test(l) || /^\s*-{2,}\s*(Original Message|Forwarded message)/i.test(l) || /^\s*From:\s.+$/i.test(l) && out.length > 0) break;
+    // An attribution line, also when a mail client wraps it over up to three lines ("On Thu, ..., Sender" / "<a@b> wrote:").
+    if (/^\s*On\s/i.test(l) && lines.slice(i, i + 3).some((x) => /wrote:\s*$/i.test(x))) break;
+    if (/^\s*-{2,}\s*(Original Message|Forwarded message)/i.test(l) || (/^\s*From:\s.+$/i.test(l) && out.length > 0)) break;
     out.push(l);
   }
   return out.join("\n").trim();
@@ -64,6 +68,8 @@ export type ReplyRule = { intent: "auto_reply" | "uncertain"; opt_out: "none" | 
 /**
  * What the rules alone can say about a reply. A possible opt-out is "uncertain" and goes to a person; everything else is
  * "uncertain" intent for the model or a person to decide. `auto` is the Auto-Submitted/Precedence verdict from headers.
+ * Scope: messages whose headers already declare them automated never become replies (lib/team/classify.ts threadOutcome),
+ * so they are not labeled; `auto` here catches a reply whose headers say so only when it reached this point otherwise.
  */
 export function replyRule(text: string, auto: boolean): ReplyRule {
   const fresh = newText(text);

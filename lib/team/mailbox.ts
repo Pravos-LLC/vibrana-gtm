@@ -578,7 +578,15 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     const replyEvents: Event[] = [];
     const failed: { attemptId: number; at: number; reportId: string; delivery?: string }[] = [];
     const ruled: { replyId: string; persons: string[]; intent: string; opt_out: string }[] = [];
-    const knownReplies = new Set([...recent, ...older].filter((e) => e.kind === "reply").map((e) => e.gmail_message_id));
+    // A reply is done with the rules once a rule decision is stored for it (a neutral one included). An existing reply
+    // event alone is not: a run that stopped early, a failed label write or an older metadata-only grant leave it to retry
+    // (review of #32, F3).
+    const replyRows = [...recent, ...older].filter((e) => e.kind === "reply");
+    const ruledDone = new Set<number>();
+    if (bodies) for (let i = 0; i < replyRows.length; i += 200) {
+      for (const l of must(await db.from("gtm_email_reply_labels").select("event_id").eq("source", "deterministic").in("event_id", replyRows.slice(i, i + 200).map((e) => e.id)), "rule decisions") as { event_id: number }[]) ruledDone.add(l.event_id);
+    }
+    const knownReplies = new Set(replyRows.filter((e) => ruledDone.has(e.id)).map((e) => e.gmail_message_id));
     let threadsDone = true;
     const scanned = new Set<string>();
     for (let k = 0; k < Math.min(cap, open.length); k++) {
@@ -602,7 +610,7 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
             const rule = replyRule(text, autoMessage(m));
             result.replies_checked++;
             if (rule.opt_out !== "none") result.possible_opt_outs++;
-            if (rule.intent !== "uncertain" || rule.opt_out !== "none") ruled.push({ replyId: r.id, persons: who, intent: rule.intent, opt_out: rule.opt_out });
+            ruled.push({ replyId: r.id, persons: who, intent: rule.intent, opt_out: rule.opt_out });   // neutral too: the completion record
           }
         }
         replyEvents.push({ member: row.member, gmail_message_id: r.id, thread_id: threadId, kind: "reply", at: new Date(r.at).toISOString(),

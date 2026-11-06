@@ -78,40 +78,45 @@ export const alertRecipients = (fallback: string, env: Record<string, string | u
 
 /**
  * Opens an incident or refreshes the open one with the same key; resolves open incidents of the given kinds whose key is
- * no longer observed. Returns the incidents that are new (not yet emailed), which the caller emails once and marks.
+ * no longer observed, except kinds in `unchecked` (their check could not run, so a prior problem is not known to be gone,
+ * review of #32 F5). The text an incident is emailed with is fixed when it opens (`detail.notice`). Returns open incidents
+ * that have not been emailed yet.
  */
-export async function reconcileIncidents(db: SupabaseClient, observed: Incident[], kinds: string[], now: Date) {
-  const open = must(await db.from("gtm_email_incidents").select("id,incident_key,kind,notified_at").is("resolved_at", null).in("kind", kinds), "open incidents") as { id: number; incident_key: string; kind: string; notified_at: string | null }[];
+export async function reconcileIncidents(db: SupabaseClient, observed: Incident[], kinds: string[], now: Date, unchecked: Set<string> = new Set()) {
+  const open = must(await db.from("gtm_email_incidents").select("id,incident_key,kind,severity,summary,detail,notified_at").is("resolved_at", null).in("kind", kinds), "open incidents") as
+    { id: number; incident_key: string; kind: string; severity: Incident["severity"]; summary: string; detail: Record<string, unknown>; notified_at: string | null }[];
   const seen = new Set(observed.map((o) => o.key));
-  for (const o of open) if (!seen.has(o.incident_key)) must(await db.from("gtm_email_incidents").update({ resolved_at: now.toISOString(), last_seen_at: now.toISOString() }).eq("id", o.id), "resolve incident");
-  const toNotify: (Incident & { id: number })[] = [];
+  for (const o of open) if (!seen.has(o.incident_key) && !unchecked.has(o.kind)) must(await db.from("gtm_email_incidents").update({ resolved_at: now.toISOString(), last_seen_at: now.toISOString() }).eq("id", o.id), "resolve incident");
   for (const o of observed) {
     const cur = open.find((x) => x.incident_key === o.key);
-    if (cur) {
-      must(await db.from("gtm_email_incidents").update({ last_seen_at: now.toISOString(), summary: o.summary.slice(0, 300), detail: o.detail ?? {} }).eq("id", cur.id), "refresh incident");
-      if (!cur.notified_at) toNotify.push({ ...o, id: cur.id });
-    } else {
-      const row = must(await db.from("gtm_email_incidents").insert({ incident_key: o.key, kind: o.kind, severity: o.severity, summary: o.summary.slice(0, 300), detail: o.detail ?? {}, opened_at: now.toISOString(), last_seen_at: now.toISOString() }).select("id").single(), "open incident") as { id: number };
-      toNotify.push({ ...o, id: row.id });
-    }
+    if (cur) must(await db.from("gtm_email_incidents").update({ last_seen_at: now.toISOString(), summary: o.summary.slice(0, 300), detail: { ...(o.detail ?? {}), notice: cur.detail?.notice ?? cur.summary } }).eq("id", cur.id), "refresh incident");
+    else must(await db.from("gtm_email_incidents").insert({ incident_key: o.key, kind: o.kind, severity: o.severity, summary: o.summary.slice(0, 300), detail: { ...(o.detail ?? {}), notice: o.summary.slice(0, 300) }, opened_at: now.toISOString(), last_seen_at: now.toISOString() }), "open incident");
   }
-  return toNotify;
+  return must(await db.from("gtm_email_incidents").select("id,incident_key,kind,severity,summary,detail").is("resolved_at", null).is("notified_at", null).in("kind", kinds), "incidents to email") as
+    { id: number; incident_key: string; kind: string; severity: Incident["severity"]; summary: string; detail: Record<string, unknown> }[];
 }
 
-/** One email for the new incidents, to every alert recipient, idempotent per incident set; marks them notified. */
-export async function notifyIncidents(db: SupabaseClient, incidents: (Incident & { id: number })[], mail: { to: string[]; from: string }, now: Date) {
+/**
+ * One email per incident, each with its own idempotency key and the text fixed when it opened, so a retry after a crash
+ * (or after the notified mark failed) repeats the same request and the provider sends it once (review of #32, F4). The
+ * provider's idempotency window is finite (about a day); an incident still unmarked after that may be sent again, which
+ * the hourly schedule makes a rare, visible duplicate rather than a silent loss.
+ */
+export async function notifyIncidents(db: SupabaseClient, incidents: { id: number; severity: string; detail: Record<string, unknown>; summary: string }[], mail: { to: string[]; from: string }, now: Date) {
   if (!incidents.length) return { sent: false };
   assertLiveProvidersAllowed();
   const key = process.env.RESEND_API_KEY;
   if (!key) throw new Error("email health alert: RESEND_API_KEY is not set");
   if (!mail.to.length) throw new Error("email health alert: no recipients (EMAIL_ALERT_TO)");
-  const text = [`Email health: ${incidents.length} new incident${incidents.length === 1 ? "" : "s"}. Either of you can pick these up; they stay open on /performance/team until the check passes.`, "",
-    ...incidents.map((i) => `- [${i.severity}] ${i.summary}`), "", "Alerts never pause a campaign by themselves."].join("\n");
-  const res = await providerFetch()("https://api.resend.com/emails", {
-    method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "idempotency-key": `email-health/${incidents.map((i) => i.id).sort().join(",")}` },
-    body: JSON.stringify({ from: mail.from, to: mail.to, subject: `Email health: ${incidents[0].summary}`.slice(0, 180), text }), signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) throw new Error(`email health alert: Resend ${res.status}`);
-  must(await db.from("gtm_email_incidents").update({ notified_at: now.toISOString() }).in("id", incidents.map((i) => i.id)), "mark notified");
+  for (const i of incidents) {
+    const notice = String(i.detail?.notice ?? i.summary);
+    const text = [`Email health incident: ${notice}`, "", "Either of you can pick this up. It stays open on /performance/team until the check passes.", "Alerts never pause a campaign by themselves."].join("\n");
+    const res = await providerFetch()("https://api.resend.com/emails", {
+      method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "idempotency-key": `email-health/incident/${i.id}` },
+      body: JSON.stringify({ from: mail.from, to: mail.to, subject: `Email health [${i.severity}]: ${notice}`.slice(0, 180), text }), signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`email health alert: Resend ${res.status}`);
+    must(await db.from("gtm_email_incidents").update({ notified_at: now.toISOString() }).eq("id", i.id), "mark notified");
+  }
   return { sent: true };
 }

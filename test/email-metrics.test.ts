@@ -87,6 +87,10 @@ test("legacy desk labels map to the contract's words; a human decision outranks 
     { event_id: 2, source: "human", intent: "interested", superseded_at: "2026-11-01T00:00:00Z" },
     { event_id: 2, source: "model", intent: "neutral", superseded_at: null },
   ]), [{ event_id: 1, intent: "not_now" }, { event_id: 2, intent: "neutral" }]);
+  assert.deepEqual(currentDecisions([
+    { event_id: 3, source: "model", intent: "interested", superseded_at: null },
+    { event_id: 3, source: "deterministic", intent: "uncertain", opt_out: "none", superseded_at: null },
+  ]), [{ event_id: 3, intent: "interested" }], "a rule decision that found nothing never outranks a model");
 });
 
 test("an effort spans members: the first touch's sender owns the cohort; the other member's follow-up is activity only (B1)", () => {
