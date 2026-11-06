@@ -89,7 +89,7 @@ export async function reconcileIncidents(db: SupabaseClient, observed: Incident[
   for (const o of open) if (!seen.has(o.incident_key) && !unchecked.has(o.kind)) must(await db.from("gtm_email_incidents").update({ resolved_at: now.toISOString(), last_seen_at: now.toISOString() }).eq("id", o.id), "resolve incident");
   for (const o of observed) {
     const cur = open.find((x) => x.incident_key === o.key);
-    if (cur) must(await db.from("gtm_email_incidents").update({ last_seen_at: now.toISOString(), summary: o.summary.slice(0, 300), detail: { ...(o.detail ?? {}), notice: cur.detail?.notice ?? cur.summary } }).eq("id", cur.id), "refresh incident");
+    if (cur) must(await db.from("gtm_email_incidents").update({ last_seen_at: now.toISOString(), summary: o.summary.slice(0, 300), detail: { ...(o.detail ?? {}), notice: cur.detail?.notice ?? cur.summary, ...(cur.detail?.envelope ? { envelope: cur.detail.envelope } : {}) } }).eq("id", cur.id), "refresh incident");
     else must(await db.from("gtm_email_incidents").insert({ incident_key: o.key, kind: o.kind, severity: o.severity, summary: o.summary.slice(0, 300), detail: { ...(o.detail ?? {}), notice: o.summary.slice(0, 300) }, opened_at: now.toISOString(), last_seen_at: now.toISOString() }), "open incident");
   }
   // Every incident not yet emailed, resolved or not: a notice that failed to send is still owed once (review of #32, B2).
@@ -109,16 +109,30 @@ export async function notifyIncidents(db: SupabaseClient, incidents: { id: numbe
   const key = process.env.RESEND_API_KEY;
   if (!key) throw new Error("email health alert: RESEND_API_KEY is not set");
   if (!mail.to.length) throw new Error("email health alert: no recipients (EMAIL_ALERT_TO)");
+  // The whole request is fixed before its first attempt and stored on the incident, so every retry under the same
+  // idempotency key is byte-identical: a recovery, a new summary or a changed EMAIL_ALERT_TO never alters it (review of
+  // #32, round 3). The envelope holds team addresses only. One incident's failure never blocks the others.
+  type Envelope = { from: string; to: string[]; subject: string; text: string };
+  let sent = false;
+  const failures: string[] = [];
   for (const i of incidents) {
-    const notice = String(i.detail?.notice ?? i.summary);
-    const resolved = !!(i as { resolved_at?: string | null }).resolved_at;
-    const text = [`Email health incident: ${notice}`, "", resolved ? "The check has since passed; this notice is sent late." : "Either of you can pick this up. It stays open on /performance/team until the check passes.", "Alerts never pause a campaign by themselves."].join("\n");
-    const res = await providerFetch()("https://api.resend.com/emails", {
-      method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "idempotency-key": `email-health/incident/${i.id}` },
-      body: JSON.stringify({ from: mail.from, to: mail.to, subject: `Email health [${i.severity}]: ${notice}`.slice(0, 180), text }), signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) throw new Error(`email health alert: Resend ${res.status}`);
-    must(await db.from("gtm_email_incidents").update({ notified_at: now.toISOString() }).eq("id", i.id), "mark notified");
+    try {
+      let env = i.detail?.envelope as Envelope | undefined;
+      if (!env) {
+        const notice = String(i.detail?.notice ?? i.summary);
+        env = { from: mail.from, to: mail.to, subject: `Email health [${i.severity}]: ${notice}`.slice(0, 180),
+          text: [`Email health incident: ${notice}`, "", "Either of you can pick this up. It stays open on /performance/team until the check passes.", "Alerts never pause a campaign by themselves."].join("\n") };
+        must(await db.from("gtm_email_incidents").update({ detail: { ...(i.detail ?? {}), envelope: env } }).eq("id", i.id).is("notified_at", null), "freeze notice");
+      }
+      const res = await providerFetch()("https://api.resend.com/emails", {
+        method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "idempotency-key": `email-health/incident/${i.id}` },
+        body: JSON.stringify(env), signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) throw new Error(`Resend ${res.status}`);
+      must(await db.from("gtm_email_incidents").update({ notified_at: now.toISOString() }).eq("id", i.id), "mark notified");
+      sent = true;
+    } catch (e) { failures.push(`incident ${i.id}: ${(e as Error).message.slice(0, 120)}`); }
   }
-  return { sent: true };
+  if (failures.length) throw new Error(`email health alert: ${failures.join("; ")}`);
+  return { sent };
 }

@@ -72,5 +72,7 @@ test("a notice that failed to send is still sent once after the check recovers (
   assert.equal(r.notified, true);
   const [row] = (await admin().from("gtm_email_incidents").select("resolved_at,notified_at").like("incident_key", "collection:thlth:%")).data!;
   assert.ok(row.resolved_at && row.notified_at, "resolved, and the owed notice went out");
-  assert.match(JSON.parse(mock.calls.find((c) => c.url.startsWith("https://api.resend.com"))!.body!).text, /since passed/);
+  const retry = JSON.parse(mock.calls.find((c) => c.url.startsWith("https://api.resend.com"))!.body!);
+  const [frozen] = (await admin().from("gtm_email_incidents").select("detail").like("incident_key", "collection:thlth:%")).data!;
+  assert.deepEqual(retry, frozen.detail.envelope, "the retry repeats the request frozen before the first attempt, byte for byte");
 });
