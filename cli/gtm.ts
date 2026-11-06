@@ -1740,7 +1740,34 @@ const commands: Record<string, () => Promise<void>> = {
     // `gtm team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]`: the next hourly team run lists that mailbox's
     // sent mail again from the date and re-reads its outreach threads, rewriting rows the older sync wrote (VIB-510).
     // Reads Gmail only; sends nothing and writes no CRM record.
-    if (rest[0] !== "replay") throw new Error("usage: gtm team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]");
+    if (rest[0] === "reconcile") {
+      // Shadow reconciliation (VIB-498 step 3): the old thread-based numbers next to the email contract v1 numbers, per
+      // member, over one window. Counts only; read only. Review this before setting EMAIL_OUTCOMES_V2=1.
+      const days = Number(flag("--days") ?? 30);
+      if (!Number.isInteger(days) || days < 1 || days > 400) throw new Error("--days must be 1 to 400");
+      const { adminDb, must } = await import("../lib/db");
+      const { teamMembers } = await import("../lib/team/members");
+      const { loadOutcomes } = await import("../lib/email/load");
+      const { emailStats, bounceCheck } = await import("../lib/email/metrics");
+      const { logicalMail, replyRate } = await import("../lib/team/metrics");
+      const db = adminDb(), now = Date.now(), from = now - days * 86_400_000;
+      const rows: Record<string, unknown>[] = [];
+      const boxes = must(await db.from("gtm_team_mailboxes").select("member,backfill_done,last_sync_at,last_error,granted_scopes"), "mailboxes") as { member: string; backfill_done: boolean; last_sync_at: string | null; last_error: string | null; granted_scopes: string[] }[];
+      for (const m of teamMembers()) {
+        const o = await loadOutcomes(db, m.code);
+        const own = o.events.filter((e) => e.member === m.code);
+        const legacyOutreach = own.filter((e) => e.kind === "outreach" && Date.parse(e.at) >= from).length;
+        const old = replyRate(logicalMail(own), from, now, now), v2 = emailStats(o.events, o.attempts, o.decisions, from, now, now, { member: m.code, effortDecisions: o.effortDecisions, collectionComplete: o.collection.complete }), b = bounceCheck(o.events, o.attempts, now, m.code, o.collection.complete);
+        // Not connected, still backfilling or failing is a coverage gap, never an ordinary read of zero.
+        const mb = boxes.filter((x) => x.member === m.code).map((x) => ({ backfillDone: x.backfill_done, lastSyncAt: x.last_sync_at, failing: !!x.last_error, scopes: x.granted_scopes }));
+        rows.push({ member: m.code, days, mailboxes: mb.length ? mb : "not connected", complete: v2.complete, gaps: o.collection.gaps,
+          legacy: { outreachEvents: legacyOutreach, replyRate: old.rate, replied: old.replied, n: old.n },
+          v2: { messages: v2.messages, attempts: v2.attempts, people: v2.people, newEfforts: v2.newEfforts, replyRate: v2.replyRate, positiveRate: v2.positiveRate, bounce: v2.bounce, coverage: v2.coverage },
+          bounce7d: b });
+      }
+      return out(rows, () => { for (const r of rows) console.log(JSON.stringify(r)); });
+    }
+    if (rest[0] !== "replay") throw new Error("usage: gtm team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS] | gtm team reconcile [--days 30]");
     const code = flag("--member")?.toUpperCase(), since = flag("--since"), only = flag("--mailbox")?.toLowerCase();
     if (!code || !since || !/^\d{4}-\d{2}-\d{2}$/.test(since)) throw new Error("usage: gtm team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]");
     const { adminDb } = await import("../lib/db");
@@ -1977,6 +2004,8 @@ const help = `gtm <command> [--json]
   sales run                do the hourly pipeline cron's work now: stage history, HQ inbox outcomes, lastContactedAt, site days
   team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]   list a team mailbox's sent mail again from the
                            date and re-read its outreach threads on the next hourly run (reconciles older rows; reads only)
+  team reconcile [--days 30]   old thread-based email numbers next to the email contract v1 numbers, per member
+                           (counts only; review before setting EMAIL_OUTCOMES_V2=1)
   sales reconcile [--days 60] [--apply]   match incoming Wise credits to unpaid payment milestones (same currency,
                            95 to 100% of the amount); dry run unless --apply
   crm                      snapshot the Twenty funnel

@@ -7,6 +7,8 @@
 // - Stock fields (verified email, sendable) describe the member's records as they stand now, whoever enriched them.
 // - Reply rate: replied threads over first-touch threads at least 7 days old, bounces excluded; hidden below 10.
 import type { Activity } from "./crm";
+import { emailStats, type EmailStats } from "../email/metrics";
+import type { Outcomes } from "../email/load";
 import { conversations } from "./conversations";
 
 export type MailEvent = { kind: "outreach" | "other_crm" | "reply" | "bounce"; at: string; thread_id: string; person_ids: string[]; message_key?: string | null; mailbox?: string | null };
@@ -55,6 +57,10 @@ export type Inputs = {
   stock: StockRow[];
   periodDays: number;
   now: Date;
+  /** Email contract v1 (EMAIL_OUTCOMES_V2=1): every mailbox's events, attempts and decisions. Reply rate and emails sent then
+   *  come from lib/email/metrics (efforts, not threads). "unavailable" means the switch is on but the read failed: those
+   *  numbers are then not measured, never the old calculation (review of #31, B2). */
+  outcomes?: Outcomes | "unavailable" | null;
 };
 
 export type ReplyRate = { rate: number | null; replied: number; n: number };
@@ -119,6 +125,8 @@ export type Period = {
   contactsAdded: number | null; companiesAdded: number | null; notes: number | null;
   emailsSent: number | null; newThreads: number | null; otherCrmMail: number | null; replies: number | null; reply: ReplyRate | null;
   deskSent: number | null; meetings: number | null; activeDays: number | null; followUp: { rate: number | null; n: number } | null;
+  /** The canonical numbers when outcomes are read (v2), else null. */
+  email: EmailStats | null;
 };
 
 function period(i: Inputs, w: Window): Period {
@@ -134,16 +142,19 @@ function period(i: Inputs, w: Window): Period {
   }
   for (const e of outreach ?? []) days.add(e.at.slice(0, 10));
   for (const d of desk ?? []) days.add(d.at.slice(0, 10));
+  const o = i.outcomes, v2 = o != null;
+  const email = mail && o && o !== "unavailable" ? emailStats(o.events, o.attempts, o.decisions, w.from, w.to, i.now.getTime(), { member: o.member, effortDecisions: o.effortDecisions, collectionComplete: o.collection.complete }) : null;
   return {
+    email,
     contactsAdded: count(a?.people, (r) => r.createdAt, a?.errors.people),
     companiesAdded: count(a?.companies, (r) => r.createdAt, a?.errors.companies),
     notes: count(a?.notes, (r) => r.createdAt, a?.errors.notes),
     // One message once, however many of the member's mailboxes saw it: teamReport projects copies away (logicalMail).
-    emailsSent: outreach ? outreach.length : null,
+    emailsSent: email ? email.messages : v2 ? null : outreach ? outreach.length : null,
     newThreads: firstSends ? [...firstSends.values()].filter((v) => v >= w.from && v < w.to).length : null,
     otherCrmMail: mail ? mail.filter((e) => e.kind === "other_crm" && inRange(e.at, w.from, w.to)).length : null,
     replies: mail ? mail.filter((e) => e.kind === "reply" && inRange(e.at, w.from, w.to)).length : null,
-    reply: mail ? replyRate(mail, w.from, w.to, i.now.getTime()) : null,
+    reply: email ? { rate: email.replyRate.rate, replied: email.replyRate.num, n: email.replyRate.n } : v2 ? null : mail ? replyRate(mail, w.from, w.to, i.now.getTime()) : null,
     deskSent: desk ? desk.length : null,
     meetings: count(a?.meetings, (r) => r.createdAt, a?.errors.meetings),
     activeDays: a || mail || desk ? days.size : null,

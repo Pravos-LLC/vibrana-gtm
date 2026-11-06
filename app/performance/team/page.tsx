@@ -6,7 +6,8 @@ import { TrendChart } from "@/components/performance/trend-chart";
 import { TwentyLink } from "@/components/crm/people";
 import { sessionDb } from "@/lib/supabase/server";
 import { loadActivity } from "@/lib/team/crm";
-import { selectAll } from "@/lib/team/mailbox";
+import { canReadBodies, selectAll } from "@/lib/team/mailbox";
+import { loadOutcomes, outcomesV2 } from "@/lib/email/load";
 import { memberByCode, teamMembers, type TeamMember } from "@/lib/team/members";
 import { REPLY_MIN_N, teamReport, type DeskSend, type MailEvent, type Period, type StockRow } from "@/lib/team/metrics";
 import { cn } from "@/lib/ui/cn";
@@ -26,7 +27,7 @@ const ago = (iso: string | null | undefined) => {
   return m < 90 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
 };
 
-type MailboxStatus = { address: string; connected_at: string; last_sync_at: string | null; last_error: string | null; backfill_done: boolean };
+type MailboxStatus = { address: string; connected_at: string; last_sync_at: string | null; last_error: string | null; backfill_done: boolean; granted_scopes: string[] | null };
 
 export default async function TeamPage({ searchParams }: { searchParams: Promise<{ member?: string; days?: string }> }) {
   const sp = await searchParams;
@@ -48,7 +49,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
   const db = await sessionDb();
   const [activity, boxes, mail, desk, stock] = await Promise.all([
     loadActivity(db, member.code).catch(() => null),
-    db.from("gtm_team_mailboxes").select("address,connected_at,last_sync_at,last_error,backfill_done").eq("member", member.code),
+    db.from("gtm_team_mailboxes").select("address,connected_at,last_sync_at,last_error,backfill_done,granted_scopes").eq("member", member.code),
     // PostgREST returns at most 1000 rows a request: read every page, or past 1000 events the newest would be dropped.
     selectAll<MailEvent>((from, to) => db.from("gtm_team_mail_events").select("kind,at,thread_id,person_ids,message_key,mailbox").eq("member", member.code).order("id").range(from, to), "mail events")
       .then((data) => ({ data, error: null }), (e: Error) => ({ data: null, error: e })),
@@ -58,12 +59,15 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
   ]);
   const mailboxes = (boxes.data ?? []) as MailboxStatus[];
   const connected = mailboxes.length > 0;
+  // Email contract v1 (VIB-512): efforts and attempts replace threads once EMAIL_OUTCOMES_V2=1, after reconciliation.
+  const outcomes = connected && outcomesV2() ? await loadOutcomes(db, member.code).catch(() => "unavailable" as const) : null;
   const r = teamReport({
+    outcomes,
     activity, mail: connected && !mail.error ? (mail.data ?? []) as MailEvent[] : null, desk: desk.error ? null : (desk.data ?? []) as DeskSend[],
     memberEmail: member.authEmail, stock: (stock.data ?? []) as StockRow[], periodDays: days, now: new Date(),
   });
   const c = r.cur, p = r.prev, s = r.stock;
-  const mailMissing = !connected ? "not measured: mailbox not connected" : "not measured: mail events could not be read";
+  const mailMissing = !connected ? "not measured: mailbox not connected" : outcomes === "unavailable" ? "not measured: email outcomes could not be read" : "not measured: mail events could not be read";
   const crmMissing = activity ? "not measured: Twenty read failed" : "not measured: no CRM read yet (the team cron runs hourly)";
   const spark = (k: keyof (typeof r.weekly)[number]) => r.weekly.map((w) => w[k] as number | null);
   const href = (q: Record<string, string | number>) => `/performance/team?${new URLSearchParams({ member: member.code, days: String(days), ...Object.fromEntries(Object.entries(q).map(([k, v]) => [k, String(v)])) })}`;
@@ -94,9 +98,17 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           {connected ? mailboxes.map((b) => (
             <p key={b.address} className={b.last_error ? "text-red-strong" : undefined}>
               {b.address}: {b.last_error ? b.last_error : `synced ${ago(b.last_sync_at)}${b.backfill_done ? "" : ", still reading back to Oct 1"}`}
+              {!b.last_error && !canReadBodies(b.granted_scopes) ? ". Metadata only: reply text is not read until it is reconnected." : ""}
             </p>
           )) : <p>Not connected. <Link href="/team/mailbox" className="text-violet-strong underline-offset-2 hover:underline">{member.label} connects it here</Link>.</p>}
           <p className="text-ink-3">Mail from any other mailbox (personal Gmail, a sequencer) is not counted.</p>
+          {c.email && (
+            <p className="text-ink-3">
+              Coverage this period: {c.email.attempts} cold recipients, {c.email.coverage.unverified} not verified (counted), {c.email.coverage.policyFlagged} sent against a CRM restriction (counted, flagged),
+              {" "}{c.email.coverage.ambiguous} on an address two CRM people share and {c.email.coverage.unmatched} not in the CRM (not attributed), {c.email.coverage.legacyRows} messages from the older sync.
+              {" "}Bounces {c.email.bounce.num} of {c.email.bounce.n}{c.email.complete ? "" : " (partial: rates withheld until collection is complete and every message is reconciled)"}.
+            </p>
+          )}
         </div>
         <div>
           <p className="font-medium text-ink">Writing desk</p>
@@ -108,9 +120,11 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
       <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-3">
         <StatTile label="GTM emails sent" value={c.emailsSent == null ? null : fmt(c.emailsSent)} missing={mailMissing}
           delta={delta(c.emailsSent, p.emailsSent, days)} spark={connected ? spark("emailed") : undefined}
-          note={c.newThreads != null ? plural(c.newThreads, "first touch", "first touches") + ", " + plural((c.emailsSent ?? 0) - c.newThreads, "follow-up", "follow-ups") : undefined} />
+          note={c.email ? plural(c.email.newEfforts, "new outreach effort", "new outreach efforts") + `, ${c.email.attempts} cold recipients`
+            : c.newThreads != null ? plural(c.newThreads, "first touch", "first touches") + ", " + plural((c.emailsSent ?? 0) - c.newThreads, "follow-up", "follow-ups") : undefined} />
         <StatTile label="Reply rate" value={c.reply ? pct(c.reply.rate) : null}
-          missing={c.reply ? `needs ${REPLY_MIN_N} first touches at least 7 days old (${c.reply.n} so far, ${c.reply.replied} replied)` : mailMissing}
+          missing={c.email && !c.email.complete ? (outcomes && outcomes !== "unavailable" && !outcomes.collection.complete ? `withheld: collection is incomplete (${outcomes.collection.gaps.join("; ")})`
+            : `withheld: ${c.email.coverage.withoutAttempts} messages in the period are not reconciled yet (gtm team replay)`) : c.reply ? `needs ${REPLY_MIN_N} first touches at least 7 days old (${c.reply.n} so far, ${c.reply.replied} replied)` : mailMissing}
           note={c.reply?.rate != null ? `${c.reply.replied} of ${c.reply.n} first touches, bounces excluded` : undefined} />
         <StatTile label="Meetings" value={c.meetings == null ? null : fmt(c.meetings)} missing={crmMissing} delta={delta(c.meetings, p.meetings, days)} spark={spark("meetings")}
           note="meeting capture proposals tagged to them" />
