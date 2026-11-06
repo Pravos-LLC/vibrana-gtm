@@ -54,7 +54,8 @@ export function proposeOps(attempts: AttemptIn[], labels: LabelIn[], replySender
       out.push(...both({ op_key: `addr:${l.person_id}:${h}:optout:${l.id}`.toLowerCase(), action: "address_opt_out", person_id: l.person_id, address_hash: h, reason: "ADDRESS_OPT_OUT", evidence_event_id: l.event_id, label_id: l.id, observed_at: l.labeled_at }));
     } else {
       // A possible opt-out, or one whose scope is unclear: a person decides. Only the review exists, never an apply.
-      out.push({ op_key: `review:${l.person_id}:${l.event_id ?? l.id}`, destination: "twenty", action: "person_opt_out", person_id: l.person_id, address_hash: null, reason: "OPT_OUT_REVIEW",
+      // Keyed by the label: a renewed possible opt-out after a correction is a new review, never the canceled one (finding 3).
+      out.push({ op_key: `review:${l.person_id}:${l.event_id ?? "none"}:${l.id}`, destination: "twenty", action: "person_opt_out", person_id: l.person_id, address_hash: null, reason: "OPT_OUT_REVIEW",
         evidence_event_id: l.event_id, label_id: l.id, policy_version: POLICY_VERSION, state: "pending_review", last_error: null, observed_at: l.labeled_at });
     }
   }
@@ -140,7 +141,8 @@ export function changeFor(op: StoredOp, p: Live, now: Date): { data: Record<stri
   if (!address) return { error: "the address is no longer on the person" };
   if (r.addresses.has(address)) return null;
   // The stored value may be an object or its JSON text; merge from exactly what was read (review of #33, finding 2).
-  const parsed = typeof p.gtmEmailRestrictions === "string" ? JSON.parse(p.gtmEmailRestrictions) : p.gtmEmailRestrictions;
+  // "" is the CRM's empty value (lib/team/restrictions.ts), not malformed JSON.
+  const parsed = typeof p.gtmEmailRestrictions === "string" ? (p.gtmEmailRestrictions.trim() ? JSON.parse(p.gtmEmailRestrictions) : {}) : p.gtmEmailRestrictions;
   const raw = (parsed && typeof parsed === "object") ? parsed as { addresses?: Record<string, unknown>; holds?: unknown[] } : {};
   return { data: { [RESTRICTIONS_FIELD]: { version: 1, holds: raw.holds ?? [], addresses: { ...(raw.addresses ?? {}),
     [address]: { reason: op.reason, source: "gtm", sourceRef: `gtm:op:${op.id}`, observedAt: op.observed_at, recordedAt: now.toISOString() } } } } };
@@ -169,13 +171,26 @@ export async function applyTwenty(db: SupabaseClient, reader: TwentyReader, now:
   const lease = await db.rpc("gtm_take_lease", { p_job: "email.suppression.apply", p_holder: holder, p_seconds: 600 });
   if (lease.error || lease.data !== true) return { skipped: "another apply holds the lease, or it could not be taken" };
   try {
-    const ops = must(await db.from("gtm_email_sync_ops").select("*").eq("destination", "twenty").in("state", ["approved", "failed", "applied"]).not("approved_at", "is", null)
+    // `queued` is only ever left by a crashed apply (this lease is exclusive), so it is resumed like `applied`.
+    const ops = must(await db.from("gtm_email_sync_ops").select("*").eq("destination", "twenty").in("state", ["approved", "failed", "queued", "applied"]).not("approved_at", "is", null)
       .lt("attempts", 5).order("id").limit(limit), "approved operations") as StoredOp[];
-    const out = { confirmed: 0, unchanged: 0, failed: 0 };
+    const out = { confirmed: 0, unchanged: 0, failed: 0, canceled: 0, lost: 0 };
     const person = async (id: string) => (await reader.all<Live>("people", READ, { id: { eq: id } }, "PersonFilterInput", 1, 1))[0] ?? null;
     for (const op of ops) {
-      const mark = (patch: Record<string, unknown>) => db.from("gtm_email_sync_ops").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", op.id).eq("state", op.state);
+      // Every transition is conditional on the state this run holds, and must change exactly one row (finding 2).
+      const move = async (from: string[], patch: Record<string, unknown>) => {
+        const r = await db.from("gtm_email_sync_ops").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", op.id).in("state", from).select("id");
+        if (r.error) throw new Error(`operation state: ${r.error.message}`);
+        return (r.data ?? []).length === 1;
+      };
+      // Claim before any side effect: `queued` is outside what detect cancels, so a cancel either lands first (the claim
+      // finds nothing) or not at all. Then the evidence is checked as it is now.
+      if (!(await move([op.state], { state: "queued" }))) { out.lost++; continue; }
       try {
+        if (!(await evidenceCurrent(db, op))) {
+          if (await move(["queued"], { state: "canceled", last_error: "evidence no longer current" })) out.canceled++;
+          continue;
+        }
         const live = await person(op.person_id);
         if (!live) throw new Error("the person is not in Twenty");
         const c = changeFor(op, live, now);
@@ -184,20 +199,37 @@ export async function applyTwenty(db: SupabaseClient, reader: TwentyReader, now:
           const res = await reader.read<{ updatePeople: { id: string }[] }>("mutation($f:PersonFilterInput!,$d:PersonUpdateInput!){ updatePeople(filter:$f, data:$d) { id } }",
             { f: versionFilter(op.person_id, live.updatedAt), d: c.data });
           if (!res.updatePeople?.length) throw new Error("the person changed while applying; retried next run");
-          must(await mark({ state: "applied", applied_at: now.toISOString() }), "mark applied");
-          op.state = "applied";
+          if (!(await move(["queued"], { state: "applied", applied_at: now.toISOString() }))) throw new Error("the operation changed state while applying");
         }
         const back = await person(op.person_id);
         if (!back || changeFor(op, back, now) !== null) throw new Error("read-back does not show the change");
-        must(await mark({ state: "confirmed", confirmed_at: new Date().toISOString(), last_error: null, applied_at: op.applied_at ?? now.toISOString() }), "mark confirmed");
+        if (!(await move(["queued", "applied"], { state: "confirmed", confirmed_at: new Date().toISOString(), last_error: null, applied_at: op.applied_at ?? now.toISOString() }))) {
+          throw new Error("the operation changed state before it was confirmed");
+        }
         if (c) out.confirmed++; else out.unchanged++;
       } catch (e) {
         out.failed++;
-        await mark({ state: "failed", attempts: op.attempts + 1, last_error: (e as Error).message.slice(0, 300).replace(/[^\s@]+@[^\s@]+/g, "[address]") });
+        await move(["queued", "applied"], { state: "failed", attempts: op.attempts + 1, last_error: (e as Error).message.slice(0, 300).replace(/[^\s@]+@[^\s@]+/g, "[address]") }).catch(() => false);
       }
     }
     return out;
   } finally { await db.rpc("gtm_release_lease", { p_job: "email.suppression.apply", p_holder: holder }); }
+}
+
+/** Whether an operation's evidence still stands: its label current and unchanged in scope, or the address failure still
+ *  recorded as permanent. A correction since approval cancels the operation instead of writing it (finding 2). */
+export async function evidenceCurrent(db: SupabaseClient, op: StoredOp): Promise<boolean> {
+  if (op.label_id != null) {
+    const r = await db.from("gtm_email_reply_labels").select("superseded_at,opt_out,source").eq("id", op.label_id).maybeSingle();
+    if (r.error) throw new Error(`evidence: ${r.error.message}`);
+    const l = r.data as { superseded_at: string | null; opt_out: string; source: string } | null;
+    if (!l || l.superseded_at || (l.source !== "human" && l.source !== "provider")) return false;
+    return op.action === "person_opt_out" ? l.opt_out === "person" : l.opt_out === "address";
+  }
+  if (op.action !== "address_restrict" || !op.address_hash) return false;
+  const r = await db.from("gtm_email_attempts").select("id").eq("person_id", op.person_id).eq("recipient_hash", op.address_hash).eq("delivery", "failed_invalid_address").limit(1);
+  if (r.error) throw new Error(`evidence: ${r.error.message}`);
+  return (r.data ?? []).length > 0;
 }
 
 /* ------------------------------------------------------------------------------------------------ the desk guard */

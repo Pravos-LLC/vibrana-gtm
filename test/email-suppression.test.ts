@@ -58,6 +58,8 @@ test("the change to a person: only the owned fields, never another address, noth
   const t = S.changeFor(op, asText, now) as { data: { gtmEmailRestrictions: { addresses: Record<string, unknown>; holds: unknown[] } } };
   assert.deepEqual(Object.keys(t.data.gtmEmailRestrictions.addresses).sort(), ["ana@prospect.test", "old@x.test"], "a value stored as JSON text keeps its entries");
   assert.equal(t.data.gtmEmailRestrictions.holds.length, 1, "and its holds");
+  const empty = S.changeFor(op, { ...base, gtmEmailRestrictions: "" }, now) as { data: { gtmEmailRestrictions: { addresses: Record<string, unknown> } } };
+  assert.deepEqual(Object.keys(empty.data.gtmEmailRestrictions.addresses), ["ana@prospect.test"], "an empty string is the CRM's empty value");
 });
 
 test("the version guard matches the read stamp's millisecond, like vibrana-crm's version_filter", () => {

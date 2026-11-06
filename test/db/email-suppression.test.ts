@@ -64,7 +64,7 @@ test("without the flag nothing is written; with it the writer re-reads, writes t
     DB,
   ]);
   const r = await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date());
-  assert.deepEqual(r, { confirmed: 1, unchanged: 0, failed: 0 });
+  assert.deepEqual(r, { confirmed: 1, unchanged: 0, failed: 0, canceled: 0, lost: 0 });
   const write = mock.calls.find((c) => c.url.startsWith("https://crm.test") && /updatePeople/.test(c.body ?? ""))!;
   const vars = JSON.parse(write.body!).variables;
   assert.deepEqual(Object.keys(vars.d), ["gtmEmailRestrictions"], "only the owned field is written");
@@ -80,7 +80,7 @@ test("a concurrent edit makes the conditional write match nothing: the op fails 
   await S.approve(admin(), (await ops()).map((o) => o.id), "dry run 2026-11-06 approved by test", new Date());
   process.env.EMAIL_SUPPRESSION_APPLY = "1";
   mock = installFetchMock([{ url: "https://crm.test/graphql", body: personBody(null), times: 1 }, { url: "https://crm.test/graphql", json: { data: { updatePeople: [] } }, times: 1 }, DB]);
-  assert.deepEqual(await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date()), { confirmed: 0, unchanged: 0, failed: 1 });
+  assert.deepEqual(await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date()), { confirmed: 0, unchanged: 0, failed: 1, canceled: 0, lost: 0 });
   const [o] = await ops();
   assert.equal(o.state, "failed"); assert.match(o.last_error!, /changed while applying/);
 });
@@ -93,7 +93,7 @@ test("an op left applied by a crash is confirmed by read-back on the next run, w
   process.env.EMAIL_SUPPRESSION_APPLY = "1";
   const done = personBody({ version: 1, addresses: { "ana@prospect.test": { reason: "EMAIL_BOUNCED" } }, holds: [] });
   mock = installFetchMock([{ url: "https://crm.test/graphql", body: done }, DB]);
-  assert.deepEqual(await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date()), { confirmed: 0, unchanged: 1, failed: 0 });
+  assert.deepEqual(await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date()), { confirmed: 0, unchanged: 1, failed: 0, canceled: 0, lost: 0 });
   assert.ok(!mock.calls.some((c) => /updatePeople/.test(c.body ?? "")));
   assert.equal((await ops())[0].state, "confirmed");
 });
@@ -111,4 +111,29 @@ test("a corrected decision cancels its pending review; a CRM-only hold or opt-ou
   const reader = new TwentyReader({ pauseMs: 0, retries: 0 });
   assert.deepEqual(await S.emailHolds(db, P, "ana@prospect.test", reader), ["email is on hold in the CRM"]);
   assert.deepEqual(await S.emailHolds(db, P, "ana@prospect.test", reader), ["the CRM could not be checked for email restrictions; try again"]);
+});
+
+test("evidence corrected after approval cancels the operation at apply time: no CRM call (review of #33, finding 2)", async () => {
+  await fresh(); await S.detect(admin());
+  await S.approve(admin(), (await ops()).map((o) => o.id), "dry run 2026-11-06 approved by test", new Date());
+  await admin().from("gtm_email_attempts").update({ delivery: "no_failure_observed", delivery_at: null }).eq("person_id", P);
+  process.env.EMAIL_SUPPRESSION_APPLY = "1";
+  mock = installFetchMock([DB]);
+  assert.deepEqual(await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date()), { confirmed: 0, unchanged: 0, failed: 0, canceled: 1, lost: 0 });
+  assert.equal(mock.calls.filter((c) => c.url.startsWith("https://crm.test")).length, 0);
+  assert.equal((await ops())[0].state, "canceled");
+});
+
+test("a possible opt-out renewed after a correction is a new review that holds the desk again (finding 3)", async () => {
+  await fresh(); await S.detect(admin());
+  const db = admin();
+  const [first] = (await db.from("gtm_email_reply_labels").select("id,event_id").eq("person_id", P).eq("source", "deterministic")).data!;
+  await db.from("gtm_email_reply_labels").update({ superseded_at: new Date().toISOString() }).eq("id", first.id);
+  await S.detect(db);
+  assert.equal((await ops()).filter((o) => o.reason === "OPT_OUT_REVIEW" && o.state === "pending_review").length, 0, "the corrected review is canceled");
+  assert.equal((await db.from("gtm_email_reply_labels").insert({ event_id: first.event_id, person_id: P, source: "human", intent: "uncertain", opt_out: "uncertain" })).error, null);
+  await S.detect(db);
+  const reviews = (await ops()).filter((o) => o.reason === "OPT_OUT_REVIEW");
+  assert.deepEqual(reviews.map((o) => o.state).sort(), ["canceled", "pending_review"]);
+  assert.ok((await S.emailHolds(db, P, null)).includes("a possible opt-out is waiting for review"));
 });
