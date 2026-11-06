@@ -11,7 +11,7 @@ import { installFetchMock, type Route } from "../support/fetch-mock.ts";
 const l = local();
 Object.assign(process.env, { NEXT_PUBLIC_SUPABASE_URL: l.url, SUPABASE_SECRET_KEY: l.secretKey, TEAM_MAILBOX_KEY: randomBytes(32).toString("base64"), TWENTY_API_KEY: "twenty_test", TWENTY_BASE: "https://crm.test" });
 const { syncMailbox, mailboxAad, stateKey } = await import("../../lib/team/mailbox.ts");
-const { sealToken, addressHash } = await import("../../lib/team/crypto.ts");
+const { sealToken, addressHash, messageKey } = await import("../../lib/team/crypto.ts");
 const { parseMembers } = await import("../../lib/team/members.ts");
 const { TwentyReader } = await import("../../lib/twenty.ts");
 
@@ -28,7 +28,8 @@ before(async () => { await seed(); });
 
 const sent = (id: string, at: number, to: string) => ({ id, threadId: `${id}0`, internalDate: String(at), labelIds: ["SENT"], payload: { headers: [{ name: "From", value: BOX }, { name: "To", value: to }] } });
 const page = (object: string, nodes: unknown[]) => JSON.stringify({ data: { [object]: { pageInfo: { hasNextPage: false, endCursor: null }, edges: nodes.map((node) => ({ node })) } } });
-const ana = { id: "p1", gtmRelationship: null, prospectReviewState: null, gtmQueue: null, emails: { primaryEmail: "Ana@Prospect.test" } };
+const P1 = "00000000-0000-4000-8000-0000000000a1";   // Twenty ids are UUIDs (gtm_email_attempts.person_id is uuid)
+const ana = { id: P1, gtmRelationship: null, prospectReviewState: null, gtmQueue: null, emails: { primaryEmail: "Ana@Prospect.test" } };
 const base = (over: Route[] = []): Route[] => [
   ...over,
   { url: "https://oauth2.googleapis.com/token", json: { access_token: "at" } },
@@ -38,6 +39,8 @@ const base = (over: Route[] = []): Route[] => [
 
 async function fresh(row: Partial<{ history_id: string | null; backfill_done: boolean }> = {}) {
   const db = admin();
+  const { data: old } = await db.from("gtm_team_mail_events").select("id").eq("member", "TSYNC");
+  if (old?.length) await db.from("gtm_email_attempts").delete().in("event_id", old.map((e) => e.id));
   await db.from("gtm_team_mail_events").delete().eq("member", "TSYNC");
   await db.from("gtm_sync_state").delete().eq("key", stateKey("TSYNC", BOX));
   await db.from("gtm_team_mailboxes").delete().eq("member", "TSYNC");
@@ -65,9 +68,12 @@ test("first backfill: outreach and its reply are counted without any address; th
   assert.deepEqual({ sends: r.sends, outreach: r.outreach, replies: r.replies, pending: r.pending }, { sends: 2, outreach: 1, replies: 1, pending: 0 });
   const ev = await events();
   assert.deepEqual(ev.map((e) => [e.gmail_message_id, e.kind]), [["a1", "outreach"], ["d4", "reply"]]);
-  assert.deepEqual(ev[0].person_ids, ["p1"]);
+  assert.deepEqual(ev[0].person_ids, [P1]);
   assert.deepEqual(ev[0].recipient_hashes, [addressHash("ana@prospect.test")]);
-  assert.doesNotMatch(JSON.stringify(ev), /@/, "no address is stored");
+  // The only address on an event is the team's own mailbox it was read from; no recipient address is stored.
+  assert.ok(ev.every((e) => e.mailbox === BOX));
+  assert.doesNotMatch(JSON.stringify(ev.map(({ mailbox: _m, ...e }) => e)), /@/, "no recipient address is stored");
+  assert.deepEqual(ev[1].person_ids, [P1], "the reply is attributed to the person who sent it");
   assert.deepEqual(await box(), { history_id: "900", backfill_done: true, last_error: null });
   const s = await state();
   assert.deepEqual(s?.pending, []); assert.ok(s?.okAt, "a full run sets the watermark");
@@ -156,4 +162,183 @@ test("history: a deleted message is skipped, not a failure; a too-old cursor lis
   const s = await state();
   assert.equal(s?.since, "2026-11-03T00:00:00.000Z", "a day before the last fully successful run, not the failed one");
   assert.equal((await box()).backfill_done, false);
+});
+
+const attemptsOf = async (gmailId: string) => {
+  const { data: e } = await admin().from("gtm_team_mail_events").select("id").eq("member", "TSYNC").eq("gmail_message_id", gmailId).single();
+  return (await admin().from("gtm_email_attempts").select("*").eq("event_id", e!.id)).data ?? [];
+};
+
+test("a row from the older sync is rewritten once with attempts; a single-recipient failure marks that attempt only", async () => {
+  const row = await fresh();
+  // What the first sync wrote: no mailbox, no attempts, calculation version 1.
+  assert.equal((await admin().from("gtm_team_mail_events").insert({ member: "TSYNC", gmail_message_id: "a1", thread_id: "a10", kind: "outreach", at: new Date(T0).toISOString(), person_ids: [], recipient_hashes: [] })).error, null);
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"),
+      { id: "f9", internalDate: String(T0 + 3_600_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "Mail Delivery Subsystem <mailer-daemon@googlemail.com>" }] } }] } },
+  ]));
+  const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  assert.equal(r.reconciled, 1);
+  const [e] = (await admin().from("gtm_team_mail_events").select("*").eq("member", "TSYNC").eq("gmail_message_id", "a1")).data!;
+  assert.deepEqual([e.mailbox, e.calc_version, e.person_ids], [BOX, 2, [P1]]);
+  const [a] = await attemptsOf("a1");
+  assert.deepEqual([a.match, a.person_id, a.stream, a.field, a.verification, a.attribution], ["matched", P1, "cold", "to", "unknown", "inferred"]);
+  assert.match(a.episode_id, /^[a-f0-9]{32}$/);
+  assert.equal(a.delivery, "failed_unclassified", "metadata cannot name the failure type, only that this one recipient's send failed");
+  assert.equal(r.bounces, 1);
+  // A second run changes nothing: the first observation wins and a failure is never re-dated.
+  mock.restore();
+  mock = installFetchMock(base([{ url: `${GM}history?startHistoryId=900`, json: { history: [], historyId: "900" } },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [] } }]));
+  const r2 = await syncMailbox(admin(), member, { ...row, ...(await box()) }, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-05T00:00:00Z") });
+  assert.equal(r2.error, undefined, r2.error ?? "");
+  assert.equal(r2.reconciled, 0);
+  assert.equal((await attemptsOf("a1")).length, 1);
+});
+
+test("a reply in an outreach thread older than 30 days is found through history, after its first outcome", async () => {
+  const row = await fresh({ history_id: "500", backfill_done: true });
+  const db = admin();
+  const old = (await db.from("gtm_team_mail_events").insert({ member: "TSYNC", gmail_message_id: "e1", thread_id: "e10", kind: "outreach", at: "2026-10-02T10:00:00Z",
+    person_ids: [P1], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: BOX, calc_version: 2 }).select("id").single()).data!;
+  assert.equal((await db.from("gtm_email_attempts").insert({ event_id: old.id, recipient_hash: addressHash("ana@prospect.test"), field: "to", match: "matched", person_id: P1, stream: "cold" })).error, null);
+  assert.equal((await db.from("gtm_team_mail_events").insert({ member: "TSYNC", gmail_message_id: "c1", thread_id: "e10", kind: "reply", at: "2026-10-03T10:00:00Z", mailbox: BOX, calc_version: 2 })).error, null);
+  await db.from("gtm_sync_state").insert({ key: stateKey("TSYNC", BOX), value: { pending: [], okAt: "2026-11-19T00:00:00Z" } });
+  mock = installFetchMock(base([
+    { url: `${GM}history?startHistoryId=500`, json: { history: [{ messagesAdded: [{ message: { id: "c9", threadId: "e10", labelIds: ["INBOX", "UNREAD"] } }] }], historyId: "960" } },
+    { url: `${GM}threads/e10`, json: { id: "e10", messages: [sent("e1", Date.parse("2026-10-02T10:00:00Z"), "ana@prospect.test"),
+      { id: "c1", internalDate: String(Date.parse("2026-10-03T10:00:00Z")), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "ana@prospect.test" }] } },
+      { id: "c9", internalDate: String(Date.parse("2026-11-19T10:00:00Z")), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "Ana <ana@prospect.test>" }] } }] } },
+  ]));
+  const r = await syncMailbox(db, member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-20T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  const [late] = (await db.from("gtm_team_mail_events").select("kind,person_ids").eq("member", "TSYNC").eq("gmail_message_id", "c9")).data!;
+  assert.deepEqual(late, { kind: "reply", person_ids: [P1] });
+  assert.ok(!mock.calls.some((c) => c.url.startsWith("https://crm.test")), "no send to classify: no CRM read");
+  assert.deepEqual((await state())?.threads, [], "the thread was re-read, so it is not kept for next time");
+});
+
+test("replies and a bounce in one run are written together (every row names its arrays)", async () => {
+  const row = await fresh();
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }, { id: "b2" }] } },
+    { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
+    { url: `${GM}messages/b2`, json: sent("b2", T0 + 1, "ana@prospect.test") },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), { id: "c1", internalDate: String(T0 + 60_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "ana@prospect.test" }] } }] } },
+    { url: `${GM}threads/b20`, json: { id: "b20", messages: [sent("b2", T0 + 1, "ana@prospect.test"), { id: "d9", internalDate: String(T0 + 60_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "mailer-daemon@googlemail.com" }] } }] } },
+  ]));
+  const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  assert.deepEqual((await events()).map((e) => [e.gmail_message_id, e.kind]), [["a1", "outreach"], ["b2", "outreach"], ["c1", "reply"], ["d9", "bounce"]]);
+  assert.equal((await attemptsOf("b2"))[0].delivery, "failed_unclassified", "b2 had one external recipient: its attempt is marked");
+});
+
+test("a failure report on a send with a second, unstored recipient is not pinned on the cold one", async () => {
+  const row = await fresh();
+  const two = { ...sent("a1", T0, "ana@prospect.test"), payload: { headers: [{ name: "From", value: BOX }, { name: "To", value: "ana@prospect.test" }, { name: "Cc", value: "someone@else.test" }] } };
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: two },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: "https://crm.test/graphql", body: page("companies", []), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [two, { id: "d9", internalDate: String(T0 + 60_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "mailer-daemon@googlemail.com" }] } }] } },
+  ]));
+  const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  assert.equal(r.unattributed_failures, 1);
+  assert.ok((await attemptsOf("a1")).every((a) => a.delivery === "no_failure_observed"));
+});
+
+test("more inbound threads than one run looks up stay queued; looked-up non-outreach threads leave the queue", async () => {
+  const row = await fresh({ history_id: "500", backfill_done: true });
+  await admin().from("gtm_sync_state").insert({ key: stateKey("TSYNC", BOX), value: { pending: [], okAt: "2026-11-19T00:00:00Z" } });
+  const added = Array.from({ length: 201 }, (_, i) => ({ message: { id: `f${i.toString(16).padStart(4, "0")}`, threadId: `e${i.toString(16).padStart(4, "0")}`, labelIds: ["INBOX"] } }));
+  mock = installFetchMock(base([{ url: `${GM}history?startHistoryId=500`, json: { history: [{ messagesAdded: added }], historyId: "990" } }]));
+  const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-20T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  assert.deepEqual((await state())?.threads, ["e00c8"], "the 201st thread waits for the next run");
+});
+
+test("a copy of a send already counted from another mailbox is an observation; a reply in its thread reaches the original's person", async () => {
+  const row = await fresh();
+  const db = admin();
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+  const orig = (await db.from("gtm_team_mail_events").insert({ member: "TOTHR", gmail_message_id: "fe1", thread_id: "fe10", kind: "outreach", at: new Date(T0).toISOString(),
+    person_ids: [P1], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: "other@hq.test", message_key: messageKey("<m1@hq.test>"), calc_version: 2 }).select("id").single()).data!;
+  assert.equal((await db.from("gtm_email_attempts").insert({ event_id: orig.id, recipient_hash: addressHash("ana@prospect.test"), field: "to", match: "matched", person_id: P1, stream: "cold" })).error, null);
+  const copy = { ...sent("a1", T0, "ana@prospect.test"), payload: { headers: [{ name: "From", value: BOX }, { name: "To", value: "ana@prospect.test" }, { name: "Message-ID", value: "<m1@hq.test>" }] } };
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: copy },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [copy, { id: "c1", internalDate: String(T0 + 60_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "ana@prospect.test" }] } }] } },
+  ]));
+  const r = await syncMailbox(db, member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  assert.equal(r.copies, 1);
+  assert.equal((await attemptsOf("a1")).length, 0, "no second set of attempts");
+  const [reply] = (await db.from("gtm_team_mail_events").select("person_ids").eq("member", "TSYNC").eq("gmail_message_id", "c1")).data!;
+  assert.deepEqual(reply.person_ids, [P1], "attributed through the original's attempts");
+  await db.from("gtm_email_attempts").delete().eq("event_id", orig.id);
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+});
+
+test("the canonical observation's missing attempts are repaired on retry, even after another mailbox stored a copy (review of #30, C1)", async () => {
+  const row = await fresh();
+  const db = admin();
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+  // Mailbox A (this one) stored its event, then its attempts write failed; mailbox B then stored a copy.
+  const mine = (await db.from("gtm_team_mail_events").insert({ member: "TSYNC", gmail_message_id: "a1", thread_id: "a10", kind: "outreach", at: new Date(T0).toISOString(),
+    person_ids: [P1], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: BOX, message_key: messageKey("<m2@hq.test>"), calc_version: 2 }).select("id").single()).data!;
+  await db.from("gtm_team_mail_events").insert({ member: "TOTHR", gmail_message_id: "fe2", thread_id: "fe20", kind: "outreach", at: new Date(T0).toISOString(),
+    person_ids: [P1], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: "other@hq.test", message_key: messageKey("<m2@hq.test>"), calc_version: 2 });
+  const msg = { ...sent("a1", T0, "ana@prospect.test"), payload: { headers: [{ name: "From", value: BOX }, { name: "To", value: "ana@prospect.test" }, { name: "Message-ID", value: "<m2@hq.test>" }] } };
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: msg },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [msg] } },
+  ]));
+  const r = await syncMailbox(db, member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  const att = await attemptsOf("a1");
+  assert.equal(att.length, 1, "the canonical observation gets its attempt");
+  assert.equal(att[0].event_id, mine.id);
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+});
+
+test("a reply stored without a person before the canonical attempts existed gains the person on a later read (review of #30, D1)", async () => {
+  const row = await fresh();
+  const db = admin();
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+  const orig = (await db.from("gtm_team_mail_events").insert({ member: "TOTHR", gmail_message_id: "fe3", thread_id: "fe30", kind: "outreach", at: new Date(T0).toISOString(),
+    person_ids: [P1], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: "other@hq.test", message_key: messageKey("<m3@hq.test>"), calc_version: 2 }).select("id").single()).data!;
+  const copy = { ...sent("a1", T0, "ana@prospect.test"), payload: { headers: [{ name: "From", value: BOX }, { name: "To", value: "ana@prospect.test" }, { name: "Message-ID", value: "<m3@hq.test>" }] } };
+  const answer = { id: "c1", internalDate: String(T0 + 60_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "ana@prospect.test" }] } };
+  const routes = () => base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: copy },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [copy, answer] } },
+  ]);
+  // The canonical observation's attempts are missing (its write failed): the reply is stored with nobody.
+  mock = installFetchMock(routes());
+  assert.equal((await syncMailbox(db, member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") })).error, undefined);
+  const replyOf = async () => (await db.from("gtm_team_mail_events").select("person_ids").eq("member", "TSYNC").eq("gmail_message_id", "c1")).data![0].person_ids;
+  assert.deepEqual(await replyOf(), []);
+  mock.restore();
+  // The canonical attempts are repaired; this mailbox reads its thread again.
+  assert.equal((await db.from("gtm_email_attempts").insert({ event_id: orig.id, recipient_hash: addressHash("ana@prospect.test"), field: "to", match: "matched", person_id: P1, stream: "cold" })).error, null);
+  await db.from("gtm_sync_state").delete().eq("key", stateKey("TSYNC", BOX));
+  await db.from("gtm_team_mailboxes").update({ backfill_done: false, history_id: null }).eq("member", "TSYNC");
+  mock = installFetchMock(routes());
+  assert.equal((await syncMailbox(db, member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T01:00:00Z") })).error, undefined);
+  assert.deepEqual(await replyOf(), [P1], "attributed through the repaired canonical attempt");
+  await db.from("gtm_email_attempts").delete().eq("event_id", orig.id);
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
 });

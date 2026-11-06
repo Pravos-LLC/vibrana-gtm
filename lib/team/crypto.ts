@@ -37,6 +37,11 @@ export function openToken(sealed: string, aad: string, env?: Record<string, stri
 export const addressHash = (address: string, env?: Record<string, string | undefined>) =>
   createHmac("sha256", derive("address", env)).update(address.trim().toLowerCase()).digest("base64url").slice(0, 32);
 
+/** A keyed hash of an RFC 5322 Message-ID, so a copy of one message seen in two mailboxes (a forward, a CC to the HQ inbox)
+ *  is recognized as the same send without storing the header. Angle brackets and case are ignored. */
+export const messageKey = (messageId: string, env?: Record<string, string | undefined>) =>
+  createHmac("sha256", derive("message", env)).update(messageId.trim().replace(/^<|>$/g, "").toLowerCase()).digest("base64url").slice(0, 32);
+
 export type OAuthState = { sub: string; member: string; nonce: string; exp: number };
 
 export function signState(s: OAuthState, env?: Record<string, string | undefined>): string {

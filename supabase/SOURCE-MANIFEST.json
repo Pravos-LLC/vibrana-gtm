@@ -88,6 +88,8 @@
   "supabase/tests/gtm_storyboard_agent_notes_never_block.sql": "8fdf945d8eebf5453b33f632141115291db4bdcdf3d6f5a23b8072afa4cbb338",
   "supabase/tests/gtm_storyboard_approve_with_notes.sql": "ef2e95b706ebb0badf2705135d0465eec785a11063c39e707a6ea83cb5cc5474",
   "supabase/tests/gtm_storyboards.sql": "3723e55e35e31693ea853e65e044513b54d37a7a40ee81e3c93078cfad81632b",
-  "supabase/tests/gtm_team_performance.sql": "5f965554424e286a22562ac11005c97bf692b500909680c364ab5c43447dc7ed",
-  "supabase/tests/gtm_work_items.sql": "17d580c26ec298ba65f6cebbca943a059c46de1ba7e5a735e15a619e0e37edd9"
+  "supabase/tests/gtm_team_performance.sql": "5a12261b1f9e0106c27a0cd89e259959570a1db12e45269fc83d9eca493d5967",
+  "supabase/tests/gtm_work_items.sql": "17d580c26ec298ba65f6cebbca943a059c46de1ba7e5a735e15a619e0e37edd9",
+  "supabase/migrations/20261106010000_gtm_email_outcomes.sql": "93972dd8e39683827229176e0896f50d4c28537c191bd0ee40b2cc144ddb05fa",
+  "supabase/migrations/20261106020000_gtm_email_mailbox_identity.sql": "b02b397d6e19fea1287b66cc085d97d42c6bc782fe5a237534566a79150a316d"
 }

@@ -46,6 +46,8 @@ export async function GET(request: Request) {
   const { error } = await db.from("gtm_team_mailboxes").upsert({
     member: v.member.code, address: granted.email, token_ciphertext: sealToken(granted.refreshToken, mailboxAad(v.member.code, granted.email)),
     key_version: 1, history_id: null, backfill_done: false, connected_at: new Date().toISOString(), last_sync_at: null, last_error: null,
+    // What Google granted, read from its answer: body-dependent work checks this, never the scope the code asked for.
+    granted_scopes: granted.grantedScopes, scopes_checked_at: new Date().toISOString(),
   }, { onConflict: "member,address" });
   // A fresh connection starts a fresh backfill: no cursor or pending ids from an earlier connection carry over.
   if (!error) await db.from("gtm_sync_state").delete().eq("key", stateKey(v.member.code, granted.email));

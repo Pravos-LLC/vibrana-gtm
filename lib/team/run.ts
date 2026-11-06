@@ -10,12 +10,24 @@ import { gmailConfig, syncMailbox, type MailboxRow, type SyncResult } from "./ma
 import { stock } from "./metrics";
 import type { TeamMember } from "./members";
 
-export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string } };
+export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string }; _lease?: string };
+
+const LEASE = "team.hourly";
 
 export async function runTeam(db: SupabaseClient, members: TeamMember[], opts: { now?: Date; deadline: number; notify?: { to: string; from: string } }): Promise<TeamRun> {
   const now = opts.now ?? new Date();
-  const reader = new TwentyReader({ deadline: opts.deadline - 5_000 });
   const out: TeamRun = {};
+  // One team run at a time (VIB-510): a slow run and the next hour's must never write the same events or attempts at once.
+  const holder = `run-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
+  const lease = await db.rpc("gtm_take_lease", { p_job: LEASE, p_holder: holder, p_seconds: 300 });
+  // Fails closed: no lease, no run (the next hour tries again).
+  if (lease.error) return { _lease: `the lease could not be taken (${lease.error.code ?? "error"}); skipped` } as TeamRun;
+  if (lease.data !== true) return { _lease: "another team run holds the lease; skipped" } as TeamRun;
+  try { return await runLeased(db, members, opts, now, out); } finally { await db.rpc("gtm_release_lease", { p_job: LEASE, p_holder: holder }); }
+}
+
+async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?: Date; deadline: number; notify?: { to: string; from: string } }, now: Date, out: TeamRun): Promise<TeamRun> {
+  const reader = new TwentyReader({ deadline: opts.deadline - 5_000 });
   // Keep the last part of the budget for the API key check.
   const membersEnd = opts.deadline - 20_000;
   for (const [i, m] of members.entries()) {

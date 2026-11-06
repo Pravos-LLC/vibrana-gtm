@@ -98,8 +98,9 @@ export async function labelReply(draftId: string, sentiment: (typeof SENTIMENTS)
   if (error || !data) return { ok: false, error: error?.message ?? "Unknown draft." };
   // A label is John saying they replied: the draft becomes "replied" (so the desk stops offering a follow-up), dated now
   // until the hourly sync replaces it with Gmail's own reply time. Clearing a label never invents or removes a reply.
-  const patch: Record<string, unknown> = { reply_sentiment: sentiment, reply_labeled_at: sentiment ? now : null };
-  if (sentiment && !data.email_replied_at) patch.email_replied_at = now;
+  // A click here is a human decision (reply_label_source), and outranks any model label (VIB-508/VIB-510).
+  const patch: Record<string, unknown> = { reply_sentiment: sentiment, reply_labeled_at: sentiment ? now : null, reply_label_source: sentiment ? "human" : null };
+  if (sentiment && !data.email_replied_at) { patch.email_replied_at = now; patch.email_replied_at_source = "label"; }
   if (sentiment && data.email_status === "sent") patch.email_status = "replied";
   const { error: e2 } = await db.from("gtm_outreach_drafts").update(patch).eq("id", draftId);
   if (e2) return { ok: false, error: e2.message };

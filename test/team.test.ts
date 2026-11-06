@@ -3,17 +3,19 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { installFetchMock, type Route } from "./support/fetch-mock.ts";
 
 const KEY = randomBytes(32).toString("base64");
 Object.assign(process.env, { TEAM_MAILBOX_KEY: KEY, TWENTY_API_KEY: "twenty_test", TWENTY_BASE: "https://crm.test", NEXT_PUBLIC_SUPABASE_URL: "https://db.test", SUPABASE_SECRET_KEY: "sb_secret_test" });
 const { parseMembers, isMemberRow, createdByFilter, teamMembers } = await import("../lib/team/members.ts");
-const { classifySend, threadOutcome, recipients, eligibleForOutreach } = await import("../lib/team/classify.ts");
+const { classifyMessage, threadOutcome, recipients, recipientsOf, eligibleForOutreach, policyFlags, verificationOf } = await import("../lib/team/classify.ts");
+const R = await import("../lib/team/restrictions.ts");
 const { sealToken, openToken, signState, verifyState, addressHash, pkceChallenge } = await import("../lib/team/crypto.ts");
 const M = await import("../lib/team/metrics.ts");
 const { TwentyReader } = await import("../lib/twenty.ts");
-const { authUrl } = await import("../lib/team/mailbox.ts");
+const { authUrl, requestedScopes, canReadBodies, episodeFor, lookupPeople, resetPersonFields, READONLY_SCOPE, METADATA_SCOPE } = await import("../lib/team/mailbox.ts");
+const { messageKey } = await import("../lib/team/crypto.ts");
 
 let mock: ReturnType<typeof installFetchMock> | null = null;
 const use = (routes: Route[]) => (mock = installFetchMock(routes));
@@ -54,18 +56,114 @@ const person = (id: string, extra: Record<string, string | null> = {}) => ({ id,
 const msg = (id: string, at: number, headers: Record<string, string>, labelIds: string[] = []) =>
   ({ id, internalDate: String(at), labelIds, payload: { headers: Object.entries(headers).map(([name, value]) => ({ name, value })) } });
 
-test("an exact address match to an eligible CRM person is outreach; clients, partners, personal and suppressed are not", () => {
-  const people = new Map([["ana@prospect.test", person("p1")], ["cli@client.test", person("p2", { gtmRelationship: "CLIENT" })],
-    ["pa@partner.test", person("p3", { gtmQueue: "PARTNER" })], ["mum@gmail.com", person("p4", { gtmRelationship: "PERSONAL" })],
-    ["x@sup.test", person("p5", { gtmQueue: "SUPPRESSED" })], ["w@warm.test", person("p6", { prospectReviewState: "WARM_INTRO" })]]);
+const match = (id: string, extra: Record<string, unknown> = {}) => ({ person: { ...person(id), ...extra } as import("../lib/team/classify.ts").CrmPerson });
+const to = (...a: string[]) => a.map((address) => ({ address, field: "to" as const }));
+
+test("each recipient is an attempt: matched cold, ambiguous, other CRM mail; correspondence is not counted", () => {
+  const people = new Map<string, import("../lib/team/classify.ts").PersonMatch>([
+    ["ana@prospect.test", match("p1")], ["cli@client.test", match("p2", { gtmRelationship: "CLIENT" })],
+    ["pa@partner.test", match("p3", { gtmQueue: "PARTNER" })], ["mum@gmail.com", match("p4", { gtmRelationship: "PERSONAL" })],
+    ["w@warm.test", match("p6", { prospectReviewState: "WARM_INTRO" })], ["shared@prospect.test", { ambiguous: true }]]);
   const companies = new Map([["prospect.test", ["c1"]], ["client.test", ["c2"]], ["gmail.com", ["c9"]]]);
-  assert.deepEqual(classifySend(["ana@prospect.test", "bob@else.test"], people, companies), { kind: "outreach", personIds: ["p1"], recipients: ["ana@prospect.test"] });
-  for (const a of ["cli@client.test", "pa@partner.test", "mum@gmail.com", "x@sup.test"]) assert.equal(classifySend([a], people, companies), null, a);
-  assert.equal(classifySend(["w@warm.test"], people, companies)?.kind, "outreach", "a warm intro is outreach");
-  assert.deepEqual(classifySend(["new@prospect.test"], people, companies), { kind: "other_crm", companyIds: ["c1"] });
-  assert.equal(classifySend(["stranger@gmail.com"], people, companies), null, "freemail never matches a company");
-  assert.equal(classifySend(["someone@nowhere.test"], people, companies), null);
+  const c = classifyMessage(to("ana@prospect.test", "bob@else.test", "shared@prospect.test"), people, companies)!;
+  assert.equal(c.kind, "outreach"); assert.deepEqual(c.personIds, ["p1"]);
+  assert.deepEqual(c.attempts.map((a) => [a.address, a.match, a.stream, a.personId]), [
+    ["ana@prospect.test", "matched", "cold", "p1"], ["bob@else.test", "unmatched", "unknown", null], ["shared@prospect.test", "ambiguous", "unknown", null]]);
+  for (const a of ["cli@client.test", "pa@partner.test", "mum@gmail.com"]) assert.equal(classifyMessage(to(a), people, companies), null, a);
+  assert.equal(classifyMessage(to("w@warm.test"), people, companies)?.kind, "outreach", "a warm intro is outreach");
+  assert.deepEqual(classifyMessage(to("new@prospect.test"), people, companies)?.companyIds, ["c1"]);
+  assert.equal(classifyMessage(to("new@prospect.test"), people, companies)?.kind, "other_crm");
+  assert.equal(classifyMessage(to("stranger@gmail.com"), people, companies), null, "freemail never matches a company");
+  assert.equal(classifyMessage(to("shared@prospect.test"), people, new Map()), null, "an ambiguous address alone is not counted, only reported");
   assert.equal(eligibleForOutreach(person("p", { gtmRelationship: "FORMER_CLIENT" })), false);
+});
+
+test("a send that broke policy is counted with flags, never hidden (AC496-01, AC496-02)", () => {
+  const sup = match("p5", { gtmQueue: "SUPPRESSED", gtmMarketingConsent: "UNSUBSCRIBED", prospectNotSendable: "EMAIL_BOUNCED", gtmOrigins: ["PROSPECT_TOOL", "LINKEDIN"] });
+  const c = classifyMessage(to("x@sup.test"), new Map([["x@sup.test", sup]]), new Map())!;
+  assert.equal(c.kind, "outreach");
+  assert.deepEqual(c.attempts[0].policyFlags, ["UNSUBSCRIBED", "QUEUE_SUPPRESSED", "NETWORK", "NOT_SENDABLE"]);
+  assert.deepEqual(policyFlags({ ...person("p"), prospectNotSendable: "  " }, "a@b.test"), [], "a blank reason is no reason");
+  const restricted = { ...person("p"), emails: { primaryEmail: "a@b.test" }, gtmEmailRestrictions: { version: 1, addresses: { "a@b.test": { reason: "EMAIL_BOUNCED" } } } };
+  assert.deepEqual(policyFlags(restricted, "a@b.test"), ["ADDRESS_RESTRICTED"]);
+  assert.deepEqual(policyFlags({ ...restricted, gtmEmailRestrictions: "junk" }, "a@b.test"), ["RESTRICTIONS_UNREADABLE"]);
+});
+
+test("verification is Twenty's verdict on the exact primary address; an additional address is unknown; nothing is inferred from silence", () => {
+  const p = { ...person("p"), revEmailVerification: "UNVERIFIED", emails: { primaryEmail: "Ana@Prospect.test", additionalEmails: ["ana@else.test"] } };
+  assert.deepEqual(verificationOf(p, "ana@prospect.test", true), { verification: "unverified", verificationBasis: "at_send" });
+  assert.deepEqual(verificationOf(p, "ana@prospect.test", false), { verification: "unverified", verificationBasis: "inferred" }, "a backfilled send reads today's value");
+  assert.deepEqual(verificationOf(p, "ana@else.test", true), { verification: "unknown", verificationBasis: "none" });
+  assert.deepEqual(verificationOf({ ...p, revEmailVerification: null }, "ana@prospect.test", true), { verification: "unknown", verificationBasis: "none" });
+  const c = classifyMessage(to("ana@prospect.test"), new Map([["ana@prospect.test", { person: p }]]), new Map(), true)!;
+  assert.equal(c.attempts[0].stream, "cold", "an unverified address still counts as a cold attempt");
+});
+
+test("the restriction reader matches the CRM's pinned contract cases", () => {
+  const raw = readFileSync(new URL("./fixtures/email-contract-v1.json", import.meta.url));
+  assert.equal(createHash("sha256").update(raw).digest("hex"), "23feca577ae8581a20a091d328be6c3e24719e684aa39e9e844967a383ea7b6a",
+    "re-copy vibrana-crm tests/fixtures/email_contract_v1.json and update this pin together");
+  const contract = JSON.parse(raw.toString("utf8"));
+  for (const c of contract.cases) {
+    const p = { ...structuredClone(contract.base), ...structuredClone(c.set) };
+    assert.equal(R.protectedPerson(p), c.expect.protected, `${c.name}: protected`);
+    if ("emailTarget" in c.expect) assert.equal(R.emailTarget(p).address, c.expect.emailTarget, `${c.name}: target`);
+    for (const [address, reasons] of Object.entries(c.expect.refusals ?? {})) assert.deepEqual(R.emailRefusals(p, address || null), reasons, `${c.name}: ${address || "no address"}`);
+  }
+});
+
+test("Bcc recipients are attempts; a recipient appears once", () => {
+  const m = msg("s1", 1, { To: "Ana <ana@prospect.test>", Cc: "ana@prospect.test", Bcc: "bo@prospect.test" });
+  assert.deepEqual(recipientsOf(m, ["me@hq.test"]), [{ address: "ana@prospect.test", field: "to" }, { address: "bo@prospect.test", field: "bcc" }]);
+});
+
+test("an outreach effort spans threads and mailboxes: a desk draft's effort, its manual follow-ups, else one manual effort", () => {
+  const D = M.DAY, t = Date.parse("2026-11-01T00:00:00Z");
+  const drafts = [{ id: "d1", sentAt: t }, { id: "d0", sentAt: null }];
+  const a = episodeFor("p1", t + D, drafts);
+  assert.equal(a.draftId, "d1");
+  const followUp = episodeFor("p1", t + 10 * D, drafts);
+  assert.equal(followUp.episodeId, a.episodeId, "a later manual send continues the desk effort");
+  assert.equal(followUp.draftId, null);
+  const manual = episodeFor("p1", t - 10 * D, drafts);
+  assert.notEqual(manual.episodeId, a.episodeId);
+  assert.equal(episodeFor("p1", t - 20 * D, []).episodeId, manual.episodeId, "one manual effort per person: no quiet-period reset");
+  assert.deepEqual(episodeFor("p1", t, [{ id: "x", sentAt: t }, { id: "y", sentAt: t + D }]), { episodeId: null, draftId: null }, "two candidate drafts: unresolved");
+  assert.notEqual(episodeFor("p2", t + D, drafts).episodeId, a.episodeId, "efforts are per person");
+});
+
+test("CRM lookup: primary and additional addresses match exactly; an address on two people is ambiguous", async () => {
+  resetPersonFields();
+  const node = (id: string, primary: string, extra: string[] = []) => ({ id, gtmRelationship: null, prospectReviewState: null, gtmQueue: null, emails: { primaryEmail: primary, additionalEmails: extra } });
+  const page = (nodes: unknown[]) => ({ data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: nodes.map((n) => ({ node: n })) } } });
+  use([{ url: "https://crm.test/graphql", json: page([node("p1", "Ana@Prospect.test", ["ana.alt@prospect.test"]), node("p2", "shared@x.test"), node("p3", "other@x.test", ["shared@x.test", "anabelle@prospect.test"])]) }]);
+  const reader = new TwentyReader({ pauseMs: 0, sleep: async () => {}, now: () => 0 });
+  const m = await lookupPeople(reader, ["ana@prospect.test", "ana.alt@prospect.test", "shared@x.test", "ana@else.test"]);
+  assert.deepEqual(m.get("ana@prospect.test"), { person: { ...node("p1", "Ana@Prospect.test", ["ana.alt@prospect.test"]) } });
+  assert.equal((m.get("ana.alt@prospect.test") as { person: { id: string } }).person.id, "p1");
+  assert.deepEqual(m.get("shared@x.test"), { ambiguous: true });
+  assert.equal(m.has("ana@else.test"), false);
+  assert.equal(m.has("anabelle@prospect.test"), false, "a like-match is re-checked exactly");
+  assert.equal(mock!.calls.length, 1, "one request for the batch");
+  assert.match(mock!.calls[0].body!, /gtmEmailRestrictions/);
+});
+
+test("CRM lookup still works before the CRM has the restrictions field", async () => {
+  resetPersonFields();
+  use([
+    { url: "https://crm.test/graphql", json: { errors: [{ message: "Cannot query field \"gtmEmailRestrictions\" on type \"Person\"." }] }, times: 1 },
+    { url: "https://crm.test/graphql", json: { data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [] } } } },
+  ]);
+  const reader = new TwentyReader({ pauseMs: 0, sleep: async () => {}, now: () => 0 });
+  assert.equal((await lookupPeople(reader, ["a@b.test"])).size, 0);
+  assert.doesNotMatch(mock!.calls[1].body!, /gtmEmailRestrictions/);
+  resetPersonFields();
+});
+
+test("message keys are keyed, ignore brackets and case, and never equal the header", () => {
+  assert.equal(messageKey("<ABC@mail.test>"), messageKey("abc@mail.test"));
+  assert.notEqual(messageKey("abc@mail.test"), "abc@mail.test");
+  assert.match(messageKey("abc@mail.test"), /^[A-Za-z0-9_-]{32}$/);
 });
 
 test("recipients drop the member's own addresses, their domain and ignored team domains", () => {
@@ -83,9 +181,11 @@ test("replies come from an outreach recipient after the first send; auto-replies
     msg("x1", 170, { From: "other@prospect.test" }),
     msg("r1", 200, { From: "Ana <ana@prospect.test>" }),
   ], 100, ["me@hq.test"], isR);
-  assert.deepEqual(out, { replies: [{ id: "r1", at: 200 }], bounce: null });
-  const b = threadOutcome([msg("d1", 120, { From: "Mail Delivery Subsystem <mailer-daemon@googlemail.com>" })], 100, ["me@hq.test"], isR);
-  assert.deepEqual(b, { replies: [], bounce: { id: "d1", at: 120 } });
+  assert.deepEqual(out, { replies: [{ id: "r1", at: 200, from: "ana@prospect.test" }], bounce: null, failures: [] });
+  const b = threadOutcome([msg("d1", 120, { From: "Mail Delivery Subsystem <mailer-daemon@googlemail.com>" }), msg("r2", 130, { From: "ana@prospect.test" }),
+    msg("d2", 140, { From: "postmaster@prospect.test" })], 100, ["me@hq.test"], isR);
+  assert.deepEqual(b.failures, [{ id: "d1", at: 120 }, { id: "d2", at: 140 }], "every failure report, not only the first");
+  assert.deepEqual(b.replies.map((r) => r.id), ["r2"], "a reply after a failure is still a reply");
 });
 
 /* ---------------------------------------------------------------- secrets */
@@ -118,6 +218,10 @@ test("recipient hashes are keyed and case-insensitive; PKCE is S256; the auth UR
   assert.equal(pkceChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
   const u = new URL(authUrl({ clientId: "cid", redirectUri: "https://cockpit.test/api/team/mailbox/callback", state: "st", challenge: "ch", loginHint: "abe@hq.test" }));
   assert.equal(u.searchParams.get("scope"), "openid email https://www.googleapis.com/auth/gmail.metadata");
+  assert.deepEqual(requestedScopes({ TEAM_GMAIL_READONLY: "1" }), ["openid", "email", READONLY_SCOPE], "readonly only once the OAuth client is configured for it");
+  assert.equal(canReadBodies([METADATA_SCOPE]), false, "a metadata grant never reads reply text");
+  assert.equal(canReadBodies([READONLY_SCOPE]), true);
+  assert.equal(canReadBodies(null), false);
   assert.equal(u.searchParams.get("access_type"), "offline");
   assert.equal(u.searchParams.get("code_challenge_method"), "S256");
 });
@@ -260,4 +364,27 @@ test("a reconnect never revokes the previous token: Google would revoke the new 
 test("the team cron is scheduled hourly in vercel.json", () => {
   const crons = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8")).crons as { path: string; schedule: string }[];
   assert.ok(crons.some((c) => c.path === "/api/cron/team" && /^\d+ \* \* \* \*$/.test(c.schedule)));
+});
+
+test("a send seen in two of the member's mailboxes is one conversation: its copy's thread joins it (review of #30, C2)", () => {
+  const sends = Array.from({ length: 10 }, (_, k) => ({ ...ev("outreach", 20, `a${k}`, [`p${k}`]), mailbox: "a@hq.test", message_key: `m${k}` }));
+  const copies = sends.map((x, k) => ({ ...x, thread_id: `b${k}`, mailbox: "b@hq.test" }));
+  const reply = { ...ev("reply", 18, "b0"), mailbox: "b@hq.test" };
+  const r = M.teamReport({ ...base, activity: activity(), mail: [...sends, ...copies, reply] });
+  assert.deepEqual([r.cur.emailsSent, r.cur.newThreads, r.cur.replies], [10, 10, 1], "copies add no send and no first touch");
+  assert.deepEqual(r.cur.reply, { rate: 0.1, replied: 1, n: 10 }, "the reply through the copy's thread answers the original send");
+  assert.equal((r.cur.emailsSent ?? 0) - (r.cur.newThreads ?? 0), 0, "never a negative follow-up count");
+});
+
+test("threads linked through a chain of mailboxes are one conversation; a cycle resolves too (review of #30, D2)", () => {
+  const others = Array.from({ length: 9 }, (_, k) => ({ ...ev("outreach", 20, `o${k}`, [`q${k}`]), mailbox: "a@hq.test", message_key: `o${k}` }));
+  const m1a = { ...ev("outreach", 20, "a", ["p1"]), mailbox: "a@hq.test", message_key: "m1" }, m1b = { ...m1a, thread_id: "b", mailbox: "b@hq.test" };
+  const m2b = { ...ev("outreach", 16, "b", ["p1"]), mailbox: "b@hq.test", message_key: "m2" }, m2c = { ...m2b, thread_id: "c", mailbox: "c@hq.test" };
+  const reply = { ...ev("reply", 15, "c"), mailbox: "c@hq.test" };
+  const r = M.teamReport({ ...base, activity: activity(), mail: [...others, m1a, m1b, m2b, m2c, reply] });
+  assert.deepEqual(r.cur.reply, { rate: 0.1, replied: 1, n: 10 }, "the reply in C's thread answers the conversation that began in A");
+  assert.equal(r.cur.newThreads, 10);
+  // A cycle: m3 links a-b, m4 links b-a in the opposite direction.
+  const cyc = M.logicalMail([{ ...m1a, message_key: "m3" }, { ...m1b, message_key: "m3" }, { ...m2b, message_key: "m4" }, { ...m2b, thread_id: "a", mailbox: "a@hq.test", message_key: "m4" }, { ...ev("reply", 15, "b"), mailbox: "b@hq.test" }]);
+  assert.equal(new Set(cyc.map((e) => e.thread_id)).size, 1);
 });
