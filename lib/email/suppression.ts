@@ -258,7 +258,9 @@ export async function emailHolds(db: SupabaseClient, personId: string, address: 
       }
     }
   }
-  const ops = must(await db.from("gtm_email_sync_ops").select("action,reason,state,address_hash").eq("person_id", personId).eq("destination", "twenty").neq("state", "canceled"), "holds") as { action: string; reason: string; state: string; address_hash: string | null }[];
+  // Operations are keyed by Twenty's UUID person id; any other id (a local fixture) cannot have one.
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(personId);
+  const ops = isUuid ? must(await db.from("gtm_email_sync_ops").select("action,reason,state,address_hash").eq("person_id", personId).eq("destination", "twenty").neq("state", "canceled"), "holds") as { action: string; reason: string; state: string; address_hash: string | null }[] : [];
   if (ops.some((o) => o.action === "person_opt_out")) { const why = ops.some((o) => o.reason === "UNSUBSCRIBED") ? "they opted out" : "a possible opt-out is waiting for review"; if (!out.includes(why)) out.push(why); }
   if (address) {
     const h = addressHash(address);
