@@ -86,7 +86,8 @@ export async function reconcileIncidents(db: SupabaseClient, observed: Incident[
   const open = must(await db.from("gtm_email_incidents").select("id,incident_key,kind,severity,summary,detail,notified_at,opened_at").is("resolved_at", null).in("kind", kinds), "open incidents") as
     { id: number; incident_key: string; kind: string; severity: Incident["severity"]; summary: string; detail: Record<string, unknown>; notified_at: string | null; opened_at: string }[];
   // Never before the incident opened (the table's order check): a clock behind the opening run's resolves at the opening.
-  const notBefore = (opened: string) => new Date(Math.max(now.getTime(), Date.parse(opened))).toISOString();
+  // Date.parse drops microseconds, so when now is not strictly past the opening millisecond the stored value itself is used.
+  const notBefore = (opened: string) => (now.getTime() > Date.parse(opened) ? now.toISOString() : opened);
   const seen = new Set(observed.map((o) => o.key));
   for (const o of open) if (!seen.has(o.incident_key) && !unchecked.has(o.kind)) must(await db.from("gtm_email_incidents").update({ resolved_at: notBefore(o.opened_at), last_seen_at: notBefore(o.opened_at) }).eq("id", o.id), "resolve incident");
   for (const o of observed) {

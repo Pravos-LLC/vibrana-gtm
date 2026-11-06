@@ -3,6 +3,7 @@
 // and every external service pointed at a closed local port, so nothing can reach Zernio or Twenty.
 // Values set here win over .env.local, which Next.js never overrides.
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 
 const root = new URL("..", import.meta.url).pathname;
 const s = JSON.parse(execFileSync("supabase", ["status", "-o", "json"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }));
@@ -17,6 +18,8 @@ const env = {
   TWENTY_BASE: closed, TWENTY_API_KEY: "e2e-no-live-calls", WISE_API_TOKEN: "e2e-no-live-calls",
   // Twenty is closed here, so the desk's live email-restriction check (which fails closed) is off; DB tests cover it.
   EMAIL_HOLDS_LIVE_CHECK: "off",
+  // A throwaway key per run for the address and Message-ID hashes (the desk's email holds need it); never a real mailbox key.
+  TEAM_MAILBOX_KEY: randomBytes(32).toString("base64"),
   // No model or profile reads: drafting and "Not spam" redrafts take their failure path (the card opens for John).
   OPENROUTER_API_KEY: "", APIFY_TOKEN: "", FIRECRAWL_API_KEY: "",
   // No email: review-link notifications and digests take their logged failure path.
