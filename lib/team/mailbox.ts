@@ -21,6 +21,8 @@ import { classifyMessage, domainOf, FREEMAIL, recipientsOf, threadOutcome, type 
 import { addressHash, messageKey, openToken } from "./crypto";
 import type { TeamMember } from "./members";
 import { personEmails, RESTRICTIONS_FIELD } from "./restrictions";
+import { parseDeliveryStatus, replyRule } from "../email/rules";
+import { autoMessage } from "./classify";
 
 export const METADATA_SCOPE = "https://www.googleapis.com/auth/gmail.metadata";
 export const READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
@@ -122,6 +124,11 @@ export class TeamGmail {
     const p = new URLSearchParams({ format: "metadata" });
     for (const h of HEADERS) p.append("metadataHeaders", h);
     return this.get<MailMessage & { threadId: string }>(`messages/${encodeURIComponent(id)}`, p);
+  }
+  /** The whole message, only for a grant with gmail.readonly and only for a candidate reply or failure report. */
+  full(id: string) { return this.get<MailMessage & { threadId: string }>(`messages/${encodeURIComponent(id)}`, new URLSearchParams({ format: "full" })); }
+  attachment(messageId: string, attachmentId: string) {
+    return this.get<{ data?: string }>(`messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`);
   }
   thread(id: string) {
     const p = new URLSearchParams({ format: "metadata" });
@@ -239,10 +246,28 @@ async function deskDrafts(db: SupabaseClient, personIds: string[]): Promise<Map<
 
 /* ------------------------------------------------------------------------------------------------ sync */
 
-export type MailboxRow = { member: string; address: string; token_ciphertext: string; history_id: string | null; backfill_done: boolean; last_sync_at: string | null };
+export type MailboxRow = { member: string; address: string; token_ciphertext: string; history_id: string | null; backfill_done: boolean; last_sync_at: string | null; granted_scopes?: string[] | null };
+
+type Part = { mimeType?: string; body?: { data?: string; attachmentId?: string }; parts?: Part[] };
+const decode = (b64: string | undefined) => (b64 ? Buffer.from(b64, "base64url").toString("utf8") : "");
+/** The text of the first part with this MIME type (inline or as an attachment). Held in memory only. */
+async function partText(gmail: TeamGmail, messageId: string, root: Part | undefined, mime: RegExp): Promise<string | null> {
+  const stack = root ? [root] : [];
+  while (stack.length) {
+    const p = stack.shift()!;
+    if (p.mimeType && mime.test(p.mimeType)) {
+      if (p.body?.data) return decode(p.body.data);
+      if (p.body?.attachmentId) return decode((await gmail.attachment(messageId, p.body.attachmentId)).data);
+    }
+    stack.push(...(p.parts ?? []));
+  }
+  return null;
+}
 export type SyncResult = {
   address: string; sends: number; outreach: number; other_crm: number; replies: number; bounces: number; threads_checked: number; pending: number; complete: boolean;
-  attempts: number; reconciled: number; ambiguous_only: number; unattributed_failures: number; error?: string;
+  attempts: number; reconciled: number; ambiguous_only: number; unattributed_failures: number;
+  /** With gmail.readonly: failure reports read per recipient, replies checked by the deterministic rules. */
+  reports_read: number; replies_checked: number; possible_opt_outs: number; error?: string;
 };
 type EventKind = "outreach" | "other_crm" | "reply" | "bounce";
 type Event = {
@@ -313,7 +338,8 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
 }): Promise<SyncResult> {
   const now = opts.now ?? new Date(), fetcher = opts.fetcher ?? fetch, clock = opts.clock ?? Date.now;
   const result: SyncResult = { address: row.address, sends: 0, outreach: 0, other_crm: 0, replies: 0, bounces: 0, threads_checked: 0, pending: 0, complete: true,
-    attempts: 0, reconciled: 0, ambiguous_only: 0, unattributed_failures: 0 };
+    attempts: 0, reconciled: 0, ambiguous_only: 0, unattributed_failures: 0, reports_read: 0, replies_checked: 0, possible_opt_outs: 0 };
+  const bodies = canReadBodies(row.granted_scopes);
   const late = () => opts.deadline != null && clock() > opts.deadline;
   const key = stateKey(row.member, row.address);
   const own = member.mailboxes.length ? member.mailboxes : [row.address];
@@ -479,7 +505,9 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     const cap = opts.maxThreads ?? 150;
     const start = open.length > cap ? (Math.floor(now.getTime() / 3_600_000) * cap) % open.length : 0;
     const replyEvents: Event[] = [];
-    const failed: { attemptId: number; at: number; reportId: string }[] = [];
+    const failed: { attemptId: number; at: number; reportId: string; delivery?: string }[] = [];
+    const ruled: { replyId: string; persons: string[]; intent: string; opt_out: string }[] = [];
+    const knownReplies = new Set([...recent, ...older].filter((e) => e.kind === "reply").map((e) => e.gmail_message_id));
     let threadsDone = true;
     for (let k = 0; k < Math.min(cap, open.length); k++) {
       if (late()) { result.complete = false; threadsDone = false; break; }
@@ -492,6 +520,18 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
       for (const r of out.replies) {
         const hash = addressHash(r.from);
         const who = [...new Set(mine.filter((a) => a.recipient_hash === hash && a.person_id).map((a) => a.person_id!))];
+        // Reply text, only with gmail.readonly and only for a reply from an outreach recipient: the deterministic rules
+        // record an auto-reply or a possible opt-out (held for a person). Nothing of the text is kept.
+        if (bodies && !knownReplies.has(r.id) && !late()) {
+          const m = await gmail.full(r.id).catch((e) => { if ((e as { status?: number }).status === 404) return null; throw e; });
+          if (m) {
+            const text = await partText(gmail, r.id, m.payload as Part | undefined, /^text\/plain$/i) ?? "";
+            const rule = replyRule(text, autoMessage(m));
+            result.replies_checked++;
+            if (rule.opt_out !== "none") result.possible_opt_outs++;
+            if (rule.intent !== "uncertain" || rule.opt_out !== "none") ruled.push({ replyId: r.id, persons: who, intent: rule.intent, opt_out: rule.opt_out });
+          }
+        }
         replyEvents.push({ member: row.member, gmail_message_id: r.id, thread_id: threadId, kind: "reply", at: new Date(r.at).toISOString(),
           person_ids: who, recipient_hashes: [hash], mailbox: row.address, source: "team_mailbox", calc_version: CALC_VERSION });
         result.replies++;
@@ -507,6 +547,21 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
       for (const f of out.failures) {
         const send = t.sends.filter((s) => Date.parse(s.at) < f.at).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
         const cold = send ? mine.filter((a) => a.event_id === send.id && a.stream === "cold") : [];
+        // With gmail.readonly the report names each failed recipient and why (RFC 3464): only those attempts change.
+        if (bodies && send && cold.some((a) => a.delivery === "no_failure_observed" || a.delivery === "delayed" || a.delivery === "failed_unclassified") && !late()) {
+          const m = await gmail.full(f.id).catch((e) => { if ((e as { status?: number }).status === 404) return null; throw e; });
+          const status = m ? await partText(gmail, f.id, m.payload as Part | undefined, /^message\/(global-)?delivery-status$/i) : null;
+          const named = status ? parseDeliveryStatus(status) : [];
+          if (named.length) {
+            result.reports_read++;
+            for (const n of named) {
+              const hit = mine.find((a) => a.event_id === send.id && a.recipient_hash === addressHash(n.address));
+              if (hit) failed.push({ attemptId: hit.id, at: f.at, reportId: f.id, delivery: n.delivery });
+              else result.unattributed_failures++;
+            }
+            continue;
+          }
+        }
         if (cold.length === 1) { if (cold[0].delivery === "no_failure_observed") failed.push({ attemptId: cold[0].id, at: f.at, reportId: f.id }); }
         else result.unattributed_failures++;
       }
@@ -515,8 +570,17 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     const { stored: outcomes, reconciled } = await writeEvents(db, row.member, replyEvents);
     result.reconciled += reconciled;
     for (const f of failed) {
-      must(await db.from("gtm_email_attempts").update({ delivery: "failed_unclassified", delivery_at: new Date(f.at).toISOString(), delivery_event_id: outcomes.get(f.reportId)?.id ?? null, updated_at: now.toISOString() })
-        .eq("id", f.attemptId).eq("delivery", "no_failure_observed"), "record failure");
+      // A typed outcome from the report replaces an untyped or temporary one, never a permanent one; metadata alone only
+      // ever marks a send that had no outcome yet.
+      const allowed = f.delivery ? (f.delivery === "delayed" ? ["no_failure_observed"] : ["no_failure_observed", "delayed", "failed_unclassified"]) : ["no_failure_observed"];
+      must(await db.from("gtm_email_attempts").update({ delivery: f.delivery ?? "failed_unclassified", delivery_at: new Date(f.at).toISOString(), delivery_event_id: outcomes.get(f.reportId)?.id ?? null, updated_at: now.toISOString() })
+        .eq("id", f.attemptId).in("delivery", allowed), "record failure");
+    }
+    for (const r of ruled) {
+      const ev = outcomes.get(r.replyId);
+      if (!ev) continue;
+      const { error } = await db.from("gtm_email_reply_labels").insert({ event_id: ev.id, person_id: r.persons.length === 1 ? r.persons[0] : null, source: "deterministic", intent: r.intent, opt_out: r.opt_out, decision_version: 1 });
+      if (error && error.code !== "23505") throw new Error(`save reply rule: ${error.message}`);   // one current rule decision per reply
     }
 
     // Every sent message up to now was listed and classified: this run is the watermark a history reset reads back from.
