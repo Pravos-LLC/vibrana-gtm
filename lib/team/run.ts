@@ -9,8 +9,9 @@ import { collectActivity, loadActivity, newApiWriters, recentApiWriters, saveAct
 import { gmailConfig, syncMailbox, type MailboxRow, type SyncResult } from "./mailbox";
 import { stock } from "./metrics";
 import type { TeamMember } from "./members";
+import { runEmailHealth, type HealthRun } from "../email/run";
 
-export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string }; _lease?: string };
+export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string }; _lease?: string; _health?: HealthRun | { error: string } };
 
 const LEASE = "team.hourly";
 
@@ -58,7 +59,7 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
 
     try {
       const cfg = gmailConfig();
-      const boxes = must(await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext,history_id,backfill_done,last_sync_at").eq("member", m.code), "mailboxes") as MailboxRow[];
+      const boxes = must(await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext,history_id,backfill_done,last_sync_at,granted_scopes").eq("member", m.code), "mailboxes") as MailboxRow[];
       if (!boxes.length) r.mailbox = "not connected";
       else if (!cfg) r.mailbox = "TEAM_GMAIL_CLIENT_ID / TEAM_GMAIL_CLIENT_SECRET are not set";
       else {
@@ -66,6 +67,10 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
         for (const b of boxes) r.mailbox.push(await syncMailbox(db, m, b, reader, { cfg, now, deadline: memberDeadline - 5_000 }));
       }
     } catch (e) { r.mailbox = `error: ${(e as Error).message.slice(0, 200)}`; }
+  }
+  // Email health (VIB-511): bounce rate, collection problems, daily DNS. Its own failure never fails the run.
+  if (opts.notify) {
+    try { out._health = await runEmailHealth(db, members, { now, mail: opts.notify }); } catch (e) { out._health = { error: (e as Error).message.slice(0, 200) }; }
   }
   reader.setDeadline(opts.deadline - 5_000);
   try {

@@ -8,11 +8,13 @@ import type { EffortDecision, EmailAttempt, EmailEvent, ReplyDecision } from "./
 export const outcomesV2 = (env: Record<string, string | undefined> = process.env) => env.EMAIL_OUTCOMES_V2 === "1";
 
 /** Current decisions per reply: a human's outranks a model's; anything else stands below both. */
-export function currentDecisions(rows: { event_id: number | null; source: string; intent: string; superseded_at: string | null }[]): ReplyDecision[] {
+export function currentDecisions(rows: { event_id: number | null; source: string; intent: string; superseded_at: string | null; opt_out?: string }[]): ReplyDecision[] {
   const rank = (s: string) => (s === "human" ? 3 : s === "deterministic" || s === "provider" ? 2 : s === "model" ? 1 : 0);
   const best = new Map<number, { rank: number; intent: string }>();
   for (const r of rows) {
     if (r.event_id == null || r.superseded_at) continue;
+    // A rule decision that found nothing (the completion record of a checked reply) says nothing: it never outranks a model.
+    if (r.source === "deterministic" && r.intent === "uncertain" && (r.opt_out ?? "none") === "none") continue;
     const k = rank(r.source), cur = best.get(r.event_id);
     if (!cur || k > cur.rank) best.set(r.event_id, { rank: k, intent: r.intent });
   }
@@ -48,7 +50,7 @@ export async function loadOutcomes(db: SupabaseClient, member: string): Promise<
     const chunk = ids.slice(i, i + 200);
     attempts.push(...await selectAll<EmailAttempt>((from, to) => db.from("gtm_email_attempts").select("event_id,person_id,match,stream,episode_id,delivery,verification,policy_flags")
       .in("event_id", chunk).order("id").range(from, to), "attempts"));
-    labels.push(...await selectAll<Parameters<typeof currentDecisions>[0][number]>((from, to) => db.from("gtm_email_reply_labels").select("event_id,source,intent,superseded_at")
+    labels.push(...await selectAll<Parameters<typeof currentDecisions>[0][number]>((from, to) => db.from("gtm_email_reply_labels").select("event_id,source,intent,superseded_at,opt_out")
       .in("event_id", chunk).order("id").range(from, to), "reply decisions"));
   }
   // The inbox label is a person's decision on a desk draft. It reaches the efforts whose sends link to that draft.
