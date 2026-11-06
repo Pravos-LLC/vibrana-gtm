@@ -32,7 +32,10 @@ async function run<T>(fn: (actor: string, claims: Viewer) => Promise<T>): Promis
   try {
     return { ok: true, value: await fn(who.actor, who.claims) };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Something went wrong." };
+    const error = e instanceof Error ? e.message : "Something went wrong.";
+    // Server log only: desk errors name a reason, never an address or message text.
+    console.error(`[desk] action failed: ${error.replace(/[^\s@]+@[^\s@]+/g, "[address]").slice(0, 300)}`);
+    return { ok: false, error };
   }
 }
 
