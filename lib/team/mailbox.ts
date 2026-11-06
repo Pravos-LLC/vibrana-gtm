@@ -253,7 +253,7 @@ type Event = {
   member: string; gmail_message_id: string; thread_id: string; kind: EventKind; at: string; person_ids?: string[]; company_ids?: string[]; recipient_hashes?: string[];
   mailbox: string; message_key?: string | null; source: "team_mailbox"; draft_id?: string | null; calc_version: number;
 };
-type StoredEvent = { id: number; gmail_message_id: string; thread_id: string; kind: string; at: string; mailbox: string | null; calc_version: number; recipient_hashes: string[]; message_key?: string | null };
+type StoredEvent = { id: number; gmail_message_id: string; thread_id: string; kind: string; at: string; mailbox: string | null; calc_version: number; recipient_hashes: string[]; message_key?: string | null; person_ids?: string[] };
 
 /**
  * Per-mailbox sync state (gtm_sync_state). A cursor only ever moves past work that is finished: ids listed but not yet
@@ -289,7 +289,7 @@ export async function selectAll<T>(page: (from: number, to: number) => PromiseLi
   return out;
 }
 
-const EVENT_COLS = "id,gmail_message_id,thread_id,kind,at,mailbox,calc_version,recipient_hashes,message_key";
+const EVENT_COLS = "id,gmail_message_id,thread_id,kind,at,mailbox,calc_version,recipient_hashes,message_key,person_ids";
 
 /** Upserts once per row identity, whichever unique key the schema has: the per-mailbox constraint (vibrana.ai
  *  20261106020000) or, before it, the member-wide one. Decided on every write, never cached, so a running process keeps
@@ -338,6 +338,12 @@ async function writeEvents(db: SupabaseClient, member: string, mailbox: string, 
       const { member: _m, gmail_message_id: _g, ...patch } = e;
       must(await db.from("gtm_team_mail_events").update(patch).eq("id", r.id), "reconcile mail event");
       Object.assign(r, { kind: e.kind, calc_version: e.calc_version, recipient_hashes: e.recipient_hashes });
+      result.reconciled++;
+    } else if ((e.kind === "reply" || e.kind === "bounce") && !(r.person_ids ?? []).length && e.person_ids.length) {
+      // A reply stored before the attempts it is attributed through existed (a failed write, repaired since) gains its
+      // person on a later read. Only an empty attribution is filled; nothing already attributed changes (review of #30, D1).
+      must(await db.from("gtm_team_mail_events").update({ person_ids: e.person_ids }).eq("id", r.id).eq("person_ids", "{}"), "complete reply attribution");
+      r.person_ids = e.person_ids;
       result.reconciled++;
     }
     stored.set(r.gmail_message_id, r);
