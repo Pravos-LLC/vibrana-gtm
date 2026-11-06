@@ -66,3 +66,11 @@ test("the version guard matches the read stamp's millisecond, like vibrana-crm's
   assert.deepEqual(S.versionFilter("p1", "2026-11-06T10:00:00.123Z"), { id: { eq: "p1" }, updatedAt: { gte: "2026-11-06T10:00:00.123Z", lt: "2026-11-06T10:00:00.124Z" } });
   assert.throws(() => S.versionFilter("p1", "u1"), /unreadable/);
 });
+
+test("an opt-out appends to existing consent evidence and never truncates it", () => {
+  const op = { id: 9, action: "person_opt_out", observed_at: "2026-11-05T00:00:00Z" } as unknown as Parameters<typeof S.changeFor>[0];
+  const proof = "original-proof: " + "x".repeat(3990);
+  const c = S.changeFor(op, { id: "p", updatedAt: "2026-11-01T00:00:00.000Z", emails: null, gtmMarketingConsent: "NONE", gtmConsentEvidence: proof }, new Date()) as { data: { gtmConsentEvidence: string } };
+  assert.ok(c.data.gtmConsentEvidence.startsWith(proof), "earlier proof kept whole");
+  assert.match(c.data.gtmConsentEvidence, /UNSUBSCRIBED from an email reply on 2026-11-05 \(cockpit gtm:op:9\)\.$/);
+});

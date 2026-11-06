@@ -133,7 +133,9 @@ export function changeFor(op: StoredOp, p: Live, now: Date): { data: Record<stri
   if (op.action === "person_opt_out") {
     if (p.gtmMarketingConsent === "UNSUBSCRIBED") return null;
     const line = `UNSUBSCRIBED from an email reply on ${op.observed_at.slice(0, 10)} (cockpit gtm:op:${op.id}).`;
-    return { data: { gtmMarketingConsent: "UNSUBSCRIBED", gtmConsentEvidence: [p.gtmConsentEvidence, line].filter(Boolean).join("\n").slice(-4000) } };
+    // Existing evidence is kept whole; the opt-out line is appended, never at the cost of earlier proof (Twenty TEXT has no
+    // length limit).
+    return { data: { gtmMarketingConsent: "UNSUBSCRIBED", gtmConsentEvidence: [p.gtmConsentEvidence, line].filter(Boolean).join("\n") } };
   }
   const r = readRestrictions(p);
   if (!r.ok) return { error: "the person's gtmEmailRestrictions is unreadable; fix it in Twenty first" };

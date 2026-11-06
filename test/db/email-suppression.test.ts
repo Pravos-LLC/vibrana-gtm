@@ -131,7 +131,7 @@ test("a possible opt-out renewed after a correction is a new review that holds t
   await db.from("gtm_email_reply_labels").update({ superseded_at: new Date().toISOString() }).eq("id", first.id);
   await S.detect(db);
   assert.equal((await ops()).filter((o) => o.reason === "OPT_OUT_REVIEW" && o.state === "pending_review").length, 0, "the corrected review is canceled");
-  assert.equal((await db.from("gtm_email_reply_labels").insert({ event_id: first.event_id, person_id: P, source: "human", intent: "uncertain", opt_out: "uncertain" })).error, null);
+  assert.equal((await db.from("gtm_email_reply_labels").insert({ event_id: first.event_id, person_id: P, source: "human", labeled_by: "reviewer@team.test", intent: "uncertain", opt_out: "uncertain" })).error, null);
   await S.detect(db);
   const reviews = (await ops()).filter((o) => o.reason === "OPT_OUT_REVIEW");
   assert.deepEqual(reviews.map((o) => o.state).sort(), ["canceled", "pending_review"]);
