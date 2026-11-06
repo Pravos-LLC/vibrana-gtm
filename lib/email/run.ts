@@ -16,7 +16,15 @@ export type HealthRun = { incidents: number; notified: boolean; dns?: DomainChec
 export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], opts: { now: Date; mail: { to: string; from: string }; checkDomain?: typeof checkDomain }): Promise<HealthRun> {
   const now = opts.now, observed: Incident[] = [], kinds = ["bounce_rate", "collection", "health_check"], unchecked = new Set<string>();
   for (const m of members) {
-    const boxes = must(await db.from("gtm_team_mailboxes").select("address,last_sync_at,last_error,backfill_done").eq("member", m.code), "mailboxes") as { address: string; last_sync_at: string | null; last_error: string | null; backfill_done: boolean }[];
+    const read = await db.from("gtm_team_mailboxes").select("address,last_sync_at,last_error,backfill_done").eq("member", m.code);
+    if (read.error) {
+      // Collection state could not be read: an incident, and the collection and bounce problems it would have judged stay
+      // as they are (review of #32, B3). The other checks still run.
+      unchecked.add("collection"); unchecked.add("bounce_rate");
+      observed.push({ key: `health_check:mailboxes:${m.code.toLowerCase()}`, kind: "health_check", severity: "warning", summary: `${m.label}: mailbox state could not be read (${read.error.message.slice(0, 120)})` });
+      continue;
+    }
+    const boxes = (read.data ?? []) as { address: string; last_sync_at: string | null; last_error: string | null; backfill_done: boolean }[];
     for (const b of boxes) {
       const k = `collection:${m.code.toLowerCase()}:${Buffer.from(b.address).toString("hex").slice(0, 24)}`;
       if (b.last_error) observed.push({ key: k, kind: "collection", severity: "warning", summary: `${m.label}'s mailbox sync is failing: ${b.last_error}`.slice(0, 300) });
@@ -30,7 +38,7 @@ export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], 
       observed.push({ key: `health_check:bounce:${m.code.toLowerCase()}`, kind: "health_check", severity: "warning", summary: `${m.label}: the bounce check could not read email outcomes (${(e as Error).message.slice(0, 120)})` });
       continue;
     }
-    const b = bounceCheck(o.events, o.attempts, now.getTime(), m.code);
+    const b = bounceCheck(o.events, o.attempts, now.getTime(), m.code, o.collection.complete);
     if (b.alert) observed.push({ key: `bounce:${m.code.toLowerCase()}`, kind: "bounce_rate", severity: "critical",
       summary: `${m.label}: ${b.num} of ${b.n} cold recipients in the last 7 days failed (${Math.round((b.num / b.n) * 1000) / 10}%, threshold 2%)`, detail: { num: b.num, n: b.n } });
   }

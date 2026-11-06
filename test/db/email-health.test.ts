@@ -56,5 +56,21 @@ test("one failed recipient of one cold send in 7 days is above 2%: a critical in
   mock = installFetchMock([{ url: "https://api.resend.com/emails", json: { id: "e2" } }, DB]);
   await runEmailHealth(db, [member], { now, mail: { to: "fallback@team.test", from: "cockpit@team.test" } });
   const [inc] = (await db.from("gtm_email_incidents").select("kind,severity,detail").eq("incident_key", "bounce:thlth").is("resolved_at", null)).data!;
-  assert.deepEqual(inc, { kind: "bounce_rate", severity: "critical", detail: { num: 1, n: 1 } });
+  assert.deepEqual([inc.kind, inc.severity, inc.detail.num, inc.detail.n], ["bounce_rate", "critical", 1, 1]);
+  assert.match(String(inc.detail.notice), /1 of 1 cold recipients/, "the emailed text is fixed when the incident opens");
+});
+
+test("a notice that failed to send is still sent once after the check recovers (review of #32, B2)", async () => {
+  const now = new Date();
+  await reset("Google no longer accepts the stored connection. Reconnect the mailbox.", now.toISOString());
+  mock = installFetchMock([{ url: "https://api.resend.com/emails", status: 500, json: {} }, DB]);
+  await assert.rejects(runEmailHealth(admin(), [member], { now, mail: { to: "fallback@team.test", from: "cockpit@team.test" } }), /Resend 500/);
+  mock.restore();
+  await admin().from("gtm_team_mailboxes").update({ last_error: null, last_sync_at: new Date(now.getTime() + 3_600_000).toISOString() }).eq("member", "THLTH");
+  mock = installFetchMock([{ url: "https://api.resend.com/emails", json: { id: "e3" } }, DB]);
+  const r = await runEmailHealth(admin(), [member], { now: new Date(now.getTime() + 3_600_000), mail: { to: "fallback@team.test", from: "cockpit@team.test" } });
+  assert.equal(r.notified, true);
+  const [row] = (await admin().from("gtm_email_incidents").select("resolved_at,notified_at").like("incident_key", "collection:thlth:%")).data!;
+  assert.ok(row.resolved_at && row.notified_at, "resolved, and the owed notice went out");
+  assert.match(JSON.parse(mock.calls.find((c) => c.url.startsWith("https://api.resend.com"))!.body!).text, /since passed/);
 });
