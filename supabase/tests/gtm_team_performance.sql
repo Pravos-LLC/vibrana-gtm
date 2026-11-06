@@ -17,10 +17,11 @@ select lives_ok($$insert into public.gtm_team_mailboxes (member, address, token_
   'the service role stores a sealed mailbox token');
 select throws_ok($$insert into public.gtm_team_mailboxes (member, address, token_ciphertext) values ('ABE', 'Abe@Example.com', repeat('x', 60))$$,
   '23514', null, 'a mailbox address is stored lowercase');
-select lives_ok($$insert into public.gtm_team_mail_events (member, gmail_message_id, thread_id, kind, at, person_ids, recipient_hashes)
-  values ('ABE', '18f0a1', '18f0a1', 'outreach', now(), '{p1}', '{h1}')$$, 'the service role records an outreach send');
-select throws_ok($$insert into public.gtm_team_mail_events (member, gmail_message_id, thread_id, kind, at) values ('ABE', '18f0a1', '18f0a1', 'reply', now())$$,
-  '23505', null, 'a Gmail message is counted once per member');
+select lives_ok($$insert into public.gtm_team_mail_events (member, gmail_message_id, thread_id, kind, at, person_ids, recipient_hashes, mailbox)
+  values ('ABE', '18f0a1', '18f0a1', 'outreach', now(), '{p1}', '{h1}', 'abe@example.com')$$, 'the service role records an outreach send');
+-- Since 20261106020000 a Gmail id is unique per mailbox (gtm_email_mailbox_identity.sql), not per member.
+select throws_ok($$insert into public.gtm_team_mail_events (member, gmail_message_id, thread_id, kind, at, mailbox) values ('ABE', '18f0a1', '18f0a1', 'reply', now(), 'abe@example.com')$$,
+  '23505', null, 'a Gmail message is counted once per mailbox');
 select throws_ok($$insert into public.gtm_team_mail_events (member, gmail_message_id, thread_id, kind, at) values ('ABE', '18f0a2', '18f0a2', 'personal', now())$$,
   '23514', null, 'only the four event kinds are stored');
 select lives_ok($$insert into public.gtm_team_stock_daily (member, date, metrics) values ('ABE', '2026-11-04', '{"sendable": 0}')$$, 'the service role writes a stock snapshot');

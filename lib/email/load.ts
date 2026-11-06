@@ -21,7 +21,22 @@ export function currentDecisions(rows: { event_id: number | null; source: string
   return [...best].map(([event_id, v]) => ({ event_id, intent: v.intent }));
 }
 
-export type Outcomes = { member: string; events: EmailEvent[]; attempts: EmailAttempt[]; decisions: ReplyDecision[]; effortDecisions: EffortDecision[] };
+/** Whether collection is complete across every team mailbox: each one backfilled, not failing and synced within 3 hours.
+ *  `gaps` names the problems (no addresses). Rates are withheld while it is false (review of #31, R2). */
+export type Collection = { complete: boolean; gaps: string[] };
+export type Outcomes = { member: string; events: EmailEvent[]; attempts: EmailAttempt[]; decisions: ReplyDecision[]; effortDecisions: EffortDecision[]; collection: Collection };
+
+type BoxState = { member: string; backfill_done: boolean | null; last_sync_at: string | null; last_error: string | null };
+export function collectionOf(boxes: BoxState[], now: number): Collection {
+  const gaps: string[] = [];
+  if (!boxes.length) gaps.push("no team mailbox is connected");
+  for (const b of boxes) {
+    if (!b.backfill_done) gaps.push(`${b.member}: a mailbox is still backfilling`);
+    if (b.last_error) gaps.push(`${b.member}: a mailbox sync is failing`);
+    if (!b.last_sync_at || now - Date.parse(b.last_sync_at) > 3 * 3_600_000) gaps.push(`${b.member}: a mailbox has not synced in 3 hours`);
+  }
+  return { complete: gaps.length === 0, gaps };
+}
 
 /**
  * Every team mailbox's events (efforts span mailboxes and members, review of #31 B1), their attempts and reply decisions,
@@ -49,5 +64,7 @@ export async function loadOutcomes(db: SupabaseClient, member: string): Promise<
     const intent = e.draft_id ? label.get(e.draft_id) : undefined, episode = episodeOf.get(e.id);
     if (intent && episode) effortDecisions.push({ episode_id: episode, intent });
   }
-  return { member, events, attempts, decisions: currentDecisions(labels), effortDecisions };
+  const boxes = (await db.from("gtm_team_mailboxes").select("member,backfill_done,last_sync_at,last_error"));
+  if (boxes.error) throw new Error(`mailbox state: ${boxes.error.message}`);
+  return { member, events, attempts, decisions: currentDecisions(labels), effortDecisions, collection: collectionOf((boxes.data ?? []) as BoxState[], Date.now()) };
 }

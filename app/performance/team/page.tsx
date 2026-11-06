@@ -51,7 +51,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
     loadActivity(db, member.code).catch(() => null),
     db.from("gtm_team_mailboxes").select("address,connected_at,last_sync_at,last_error,backfill_done,granted_scopes").eq("member", member.code),
     // PostgREST returns at most 1000 rows a request: read every page, or past 1000 events the newest would be dropped.
-    selectAll<MailEvent>((from, to) => db.from("gtm_team_mail_events").select("kind,at,thread_id,person_ids,message_key").eq("member", member.code).order("id").range(from, to), "mail events")
+    selectAll<MailEvent>((from, to) => db.from("gtm_team_mail_events").select("kind,at,thread_id,person_ids,message_key,mailbox").eq("member", member.code).order("id").range(from, to), "mail events")
       .then((data) => ({ data, error: null }), (e: Error) => ({ data: null, error: e })),
     db.from("gtm_outreach_drafts").select("person,email_sent_at,linkedin_sent_at,email_sent_by,linkedin_sent_by")
       .or(`email_sent_by.eq."${member.authEmail}",linkedin_sent_by.eq."${member.authEmail}"`),
@@ -106,7 +106,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
             <p className="text-ink-3">
               Coverage this period: {c.email.attempts} cold recipients, {c.email.coverage.unverified} not verified (counted), {c.email.coverage.policyFlagged} sent against a CRM restriction (counted, flagged),
               {" "}{c.email.coverage.ambiguous} on an address two CRM people share and {c.email.coverage.unmatched} not in the CRM (not attributed), {c.email.coverage.legacyRows} messages from the older sync.
-              {" "}Bounces {c.email.bounce.num} of {c.email.bounce.n}{c.email.complete ? "" : " (partial: rates withheld until every message is reconciled)"}.
+              {" "}Bounces {c.email.bounce.num} of {c.email.bounce.n}{c.email.complete ? "" : " (partial: rates withheld until collection is complete and every message is reconciled)"}.
             </p>
           )}
         </div>
@@ -123,7 +123,8 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           note={c.email ? plural(c.email.newEfforts, "new outreach effort", "new outreach efforts") + `, ${c.email.attempts} cold recipients`
             : c.newThreads != null ? plural(c.newThreads, "first touch", "first touches") + ", " + plural((c.emailsSent ?? 0) - c.newThreads, "follow-up", "follow-ups") : undefined} />
         <StatTile label="Reply rate" value={c.reply ? pct(c.reply.rate) : null}
-          missing={c.email && !c.email.complete ? `withheld: ${c.email.coverage.withoutAttempts} messages in the period are not reconciled yet (gtm team replay)` : c.reply ? `needs ${REPLY_MIN_N} first touches at least 7 days old (${c.reply.n} so far, ${c.reply.replied} replied)` : mailMissing}
+          missing={c.email && !c.email.complete ? (outcomes && outcomes !== "unavailable" && !outcomes.collection.complete ? `withheld: collection is incomplete (${outcomes.collection.gaps.join("; ")})`
+            : `withheld: ${c.email.coverage.withoutAttempts} messages in the period are not reconciled yet (gtm team replay)`) : c.reply ? `needs ${REPLY_MIN_N} first touches at least 7 days old (${c.reply.n} so far, ${c.reply.replied} replied)` : mailMissing}
           note={c.reply?.rate != null ? `${c.reply.replied} of ${c.reply.n} first touches, bounces excluded` : undefined} />
         <StatTile label="Meetings" value={c.meetings == null ? null : fmt(c.meetings)} missing={crmMissing} delta={delta(c.meetings, p.meetings, days)} spark={spark("meetings")}
           note="meeting capture proposals tagged to them" />
