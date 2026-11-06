@@ -261,7 +261,9 @@ type StoredEvent = { id: number; gmail_message_id: string; thread_id: string; ki
  * `okAt` is the last fully successful run, the watermark a history reset reads back from (adversarial review of #23).
  * `threads` are threads that received mail since the last run; `replay` marks a listing started by `gtm team replay`.
  */
-export type SyncState = { pageToken?: string; startHistory?: string; since?: string; pending?: string[]; okAt?: string; threads?: string[]; replay?: boolean; replayThreadsSince?: string };
+export type SyncState = { pageToken?: string; startHistory?: string; since?: string; pending?: string[]; okAt?: string; threads?: string[]; replay?: boolean;
+  /** A replay's thread window, kept until listing, classification and every thread in it are done; and the threads re-read so far. */
+  replayThreadsSince?: string; replayScanned?: string[] };
 
 export const stateKey = (member: string, address: string) =>
   `team.mailbox.${member.toLowerCase()}.h${createHash("sha256").update(address.toLowerCase()).digest("hex").slice(0, 16)}`;
@@ -289,43 +291,53 @@ export async function selectAll<T>(page: (from: number, to: number) => PromiseLi
 
 const EVENT_COLS = "id,gmail_message_id,thread_id,kind,at,mailbox,calc_version,recipient_hashes";
 
-// Before vibrana.ai 20261106020000 the per-mailbox key is a partial index no upsert can target (42P10): fall back to the
-// member-wide key, which that migration then drops.
-let mailboxKey = true;
-export const resetMailboxKey = () => { mailboxKey = true; };
+/** Upserts once per row identity, whichever unique key the schema has: the per-mailbox constraint (vibrana.ai
+ *  20261106020000) or, before it, the member-wide one. Decided on every write, never cached, so a running process keeps
+ *  working across that migration (review of #30, F2). */
+async function insertOnce(db: SupabaseClient, rows: Record<string, unknown>[]) {
+  if (!rows.length) return;
+  for (const target of ["mailbox,gmail_message_id", "member,gmail_message_id", "mailbox,gmail_message_id"]) {
+    const { error } = await db.from("gtm_team_mail_events").upsert(rows, { onConflict: target, ignoreDuplicates: true });
+    if (!error) return;
+    if (error.code === "42P10") continue;   // that key does not exist (yet, or any more)
+    if (error.code === "23505" && rows.length > 1) { for (const r of rows) await insertOnce(db, [r]); return; }   // one clash loses nothing else
+    if (error.code === "23505") return;     // the row exists under the other key: read back below
+    throw new Error(`save mail events: ${error.message}`);
+  }
+  throw new Error("save mail events: no unique key on gtm_team_mail_events matches");
+}
 
 /**
- * Writes events once (the first observation wins), rewrites a row from the older sync with this calculation, and returns
- * the stored rows of this mailbox by Gmail id. Every row names its arrays: a mixed batch never writes a null array.
+ * Writes events once (the first observation wins) and returns this mailbox's stored rows by Gmail id. A row from the older
+ * sync (no mailbox) is claimed and rewritten in place, keeping its id, never duplicated (review of #30, F1). Every row names
+ * its arrays: a mixed batch never writes a null array.
  */
 async function writeEvents(db: SupabaseClient, member: string, mailbox: string, input: Event[], result: { reconciled: number; id_collisions: number }): Promise<Map<string, StoredEvent>> {
   const stored = new Map<string, StoredEvent>();
   if (!input.length) return stored;
   const events = input.map((e) => ({ ...e, person_ids: e.person_ids ?? [], company_ids: e.company_ids ?? [], recipient_hashes: e.recipient_hashes ?? [], message_key: e.message_key ?? null, draft_id: e.draft_id ?? null }));
-  if (mailboxKey) {
-    const { error } = await db.from("gtm_team_mail_events").upsert(events, { onConflict: "mailbox,gmail_message_id", ignoreDuplicates: true });
-    if (error?.code === "42P10") mailboxKey = false;
-    else if (error) throw new Error(`save mail events: ${error.message}`);
-  }
-  if (!mailboxKey) {
-    const { error } = await db.from("gtm_team_mail_events").upsert(events, { onConflict: "member,gmail_message_id", ignoreDuplicates: true });
-    // 23505 is the per-mailbox index (two members configured with one address): row by row, so one clash loses nothing else.
-    if (error?.code === "23505") {
-      for (const e of events) {
-        const one = await db.from("gtm_team_mail_events").upsert([e], { onConflict: "member,gmail_message_id", ignoreDuplicates: true });
-        if (one.error && one.error.code !== "23505") throw new Error(`save mail events: ${one.error.message}`);
-      }
-    } else if (error) throw new Error(`save mail events: ${error.message}`);
-  }
-  const rows = must(await db.from("gtm_team_mail_events").select(EVENT_COLS).eq("member", member).in("gmail_message_id", events.map((e) => e.gmail_message_id)), "read mail events") as StoredEvent[];
+  const read = async () => must(await db.from("gtm_team_mail_events").select(EVENT_COLS).eq("member", member).in("gmail_message_id", events.map((e) => e.gmail_message_id)), "read mail events") as StoredEvent[];
+  const before = await read();
+  const fresh: typeof events = [];
   for (const e of events) {
-    const mine = rows.filter((r) => r.gmail_message_id === e.gmail_message_id && (r.mailbox === mailbox || r.mailbox == null));
-    const r = mine.find((x) => x.mailbox === mailbox) ?? mine[0];
-    if (!r) { result.id_collisions++; continue; }   // another mailbox of the member holds this id under the member-wide key
+    if (before.some((r) => r.gmail_message_id === e.gmail_message_id && r.mailbox === mailbox)) continue;
+    const legacy = before.find((r) => r.gmail_message_id === e.gmail_message_id && r.mailbox == null);
+    if (legacy) {
+      const { member: _m, gmail_message_id: _g, ...patch } = e;
+      // Claimed only while still unclaimed: a concurrent run that claimed it first wins.
+      must(await db.from("gtm_team_mail_events").update(patch).eq("id", legacy.id).is("mailbox", null), "claim older row");
+      result.reconciled++;
+    } else fresh.push(e);
+  }
+  await insertOnce(db, fresh);
+  const rows = await read();
+  for (const e of events) {
+    const r = rows.find((x) => x.gmail_message_id === e.gmail_message_id && x.mailbox === mailbox);
+    if (!r) { result.id_collisions++; continue; }   // held under the member-wide key by another mailbox (until 20261106020000)
     if (r.calc_version < CALC_VERSION) {
       const { member: _m, gmail_message_id: _g, ...patch } = e;
       must(await db.from("gtm_team_mail_events").update(patch).eq("id", r.id), "reconcile mail event");
-      Object.assign(r, { kind: e.kind, mailbox, calc_version: e.calc_version, recipient_hashes: e.recipient_hashes });
+      Object.assign(r, { kind: e.kind, calc_version: e.calc_version, recipient_hashes: e.recipient_hashes });
       result.reconciled++;
     }
     stored.set(r.gmail_message_id, r);
@@ -361,6 +373,7 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     let nextPageToken = state.pageToken, startHistory = state.startHistory, since = state.since;
     const replaying = !!state.replay;
     let replayWindow = state.replayThreadsSince ?? (replaying ? state.since : undefined);
+    const replayScanned: string[] = [...(state.replayScanned ?? [])];
     const max = opts.maxMessages ?? 400;
     if (!backfillDone || !historyId) {
       since ??= BACKFILL_SINCE;
@@ -404,8 +417,8 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
       }
     }
     // Threads that received mail wait here until they are looked up (and, if outreach, re-read): nothing is dropped; each run
-    // looks up a bounded batch. The list is capped far above any real hourly volume only to bound the state row.
-    const pendingThreads = [...inbound].slice(-5000);
+    // looks up a bounded batch (review of #30, F4).
+    const pendingThreads = [...inbound];
     const threadBatch = pendingThreads.slice(0, 200);
 
     // 2. Classify pending and new ids in chunks. Each chunk is fetched, looked up in the CRM, written, and only then
@@ -424,7 +437,7 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
       lastSaved = { pageToken: backfillDone ? undefined : nextPageToken, startHistory: backfillDone ? undefined : startHistory, since: backfillDone ? undefined : since,
         pending: queue.slice(done), okAt: state.okAt, threads: pendingThreads, replay: backfillDone ? undefined : state.replay,
         // A replay's listing can finish before its old threads are re-read: their window stays until they are (review of #30).
-        replayThreadsSince: replayWindow };
+        replayThreadsSince: replayWindow, replayScanned: replayWindow ? replayScanned : undefined };
       await saveState(lastSaved);
       must(await db.from("gtm_team_mailboxes").update({ history_id: backfillDone ? historyId : row.history_id, backfill_done: backfillDone })
         .eq("member", row.member).eq("address", row.address), "save mailbox cursor");
@@ -460,18 +473,20 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
           mailbox: row.address, message_key: x.key, source: "team_mailbox", draft_id: draftIds.length === 1 ? draftIds[0] : null, calc_version: CALC_VERSION,
         };
       });
-      const written = await writeEvents(db, row.member, row.address, events, result);
-      // A message already counted from another mailbox (same keyed Message-ID, an earlier row): this row is an observation of
-      // that send, so it gets no attempts of its own.
+      // A message another mailbox already holds (same keyed Message-ID): the same send seen twice (a send-as alias, a
+      // delegated mailbox). It is not written again, so no reader counts it twice; its replies reach the sender's thread,
+      // which is tracked (review of #30, F3).
       const keys = [...new Set(counted.map((k) => k.x.key).filter((k): k is string => !!k))];
-      const firstOf = new Map<string, number>();
-      if (keys.length) for (const e of must(await db.from("gtm_team_mail_events").select("id,message_key").in("message_key", keys), "copies") as { id: number; message_key: string }[]) {
-        firstOf.set(e.message_key, Math.min(firstOf.get(e.message_key) ?? Infinity, e.id));
+      const elsewhere = new Set<string>();
+      if (keys.length) for (const e of must(await db.from("gtm_team_mail_events").select("message_key,mailbox,gmail_message_id").in("message_key", keys), "copies") as { message_key: string; mailbox: string | null; gmail_message_id: string }[]) {
+        if (e.mailbox && e.mailbox !== row.address) elsewhere.add(e.message_key);
       }
+      const isCopy = (x: { key: string | null }) => !!x.key && elsewhere.has(x.key);
+      result.copies += events.filter((_, i) => isCopy(counted[i].x)).length;
+      const written = await writeEvents(db, row.member, row.address, events.filter((_, i) => !isCopy(counted[i].x)), result);
       const attemptRows = counted.flatMap(({ x, c }) => {
         const ev = written.get(x.id);
         if (!ev) return [];
-        if (x.key && (firstOf.get(x.key) ?? ev.id) < ev.id) { result.copies++; return []; }
         const live = now.getTime() - x.at < DAY;
         return c.attempts.map((a: AttemptClass) => ({
           event_id: ev.id, recipient_hash: addressHash(a.address), field: a.field, match: a.match, person_id: a.personId, stream: a.stream,
@@ -570,13 +585,21 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     }
 
     // Every sent message up to now was listed and classified: this run is the watermark a history reset reads back from.
-    // A looked-up thread leaves the queue once it is not outreach or has been re-read; everything else waits for the next run.
+    // A looked-up thread leaves the queue once it has been re-read, or once it is known not to be outreach: only when no sent
+    // message is still waiting to be classified, since that could make it outreach (review of #30, F6).
     const outreachThreads = new Set([...threads].filter(([, t]) => t.first !== Infinity).map(([id]) => id));
     const looked = new Set(threadBatch);
-    const remainingThreads = pendingThreads.filter((id) => !(looked.has(id) && (!outreachThreads.has(id) || scanned.has(id))));
-    if (threadsDone && open.length <= cap) replayWindow = undefined;   // every thread in the window was re-read
-    if (caughtUp) await saveState({ pending: [], okAt: now.toISOString(), threads: remainingThreads, replayThreadsSince: replayWindow });
-    else await saveState({ ...(lastSaved ?? {}), threads: remainingThreads, replayThreadsSince: replayWindow });
+    const settled = backfillDone && !remaining;
+    const remainingThreads = pendingThreads.filter((id) => !(looked.has(id) && (scanned.has(id) || (settled && !outreachThreads.has(id)))));
+    // A replay's window closes only when its listing and classification are done and every thread in it was re-read,
+    // across as many runs as that takes (review of #30, F5, N1).
+    if (replayWindow) {
+      for (const id of scanned) if (!replayScanned.includes(id)) replayScanned.push(id);
+      if (settled && threadsDone && open.every(([id]) => replayScanned.includes(id))) replayWindow = undefined;
+    }
+    const replayState = { replayThreadsSince: replayWindow, replayScanned: replayWindow ? replayScanned : undefined };
+    if (caughtUp) await saveState({ pending: [], okAt: now.toISOString(), threads: remainingThreads, ...replayState });
+    else await saveState({ ...(lastSaved ?? {}), threads: remainingThreads, ...replayState });
     must(await db.from("gtm_team_mailboxes").update({ last_sync_at: now.toISOString(), last_error: null }).eq("member", row.member).eq("address", row.address), "save mailbox status");
   } catch (e) {
     result.error = failure(e);
