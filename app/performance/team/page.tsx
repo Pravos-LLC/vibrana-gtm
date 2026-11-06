@@ -51,7 +51,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
     loadActivity(db, member.code).catch(() => null),
     db.from("gtm_team_mailboxes").select("address,connected_at,last_sync_at,last_error,backfill_done,granted_scopes").eq("member", member.code),
     // PostgREST returns at most 1000 rows a request: read every page, or past 1000 events the newest would be dropped.
-    selectAll<MailEvent>((from, to) => db.from("gtm_team_mail_events").select("kind,at,thread_id,person_ids").eq("member", member.code).order("id").range(from, to), "mail events")
+    selectAll<MailEvent>((from, to) => db.from("gtm_team_mail_events").select("kind,at,thread_id,person_ids,message_key").eq("member", member.code).order("id").range(from, to), "mail events")
       .then((data) => ({ data, error: null }), (e: Error) => ({ data: null, error: e })),
     db.from("gtm_outreach_drafts").select("person,email_sent_at,linkedin_sent_at,email_sent_by,linkedin_sent_by")
       .or(`email_sent_by.eq."${member.authEmail}",linkedin_sent_by.eq."${member.authEmail}"`),

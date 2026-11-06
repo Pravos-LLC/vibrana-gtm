@@ -10,7 +10,7 @@ import type { Activity } from "./crm";
 import { emailStats, type EmailStats } from "../email/metrics";
 import type { Outcomes } from "../email/load";
 
-export type MailEvent = { kind: "outreach" | "other_crm" | "reply" | "bounce"; at: string; thread_id: string; person_ids: string[] };
+export type MailEvent = { kind: "outreach" | "other_crm" | "reply" | "bounce"; at: string; thread_id: string; person_ids: string[]; message_key?: string | null };
 export type DeskSend = { person: string; email_sent_at: string | null; linkedin_sent_at: string | null; email_sent_by: string | null; linkedin_sent_by: string | null };
 export type StockRow = { date: string; metrics: Record<string, number> };
 
@@ -129,7 +129,8 @@ function period(i: Inputs, w: Window): Period {
     contactsAdded: count(a?.people, (r) => r.createdAt, a?.errors.people),
     companiesAdded: count(a?.companies, (r) => r.createdAt, a?.errors.companies),
     notes: count(a?.notes, (r) => r.createdAt, a?.errors.notes),
-    emailsSent: email ? email.messages : v2 ? null : outreach ? outreach.length : null,
+    // One message once, however many of the member's mailboxes saw it (a send-as alias or delegated mailbox, VIB-510).
+    emailsSent: email ? email.messages : v2 ? null : outreach ? new Set(outreach.map((e, k) => e.message_key ?? `row:${k}`)).size : null,
     newThreads: firstSends ? [...firstSends.values()].filter((v) => v >= w.from && v < w.to).length : null,
     otherCrmMail: mail ? mail.filter((e) => e.kind === "other_crm" && inRange(e.at, w.from, w.to)).length : null,
     replies: mail ? mail.filter((e) => e.kind === "reply" && inRange(e.at, w.from, w.to)).length : null,
