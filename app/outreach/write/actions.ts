@@ -3,6 +3,7 @@ import { isOfferOverride, type OfferOverride } from "@/lib/outreach/offers";
 
 import { after } from "next/server";
 import { adminDb } from "@/lib/db";
+import { emailHolds } from "@/lib/email/suppression";
 import { isTrack, senderProfile, type DeskEdit, type DossierRow, type Track } from "@/lib/outreach/desk";
 import {
   deskPerson, deskSettings, markDeskFollowUpSent, markDeskLinkedinSent, markDeskSent, saveDesk, setDailyTarget, skipPerson, unmarkDeskFollowUpSent, unmarkDeskSent, unskipPerson,
@@ -87,6 +88,10 @@ export async function saveDeskDraft(personId: string, edit: DeskEdit, track: Tra
 /** A client: the email. A guest: by the route on their dossier (email, LinkedIn note, or via an intermediary). */
 export async function markSent(personId: string, edit: DeskEdit, track: Track, angle?: SentAngle): Promise<DeskResult<Draft>> {
   return run(async (actor, claims) => {
+    // Email restrictions (VIB-513): an opt-out, a possible opt-out under review or a restricted or bounced address holds the
+    // desk. Gmail itself cannot be stopped from here; recording the send is refused and the reason shown.
+    const holds = await emailHolds(adminDb(), personId, edit.to?.trim() || null);
+    if (holds.length) throw new Error(`Email is held for this person: ${holds.join("; ")}. Nothing was recorded.`);
     const draft = await markDeskSent(adminDb(), personId, edit, actor, await profile(stream(track), claims), track);
     if (track === "client") await learnFromSend(personId, draft, "email", edit, angle, actor);
     return draft;

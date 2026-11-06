@@ -1,0 +1,73 @@
+// Email suppression against the real LOCAL database (VIB-513, AC497-06/08): detection records operations once, reviews
+// are never approvable, nothing is written without the flag and an approval, the writer reads back before confirming,
+// and the desk refuses to record a held send. Twenty is mocked; synthetic data only.
+import { test, before, afterEach } from "node:test";
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { admin, seed } from "../support/seed.ts";
+import { local } from "../support/local-supabase.ts";
+import { installFetchMock, type Route } from "../support/fetch-mock.ts";
+
+const l = local();
+Object.assign(process.env, { NEXT_PUBLIC_SUPABASE_URL: l.url, SUPABASE_SECRET_KEY: l.secretKey, TEAM_MAILBOX_KEY: randomBytes(32).toString("base64"), TWENTY_API_KEY: "twenty_test", TWENTY_BASE: "https://crm.test" });
+const S = await import("../../lib/email/suppression.ts");
+const { addressHash } = await import("../../lib/team/crypto.ts");
+const { TwentyReader } = await import("../../lib/twenty.ts");
+
+const DB: Route = { url: l.url, passthrough: true };
+const P = "00000000-0000-4000-8000-0000000000d1";
+let mock: ReturnType<typeof installFetchMock> | null = null;
+afterEach(() => { mock?.restore(); mock = null; delete process.env.EMAIL_SUPPRESSION_APPLY; });
+before(async () => { await seed(); });
+
+async function fresh() {
+  const db = admin();
+  await db.from("gtm_email_sync_ops").delete().eq("person_id", P);
+  await db.from("gtm_team_mail_events").delete().eq("member", "TSUPP");
+  const e = (await db.from("gtm_team_mail_events").insert({ member: "TSUPP", gmail_message_id: "ab1", thread_id: "ab1", kind: "outreach", at: "2026-11-01T00:00:00Z", person_ids: [P], mailbox: "s@hq.test", calc_version: 2 }).select("id").single()).data!;
+  assert.equal((await db.from("gtm_email_attempts").insert({ event_id: e.id, recipient_hash: addressHash("ana@prospect.test"), field: "to", match: "matched", person_id: P, stream: "cold",
+    delivery: "failed_invalid_address", delivery_at: "2026-11-01T01:00:00Z" })).error, null);
+  const r = (await db.from("gtm_team_mail_events").insert({ member: "TSUPP", gmail_message_id: "ab2", thread_id: "ab1", kind: "reply", at: "2026-11-02T00:00:00Z", person_ids: [P], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: "s@hq.test", calc_version: 2 }).select("id").single()).data!;
+  assert.equal((await db.from("gtm_email_reply_labels").insert({ event_id: r.id, person_id: P, source: "deterministic", intent: "uncertain", opt_out: "uncertain" })).error, null);
+}
+const ops = async () => (await admin().from("gtm_email_sync_ops").select("*").eq("person_id", P).order("id")).data as import("../../lib/email/suppression.ts").StoredOp[];
+
+test("detection records each operation once: the bounce pending, Origami held, the possible opt-out a review", async () => {
+  await fresh();
+  await S.detect(admin()); await S.detect(admin());
+  assert.deepEqual((await ops()).map((o) => [o.destination, o.action, o.reason, o.state]), [
+    ["twenty", "address_restrict", "EMAIL_BOUNCED", "pending_review"], ["origami", "exclusion_upsert", "EMAIL_BOUNCED", "held"], ["twenty", "person_opt_out", "OPT_OUT_REVIEW", "pending_review"]]);
+});
+
+test("reviews are never approvable; the desk holds the address and the possible opt-out", async () => {
+  await fresh(); await S.detect(admin());
+  const all = await ops();
+  assert.equal(await S.approve(admin(), all.map((o) => o.id), "dry run 2026-11-06 approved by test", new Date()), 1, "only the Twenty address restriction");
+  assert.deepEqual((await ops()).map((o) => o.state), ["approved", "held", "pending_review"]);
+  assert.deepEqual(await S.emailHolds(admin(), P, "Ana@Prospect.test"), ["a possible opt-out is waiting for review", "this address is restricted"]);
+  assert.deepEqual(await S.emailHolds(admin(), "00000000-0000-4000-8000-0000000000d9", "other@prospect.test"), []);
+});
+
+test("without the flag nothing is written; with it the writer re-reads, writes the owned field and confirms on read-back", async () => {
+  await fresh(); await S.detect(admin());
+  await S.approve(admin(), (await ops()).map((o) => o.id), "dry run 2026-11-06 approved by test", new Date());
+  mock = installFetchMock([DB]);
+  assert.deepEqual(await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date()), { skipped: "EMAIL_SUPPRESSION_APPLY is not 1" });
+  assert.equal(mock.calls.filter((c) => c.url.startsWith("https://crm.test")).length, 0);
+  mock.restore();
+  process.env.EMAIL_SUPPRESSION_APPLY = "1";
+  const person = (r: unknown) => JSON.stringify({ data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: P, updatedAt: "u1", emails: { primaryEmail: "ana@prospect.test", additionalEmails: [] }, gtmMarketingConsent: "NONE", gtmConsentEvidence: null, gtmEmailRestrictions: r } }] } } });
+  mock = installFetchMock([
+    { url: "https://crm.test/graphql", body: person(null), times: 2 },
+    { url: "https://crm.test/graphql", json: { data: { updatePerson: { id: P } } }, times: 1 },
+    { url: "https://crm.test/graphql", body: person({ version: 1, addresses: { "ana@prospect.test": { reason: "EMAIL_BOUNCED" } }, holds: [] }), times: 1 },
+    DB,
+  ]);
+  const r = await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date());
+  assert.deepEqual(r, { confirmed: 1, unchanged: 0, failed: 0 });
+  const write = mock.calls.find((c) => c.url.startsWith("https://crm.test") && /updatePerson/.test(c.body ?? ""))!;
+  const vars = JSON.parse(write.body!).variables;
+  assert.deepEqual(Object.keys(vars.d), ["gtmEmailRestrictions"], "only the owned field is written");
+  assert.equal((await ops())[0].state, "confirmed");
+  assert.equal((await ops())[1].state, "held", "Origami is never touched");
+});

@@ -14,7 +14,14 @@ const STALE_SYNC_MS = 3 * 3_600_000;
 export type HealthRun = { incidents: number; notified: boolean; dns?: DomainCheck[] | string; error?: string };
 
 export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], opts: { now: Date; mail: { to: string; from: string }; checkDomain?: typeof checkDomain }): Promise<HealthRun> {
-  const now = opts.now, observed: Incident[] = [], kinds = ["bounce_rate", "collection"];
+  const now = opts.now, observed: Incident[] = [], kinds = ["bounce_rate", "collection", "suppression"];
+  // Suppression work waiting longer than two hourly runs, or failing: visible to both owners (VIB-497 section 4).
+  const ops = must(await db.from("gtm_email_sync_ops").select("state,reason,created_at,updated_at,destination").in("state", ["pending_review", "approved", "failed"]), "suppression state") as { state: string; reason: string; created_at: string; updated_at: string; destination: string }[];
+  const old = ops.filter((o) => o.state !== "failed" && now.getTime() - Date.parse(o.created_at) > 2 * 3_600_000);
+  const reviews = old.filter((o) => o.reason === "OPT_OUT_REVIEW").length, waiting = old.length - reviews, failing = ops.filter((o) => o.state === "failed").length;
+  if (reviews) observed.push({ key: "suppression:review", kind: "suppression", severity: "warning", summary: `${reviews} possible opt-out${reviews === 1 ? "" : "s"} waiting for a person's review (email is held on the desk meanwhile)`, detail: { reviews } });
+  if (waiting) observed.push({ key: "suppression:pending", kind: "suppression", severity: "warning", summary: `${waiting} suppression operation${waiting === 1 ? "" : "s"} waiting over two hours for approval or apply (gtm suppression plan)`, detail: { waiting } });
+  if (failing) observed.push({ key: "suppression:failed", kind: "suppression", severity: "critical", summary: `${failing} suppression operation${failing === 1 ? "" : "s"} failed to apply`, detail: { failing } });
   for (const m of members) {
     const boxes = must(await db.from("gtm_team_mailboxes").select("address,last_sync_at,last_error,backfill_done").eq("member", m.code), "mailboxes") as { address: string; last_sync_at: string | null; last_error: string | null; backfill_done: boolean }[];
     for (const b of boxes) {
