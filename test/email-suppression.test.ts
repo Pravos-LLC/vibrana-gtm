@@ -59,3 +59,8 @@ test("the change to a person: only the owned fields, never another address, noth
   assert.deepEqual(Object.keys(t.data.gtmEmailRestrictions.addresses).sort(), ["ana@prospect.test", "old@x.test"], "a value stored as JSON text keeps its entries");
   assert.equal(t.data.gtmEmailRestrictions.holds.length, 1, "and its holds");
 });
+
+test("the version guard matches the read stamp's millisecond, like vibrana-crm's version_filter", () => {
+  assert.deepEqual(S.versionFilter("p1", "2026-11-06T10:00:00.123Z"), { id: { eq: "p1" }, updatedAt: { gte: "2026-11-06T10:00:00.123Z", lt: "2026-11-06T10:00:00.124Z" } });
+  assert.throws(() => S.versionFilter("p1", "u1"), /unreadable/);
+});

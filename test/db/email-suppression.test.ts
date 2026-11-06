@@ -56,7 +56,7 @@ test("without the flag nothing is written; with it the writer re-reads, writes t
   assert.equal(mock.calls.filter((c) => c.url.startsWith("https://crm.test")).length, 0);
   mock.restore();
   process.env.EMAIL_SUPPRESSION_APPLY = "1";
-  const person = (r: unknown) => JSON.stringify({ data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: P, updatedAt: "u1", emails: { primaryEmail: "ana@prospect.test", additionalEmails: [] }, gtmMarketingConsent: "NONE", gtmConsentEvidence: null, gtmEmailRestrictions: r } }] } } });
+  const person = (r: unknown) => JSON.stringify({ data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: P, updatedAt: "2026-11-01T00:00:00.000Z", emails: { primaryEmail: "ana@prospect.test", additionalEmails: [] }, gtmMarketingConsent: "NONE", gtmConsentEvidence: null, gtmEmailRestrictions: r } }] } } });
   mock = installFetchMock([
     { url: "https://crm.test/graphql", body: person(null), times: 1 },
     { url: "https://crm.test/graphql", json: { data: { updatePeople: [{ id: P }] } }, times: 1 },
@@ -68,12 +68,12 @@ test("without the flag nothing is written; with it the writer re-reads, writes t
   const write = mock.calls.find((c) => c.url.startsWith("https://crm.test") && /updatePeople/.test(c.body ?? ""))!;
   const vars = JSON.parse(write.body!).variables;
   assert.deepEqual(Object.keys(vars.d), ["gtmEmailRestrictions"], "only the owned field is written");
-  assert.deepEqual(vars.f, { and: [{ id: { eq: P } }, { updatedAt: { eq: "u1" } }] }, "conditional on the version read");
+  assert.deepEqual(vars.f, { id: { eq: P }, updatedAt: { gte: "2026-11-01T00:00:00.000Z", lt: "2026-11-01T00:00:00.001Z" } }, "conditional on the version read");
   assert.equal((await ops())[0].state, "confirmed");
   assert.equal((await ops())[1].state, "held", "Origami is never touched");
 });
 
-const personBody = (r: unknown, updatedAt = "u1") => JSON.stringify({ data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: P, updatedAt, emails: { primaryEmail: "ana@prospect.test", additionalEmails: [] }, gtmMarketingConsent: "NONE", gtmConsentEvidence: null, gtmEmailRestrictions: r } }] } } });
+const personBody = (r: unknown, updatedAt = "2026-11-01T00:00:00.000Z") => JSON.stringify({ data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: P, updatedAt, emails: { primaryEmail: "ana@prospect.test", additionalEmails: [] }, gtmMarketingConsent: "NONE", gtmConsentEvidence: null, gtmEmailRestrictions: r } }] } } });
 
 test("a concurrent edit makes the conditional write match nothing: the op fails and retries, nothing is overwritten", async () => {
   await fresh(); await S.detect(admin());

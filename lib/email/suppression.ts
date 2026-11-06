@@ -148,6 +148,14 @@ export function changeFor(op: StoredOp, p: Live, now: Date): { data: Record<stri
 
 export const applyEnabled = (env: Record<string, string | undefined> = process.env) => env.EMAIL_SUPPRESSION_APPLY === "1";
 
+/** The version guard vibrana-crm uses (qualification/crm.py version_filter): Twenty returns updatedAt in milliseconds but
+ *  stores microseconds, so an exact match would never hit; the read stamp's millisecond window is matched instead. */
+export function versionFilter(id: string, updatedAt: string) {
+  const at = Date.parse(updatedAt);
+  if (!Number.isFinite(at)) throw new Error("the person's updatedAt is unreadable");
+  return { id: { eq: id }, updatedAt: { gte: new Date(at).toISOString(), lt: new Date(at + 1).toISOString() } };
+}
+
 /**
  * Applies approved Twenty operations one at a time through the paced reader, under the apply lease the cron and the CLI
  * share. Each write is conditional on the person's updatedAt as read (Twenty's filtered update: one server-side UPDATE
@@ -174,7 +182,7 @@ export async function applyTwenty(db: SupabaseClient, reader: TwentyReader, now:
         if (c && "error" in c) throw new Error(c.error);
         if (c) {
           const res = await reader.read<{ updatePeople: { id: string }[] }>("mutation($f:PersonFilterInput!,$d:PersonUpdateInput!){ updatePeople(filter:$f, data:$d) { id } }",
-            { f: { and: [{ id: { eq: op.person_id } }, { updatedAt: { eq: live.updatedAt } }] }, d: c.data });
+            { f: versionFilter(op.person_id, live.updatedAt), d: c.data });
           if (!res.updatePeople?.length) throw new Error("the person changed while applying; retried next run");
           must(await mark({ state: "applied", applied_at: now.toISOString() }), "mark applied");
           op.state = "applied";
