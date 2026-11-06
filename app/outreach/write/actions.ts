@@ -145,7 +145,10 @@ export async function markFollowUp(personId: string, track: Track): Promise<Desk
 /** Refuses to record an email send that an opt-out, a review, or a restricted or bounced address holds. Gmail itself cannot
  *  be stopped from here; the desk refuses to record the send and says why. */
 async function guardEmail(personId: string, address: string | null) {
-  const holds = await emailHolds(adminDb(), personId, address, new TwentyReader({ timeoutMs: 8_000 }));
+  // The live CRM check fails closed. Only the local test stack (scripts/with-local-env.mjs, Twenty on a closed port) and the
+  // sample demo, which has no CRM, turn it off; their local operations still hold.
+  const live = process.env.EMAIL_HOLDS_LIVE_CHECK !== "off" && process.env.DEMO_MODE !== "1";
+  const holds = await emailHolds(adminDb(), personId, address, live ? new TwentyReader({ timeoutMs: 8_000 }) : undefined);
   if (holds.length) throw new Error(`Email is held for this person: ${holds.join("; ")}. Nothing was recorded.`);
 }
 

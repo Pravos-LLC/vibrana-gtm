@@ -83,13 +83,15 @@ export const alertRecipients = (fallback: string, env: Record<string, string | u
  * that have not been emailed yet.
  */
 export async function reconcileIncidents(db: SupabaseClient, observed: Incident[], kinds: string[], now: Date, unchecked: Set<string> = new Set()) {
-  const open = must(await db.from("gtm_email_incidents").select("id,incident_key,kind,severity,summary,detail,notified_at").is("resolved_at", null).in("kind", kinds), "open incidents") as
-    { id: number; incident_key: string; kind: string; severity: Incident["severity"]; summary: string; detail: Record<string, unknown>; notified_at: string | null }[];
+  const open = must(await db.from("gtm_email_incidents").select("id,incident_key,kind,severity,summary,detail,notified_at,opened_at").is("resolved_at", null).in("kind", kinds), "open incidents") as
+    { id: number; incident_key: string; kind: string; severity: Incident["severity"]; summary: string; detail: Record<string, unknown>; notified_at: string | null; opened_at: string }[];
+  // Never before the incident opened (the table's order check): a clock behind the opening run's resolves at the opening.
+  const notBefore = (opened: string) => new Date(Math.max(now.getTime(), Date.parse(opened))).toISOString();
   const seen = new Set(observed.map((o) => o.key));
-  for (const o of open) if (!seen.has(o.incident_key) && !unchecked.has(o.kind)) must(await db.from("gtm_email_incidents").update({ resolved_at: now.toISOString(), last_seen_at: now.toISOString() }).eq("id", o.id), "resolve incident");
+  for (const o of open) if (!seen.has(o.incident_key) && !unchecked.has(o.kind)) must(await db.from("gtm_email_incidents").update({ resolved_at: notBefore(o.opened_at), last_seen_at: notBefore(o.opened_at) }).eq("id", o.id), "resolve incident");
   for (const o of observed) {
     const cur = open.find((x) => x.incident_key === o.key);
-    if (cur) must(await db.from("gtm_email_incidents").update({ last_seen_at: now.toISOString(), summary: o.summary.slice(0, 300), detail: { ...(o.detail ?? {}), notice: cur.detail?.notice ?? cur.summary, ...(cur.detail?.envelope ? { envelope: cur.detail.envelope } : {}) } }).eq("id", cur.id), "refresh incident");
+    if (cur) must(await db.from("gtm_email_incidents").update({ last_seen_at: notBefore(cur.opened_at), summary: o.summary.slice(0, 300), detail: { ...(o.detail ?? {}), notice: cur.detail?.notice ?? cur.summary, ...(cur.detail?.envelope ? { envelope: cur.detail.envelope } : {}) } }).eq("id", cur.id), "refresh incident");
     else must(await db.from("gtm_email_incidents").insert({ incident_key: o.key, kind: o.kind, severity: o.severity, summary: o.summary.slice(0, 300), detail: { ...(o.detail ?? {}), notice: o.summary.slice(0, 300) }, opened_at: now.toISOString(), last_seen_at: now.toISOString() }), "open incident");
   }
   // Every incident not yet emailed, resolved or not: a notice that failed to send is still owed once (review of #32, B2).

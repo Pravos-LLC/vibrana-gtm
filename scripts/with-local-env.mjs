@@ -15,6 +15,8 @@ const env = {
   LOCAL_SUPABASE_URL: s.API_URL, LOCAL_SUPABASE_PUBLISHABLE_KEY: s.PUBLISHABLE_KEY, LOCAL_SUPABASE_SECRET_KEY: s.SECRET_KEY, LOCAL_SUPABASE_DB_URL: s.DB_URL,
   ZERNIO_API_URL: `${closed}/zernio`, ZERNIO_API_KEY: "e2e-no-live-calls", LATE_API_KEY: "e2e-no-live-calls",
   TWENTY_BASE: closed, TWENTY_API_KEY: "e2e-no-live-calls", WISE_API_TOKEN: "e2e-no-live-calls",
+  // Twenty is closed here, so the desk's live email-restriction check (which fails closed) is off; DB tests cover it.
+  EMAIL_HOLDS_LIVE_CHECK: "off",
   // No model or profile reads: drafting and "Not spam" redrafts take their failure path (the card opens for John).
   OPENROUTER_API_KEY: "", APIFY_TOKEN: "", FIRECRAWL_API_KEY: "",
   // No email: review-link notifications and digests take their logged failure path.
