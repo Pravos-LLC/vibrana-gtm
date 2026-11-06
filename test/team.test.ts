@@ -365,3 +365,13 @@ test("the team cron is scheduled hourly in vercel.json", () => {
   const crons = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8")).crons as { path: string; schedule: string }[];
   assert.ok(crons.some((c) => c.path === "/api/cron/team" && /^\d+ \* \* \* \*$/.test(c.schedule)));
 });
+
+test("a send seen in two of the member's mailboxes is one conversation: its copy's thread joins it (review of #30, C2)", () => {
+  const sends = Array.from({ length: 10 }, (_, k) => ({ ...ev("outreach", 20, `a${k}`, [`p${k}`]), mailbox: "a@hq.test", message_key: `m${k}` }));
+  const copies = sends.map((x, k) => ({ ...x, thread_id: `b${k}`, mailbox: "b@hq.test" }));
+  const reply = { ...ev("reply", 18, "b0"), mailbox: "b@hq.test" };
+  const r = M.teamReport({ ...base, activity: activity(), mail: [...sends, ...copies, reply] });
+  assert.deepEqual([r.cur.emailsSent, r.cur.newThreads, r.cur.replies], [10, 10, 1], "copies add no send and no first touch");
+  assert.deepEqual(r.cur.reply, { rate: 0.1, replied: 1, n: 10 }, "the reply through the copy's thread answers the original send");
+  assert.equal((r.cur.emailsSent ?? 0) - (r.cur.newThreads ?? 0), 0, "never a negative follow-up count");
+});

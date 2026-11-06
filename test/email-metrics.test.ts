@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bounceCheck, DAY, efforts, emailStats, intentOf, isPositive, type EmailAttempt, type EmailEvent } from "../lib/email/metrics.ts";
-import { currentDecisions } from "../lib/email/load.ts";
+import { collectionOf, currentDecisions } from "../lib/email/load.ts";
 
 const NOW = Date.parse("2026-11-20T12:00:00Z");
 const iso = (daysAgo: number) => new Date(NOW - daysAgo * DAY).toISOString();
@@ -119,4 +119,35 @@ test("a person's desk label outranks a model decision on the same effort (B4)", 
   assert.equal(e.positive, false, "the human's not-interested wins");
   const [h] = efforts([a], [att(a, "p1", "e1")], [], [{ episode_id: "e1", intent: "positive" }]);
   assert.deepEqual([h.replied, h.positive], [true, true], "a legacy positive label means interested, and implies the reply");
+});
+
+test("a later send into an old thread never moves a reply already made there (R1)", () => {
+  const e1 = { ...send(20, "t1", ["p1"]), mailbox: "a@hq.test" }, e2 = { ...send(10, "t2", ["p1"]), mailbox: "a@hq.test" };
+  const r = { ...reply(9, "t1", "p1"), mailbox: "a@hq.test" }, later = { ...send(5, "t1", ["p1"]), mailbox: "a@hq.test" };
+  const by = Object.fromEntries(efforts([e1, e2, r, later], [att(e1, "p1", "e1"), att(e2, "p1", "e2"), att(later, "p1", "e2")]).map((e) => [e.id, e]));
+  assert.deepEqual([by.e1.replied, by.e2.replied], [true, false]);
+});
+
+test("incomplete collection withholds every rate, while observed failures still alert (R2)", () => {
+  const sends = Array.from({ length: 10 }, (_, i) => send(10, `c${i}`, [`q${i}`]));
+  const at = sends.map((s, i) => att(s, `q${i}`, `x${i}`));
+  const s = emailStats(sends, at, [], NOW - 30 * DAY, NOW, NOW, { collectionComplete: false });
+  assert.deepEqual([s.complete, s.replyRate.rate, s.positiveRate.rate, s.bounce.rate], [false, null, null, null]);
+  assert.equal(emailStats(sends, at, [], NOW - 30 * DAY, NOW, NOW).replyRate.rate, 0, "the same data with complete collection is measured");
+  const recent = Array.from({ length: 10 }, (_, i) => send(3, `r${i}`, [`q${i}`])), ra = recent.map((x, i) => att(x, `q${i}`, `x${i}`, i ? {} : { delivery: "failed_invalid_address" }));
+  const f = bounceCheck(recent, ra, NOW, undefined, false);
+  assert.deepEqual([f.alert, f.complete, f.rate], [true, false, null]);
+  const ok = { member: "ABE", backfill_done: true, last_sync_at: new Date(NOW - 3_600_000).toISOString(), last_error: null };
+  assert.deepEqual(collectionOf([ok], NOW), { complete: true, gaps: [] });
+  assert.equal(collectionOf([ok, { ...ok, member: "JOHN", backfill_done: false }], NOW).complete, false, "another member's backfilling mailbox counts: efforts span mailboxes");
+  assert.equal(collectionOf([{ ...ok, last_error: "x" }], NOW).complete, false);
+  assert.equal(collectionOf([{ ...ok, last_sync_at: new Date(NOW - 4 * 3_600_000).toISOString() }], NOW).complete, false);
+  assert.equal(collectionOf([], NOW).complete, false);
+});
+
+test("a reply in a copy's thread (another mailbox saw the same send) reaches the original's effort", () => {
+  const e1 = { ...send(20, "t1", ["p1"]), mailbox: "a@hq.test", message_key: "k1" }, e2 = { ...send(15, "t2", ["p1"]), mailbox: "a@hq.test", message_key: "k2" };
+  const copy = { ...send(20, "c1", ["p1"]), mailbox: "b@hq.test", message_key: "k1" }, r = { ...reply(9, "c1", "p1"), mailbox: "b@hq.test" };
+  const by = Object.fromEntries(efforts([e1, e2, copy, r], [att(e1, "p1", "e1"), att(e2, "p1", "e2")]).map((e) => [e.id, e]));
+  assert.deepEqual([by.e1.replied, by.e2.replied], [true, false]);
 });

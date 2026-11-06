@@ -1778,7 +1778,7 @@ const commands: Record<string, () => Promise<void>> = {
       const { teamMembers } = await import("../lib/team/members");
       const { loadOutcomes } = await import("../lib/email/load");
       const { emailStats, bounceCheck } = await import("../lib/email/metrics");
-      const { replyRate } = await import("../lib/team/metrics");
+      const { logicalMail, replyRate } = await import("../lib/team/metrics");
       const db = adminDb(), now = Date.now(), from = now - days * 86_400_000;
       const rows: Record<string, unknown>[] = [];
       const boxes = must(await db.from("gtm_team_mailboxes").select("member,backfill_done,last_sync_at,last_error,granted_scopes"), "mailboxes") as { member: string; backfill_done: boolean; last_sync_at: string | null; last_error: string | null; granted_scopes: string[] }[];
@@ -1786,10 +1786,10 @@ const commands: Record<string, () => Promise<void>> = {
         const o = await loadOutcomes(db, m.code);
         const own = o.events.filter((e) => e.member === m.code);
         const legacyOutreach = own.filter((e) => e.kind === "outreach" && Date.parse(e.at) >= from).length;
-        const old = replyRate(own, from, now, now), v2 = emailStats(o.events, o.attempts, o.decisions, from, now, now, { member: m.code, effortDecisions: o.effortDecisions }), b = bounceCheck(o.events, o.attempts, now, m.code);
+        const old = replyRate(logicalMail(own), from, now, now), v2 = emailStats(o.events, o.attempts, o.decisions, from, now, now, { member: m.code, effortDecisions: o.effortDecisions, collectionComplete: o.collection.complete }), b = bounceCheck(o.events, o.attempts, now, m.code, o.collection.complete);
         // Not connected, still backfilling or failing is a coverage gap, never an ordinary read of zero.
         const mb = boxes.filter((x) => x.member === m.code).map((x) => ({ backfillDone: x.backfill_done, lastSyncAt: x.last_sync_at, failing: !!x.last_error, scopes: x.granted_scopes }));
-        rows.push({ member: m.code, days, mailboxes: mb.length ? mb : "not connected", complete: v2.complete && mb.length > 0 && mb.every((x) => x.backfillDone && !x.failing),
+        rows.push({ member: m.code, days, mailboxes: mb.length ? mb : "not connected", complete: v2.complete, gaps: o.collection.gaps,
           legacy: { outreachEvents: legacyOutreach, replyRate: old.rate, replied: old.replied, n: old.n },
           v2: { messages: v2.messages, attempts: v2.attempts, people: v2.people, newEfforts: v2.newEfforts, replyRate: v2.replyRate, positiveRate: v2.positiveRate, bounce: v2.bounce, coverage: v2.coverage },
           bounce7d: b });

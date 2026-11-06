@@ -92,7 +92,8 @@ export async function reconcileIncidents(db: SupabaseClient, observed: Incident[
     if (cur) must(await db.from("gtm_email_incidents").update({ last_seen_at: now.toISOString(), summary: o.summary.slice(0, 300), detail: { ...(o.detail ?? {}), notice: cur.detail?.notice ?? cur.summary } }).eq("id", cur.id), "refresh incident");
     else must(await db.from("gtm_email_incidents").insert({ incident_key: o.key, kind: o.kind, severity: o.severity, summary: o.summary.slice(0, 300), detail: { ...(o.detail ?? {}), notice: o.summary.slice(0, 300) }, opened_at: now.toISOString(), last_seen_at: now.toISOString() }), "open incident");
   }
-  return must(await db.from("gtm_email_incidents").select("id,incident_key,kind,severity,summary,detail").is("resolved_at", null).is("notified_at", null).in("kind", kinds), "incidents to email") as
+  // Every incident not yet emailed, resolved or not: a notice that failed to send is still owed once (review of #32, B2).
+  return must(await db.from("gtm_email_incidents").select("id,incident_key,kind,severity,summary,detail,resolved_at").is("notified_at", null).in("kind", kinds), "incidents to email") as
     { id: number; incident_key: string; kind: string; severity: Incident["severity"]; summary: string; detail: Record<string, unknown> }[];
 }
 
@@ -110,7 +111,8 @@ export async function notifyIncidents(db: SupabaseClient, incidents: { id: numbe
   if (!mail.to.length) throw new Error("email health alert: no recipients (EMAIL_ALERT_TO)");
   for (const i of incidents) {
     const notice = String(i.detail?.notice ?? i.summary);
-    const text = [`Email health incident: ${notice}`, "", "Either of you can pick this up. It stays open on /performance/team until the check passes.", "Alerts never pause a campaign by themselves."].join("\n");
+    const resolved = !!(i as { resolved_at?: string | null }).resolved_at;
+    const text = [`Email health incident: ${notice}`, "", resolved ? "The check has since passed; this notice is sent late." : "Either of you can pick this up. It stays open on /performance/team until the check passes.", "Alerts never pause a campaign by themselves."].join("\n");
     const res = await providerFetch()("https://api.resend.com/emails", {
       method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "idempotency-key": `email-health/incident/${i.id}` },
       body: JSON.stringify({ from: mail.from, to: mail.to, subject: `Email health [${i.severity}]: ${notice}`.slice(0, 180), text }), signal: AbortSignal.timeout(10_000),

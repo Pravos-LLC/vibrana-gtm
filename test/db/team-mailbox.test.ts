@@ -287,3 +287,27 @@ test("a copy of a send already counted from another mailbox is an observation; a
   await db.from("gtm_email_attempts").delete().eq("event_id", orig.id);
   await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
 });
+
+test("the canonical observation's missing attempts are repaired on retry, even after another mailbox stored a copy (review of #30, C1)", async () => {
+  const row = await fresh();
+  const db = admin();
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+  // Mailbox A (this one) stored its event, then its attempts write failed; mailbox B then stored a copy.
+  const mine = (await db.from("gtm_team_mail_events").insert({ member: "TSYNC", gmail_message_id: "a1", thread_id: "a10", kind: "outreach", at: new Date(T0).toISOString(),
+    person_ids: [P1], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: BOX, message_key: messageKey("<m2@hq.test>"), calc_version: 2 }).select("id").single()).data!;
+  await db.from("gtm_team_mail_events").insert({ member: "TOTHR", gmail_message_id: "fe2", thread_id: "fe20", kind: "outreach", at: new Date(T0).toISOString(),
+    person_ids: [P1], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: "other@hq.test", message_key: messageKey("<m2@hq.test>"), calc_version: 2 });
+  const msg = { ...sent("a1", T0, "ana@prospect.test"), payload: { headers: [{ name: "From", value: BOX }, { name: "To", value: "ana@prospect.test" }, { name: "Message-ID", value: "<m2@hq.test>" }] } };
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: msg },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [msg] } },
+  ]));
+  const r = await syncMailbox(db, member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  const att = await attemptsOf("a1");
+  assert.equal(att.length, 1, "the canonical observation gets its attempt");
+  assert.equal(att[0].event_id, mine.id);
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+});

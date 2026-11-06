@@ -500,24 +500,26 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
           mailbox: row.address, message_key: x.key, source: "team_mailbox", draft_id: draftIds.length === 1 ? draftIds[0] : null, calc_version: CALC_VERSION,
         };
       });
-      // A message another mailbox already holds (same keyed Message-ID; a send-as alias or a delegated mailbox): the same
-      // send seen twice. This mailbox's row is written as an observation (its thread is where a reply may arrive) without
-      // attempts of its own; the thread pass resolves it to the first observation's attempts, and readers count a Message-ID
-      // once (review of #30, F3).
-      const keys = [...new Set(counted.map((k) => k.x.key).filter((k): k is string => !!k))];
-      const elsewhere = new Set<string>();
-      if (keys.length) for (const e of must(await db.from("gtm_team_mail_events").select("message_key,mailbox").in("message_key", keys), "copies") as { message_key: string; mailbox: string | null }[]) {
-        if (e.mailbox && e.mailbox !== row.address) elsewhere.add(e.message_key);
-      }
-      const isCopy = (x: { key: string | null }) => !!x.key && elsewhere.has(x.key);
       const written = await writeEvents(db, row.member, row.address, events, result);
       // An id that could not be stored (another mailbox holds it under the member-wide key, before 20261106020000) stays
       // pending instead of being dropped (review of #30, round 3).
       for (const { x } of counted) if (!written.has(x.id)) deferred.add(x.id);
+      // One canonical observation per keyed Message-ID: the earliest stored outreach row, whichever mailbox wrote it. Only it
+      // carries attempts, and they are (re)written idempotently every time it is processed, so an attempts write that failed
+      // is repaired on retry even after another mailbox stored a copy (review of #30, C1). Every other observation (a send-as
+      // alias, a delegated mailbox) gets none; the thread pass resolves it to the canonical attempts, readers count it once.
+      const keys = [...new Set(counted.map((k) => k.x.key).filter((k): k is string => !!k))];
+      const canonicalOf = new Map<string, number>();
+      for (let i = 0; i < keys.length; i += 200) {
+        for (const e of must(await db.from("gtm_team_mail_events").select("id,message_key").in("message_key", keys.slice(i, i + 200)).eq("kind", "outreach"), "canonical observations") as { id: number; message_key: string }[]) {
+          canonicalOf.set(e.message_key, Math.min(canonicalOf.get(e.message_key) ?? Infinity, e.id));
+        }
+      }
+      const isCopy = (x: { key: string | null }, id: number) => !!x.key && (canonicalOf.get(x.key) ?? id) !== id;
       const attemptRows = counted.flatMap(({ x, c }) => {
         const ev = written.get(x.id);
         if (!ev) return [];
-        if (isCopy(x)) { result.copies++; return []; }
+        if (isCopy(x, ev.id)) { result.copies++; return []; }
         const live = now.getTime() - x.at < DAY;
         return c.attempts.map((a: AttemptClass) => ({
           event_id: ev.id, recipient_hash: addressHash(a.address), field: a.field, match: a.match, person_id: a.personId, stream: a.stream,
@@ -589,6 +591,9 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     const knownReplies = new Set(replyRows.filter((e) => ruledDone.has(e.id)).map((e) => e.gmail_message_id));
     let threadsDone = true;
     const scanned = new Set<string>();
+    // Threads whose reply text or failure report still needs reading (the run ran out of time first). They stay queued,
+    // however old their outreach, until that is done (review of #32, B1).
+    const bodyPending = new Set<string>();
     for (let k = 0; k < Math.min(cap, open.length); k++) {
       if (late()) { result.complete = false; threadsDone = false; break; }
       const [threadId, t] = open[(start + k) % open.length];
@@ -603,7 +608,8 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
         const who = [...new Set(mine.filter((a) => a.recipient_hash === hash && a.person_id).map((a) => a.person_id!))];
         // Reply text, only with gmail.readonly and only for a reply from an outreach recipient: the deterministic rules
         // record an auto-reply or a possible opt-out (held for a person). Nothing of the text is kept.
-        if (bodies && !knownReplies.has(r.id) && !late()) {
+        if (bodies && !knownReplies.has(r.id) && late()) bodyPending.add(threadId);
+        else if (bodies && !knownReplies.has(r.id)) {
           const m = await gmail.full(r.id).catch((e) => { if ((e as { status?: number }).status === 404) return null; throw e; });
           if (m) {
             const text = await partText(gmail, r.id, m.payload as Part | undefined, /^text\/plain$/i) ?? "";
@@ -629,7 +635,9 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
         const send = t.sends.filter((s) => Date.parse(s.at) < f.at).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
         const cold = send ? mine.filter((a) => a.event_id === attemptIdOf(send) && a.stream === "cold") : [];
         // With gmail.readonly the report names each failed recipient and why (RFC 3464): only those attempts change.
-        if (bodies && send && cold.some((a) => a.delivery === "no_failure_observed" || a.delivery === "delayed" || a.delivery === "failed_unclassified") && !late()) {
+        const typable = bodies && send && cold.some((a) => a.delivery === "no_failure_observed" || a.delivery === "delayed" || a.delivery === "failed_unclassified");
+        if (typable && late()) { bodyPending.add(threadId); continue; }   // read the report next run, not the metadata guess now
+        if (typable) {
           const m = await gmail.full(f.id).catch((e) => { if ((e as { status?: number }).status === 404) return null; throw e; });
           const status = m ? await partText(gmail, f.id, m.payload as Part | undefined, /^message\/(global-)?delivery-status$/i) : null;
           const named = status ? parseDeliveryStatus(status) : [];
@@ -676,7 +684,8 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     const outreachThreads = new Set([...threads].filter(([, t]) => t.first !== Infinity).map(([id]) => id));
     const looked = new Set(threadBatch);
     const settled = backfillDone && !remaining;
-    const remainingThreads = pendingThreads.filter((id) => !(looked.has(id) && (scanned.has(id) || (settled && !outreachThreads.has(id)))));
+    const remainingThreads = pendingThreads.filter((id) => bodyPending.has(id) || !(looked.has(id) && (scanned.has(id) || (settled && !outreachThreads.has(id)))));
+    for (const id of bodyPending) if (!remainingThreads.includes(id)) remainingThreads.push(id);
     // A replay's window closes only when its listing and classification are done and every thread in it was re-read,
     // across as many runs as that takes (review of #30, F5, N1).
     if (replayWindow) {
