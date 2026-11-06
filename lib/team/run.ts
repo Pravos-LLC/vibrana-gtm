@@ -10,8 +10,9 @@ import { gmailConfig, syncMailbox, type MailboxRow, type SyncResult } from "./ma
 import { stock } from "./metrics";
 import type { TeamMember } from "./members";
 import { runEmailHealth, type HealthRun } from "../email/run";
+import { applyTwenty, detect } from "../email/suppression";
 
-export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string }; _lease?: string; _health?: HealthRun | { error: string } };
+export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string }; _lease?: string; _health?: HealthRun | { error: string }; _suppression?: Record<string, unknown> };
 
 const LEASE = "team.hourly";
 
@@ -68,6 +69,13 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
       }
     } catch (e) { r.mailbox = `error: ${(e as Error).message.slice(0, 200)}`; }
   }
+  // Suppression (VIB-513): record the operations the evidence implies (pending review; Origami held), then apply approved
+  // Twenty operations only when EMAIL_SUPPRESSION_APPLY=1. A failure here never fails the run.
+  try {
+    const proposed = await detect(db);
+    reader.setDeadline(opts.deadline - 30_000);
+    out._suppression = { proposed: proposed.length, apply: await applyTwenty(db, reader, now) };
+  } catch (e) { out._suppression = { error: (e as Error).message.slice(0, 200) }; }
   // Email health (VIB-511): bounce rate, collection problems, daily DNS. Its own failure never fails the run.
   if (opts.notify) {
     try { out._health = await runEmailHealth(db, members, { now, mail: opts.notify }); } catch (e) { out._health = { error: (e as Error).message.slice(0, 200) }; }

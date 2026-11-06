@@ -1736,6 +1736,35 @@ const commands: Record<string, () => Promise<void>> = {
     out(await pushSpend(rows));
   },
 
+  async suppression() {
+    // Email suppression (VIB-513). `plan` records what the evidence implies and prints the dry-run report (counts only);
+    // `approve --ids 1,2 --ref "..."` approves pending Twenty operations against that report; `apply` runs the guarded
+    // writer, only with EMAIL_SUPPRESSION_APPLY=1. Origami operations stay held until its exclusion scope is verified.
+    const { adminDb, must } = await import("../lib/db");
+    const S = await import("../lib/email/suppression");
+    const db = adminDb(), sub = rest[0], now = new Date();
+    if (sub === "plan") {
+      await S.detect(db);
+      const ops = must(await db.from("gtm_email_sync_ops").select("*").neq("state", "canceled").order("id"), "operations") as import("../lib/email/suppression").StoredOp[];
+      const report = S.planReport(ops);
+      const pending = ops.filter((o) => o.destination === "twenty" && o.state === "pending_review" && o.reason !== "OPT_OUT_REVIEW").map((o) => o.id);
+      return out({ ...report, approvableIds: pending }, () => { console.log(JSON.stringify(report, null, 2)); console.log(`approvable (pending Twenty, not reviews): ${pending.join(",") || "none"}`); });
+    }
+    if (sub === "approve") {
+      const ids = (flag("--ids") ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0), ref = flag("--ref") ?? "";
+      if (!ids.length) throw new Error('usage: gtm suppression approve --ids 1,2 --ref "<dry run date and who approved>"');
+      const n = await S.approve(db, ids, ref, now);
+      return out({ approved: n }, () => console.log(`approved ${n} operation(s); apply runs with EMAIL_SUPPRESSION_APPLY=1 (hourly, or gtm suppression apply)`));
+    }
+    if (sub === "apply") {
+      const { TwentyReader } = await import("../lib/twenty");
+      await S.detect(db);   // cancel operations whose evidence was corrected before anything is applied
+      const r = await S.applyTwenty(db, new TwentyReader({ deadline: Date.now() + 240_000 }), now);
+      return out(r, () => console.log(JSON.stringify(r)));
+    }
+    throw new Error("usage: gtm suppression plan | approve --ids 1,2 --ref TEXT | apply");
+  },
+
   async team() {
     // `gtm team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]`: the next hourly team run lists that mailbox's
     // sent mail again from the date and re-reads its outreach threads, rewriting rows the older sync wrote (VIB-510).
@@ -2004,6 +2033,8 @@ const help = `gtm <command> [--json]
   sales run                do the hourly pipeline cron's work now: stage history, HQ inbox outcomes, lastContactedAt, site days
   team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]   list a team mailbox's sent mail again from the
                            date and re-read its outreach threads on the next hourly run (reconciles older rows; reads only)
+  suppression plan|approve|apply   email suppression (VIB-513): the dry-run report (counts only), approve pending Twenty
+                           operations against it (--ids, --ref), and the guarded writer (EMAIL_SUPPRESSION_APPLY=1 only)
   team reconcile [--days 30]   old thread-based email numbers next to the email contract v1 numbers, per member
                            (counts only; review before setting EMAIL_OUTCOMES_V2=1)
   sales reconcile [--days 60] [--apply]   match incoming Wise credits to unpaid payment milestones (same currency,
