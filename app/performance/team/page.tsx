@@ -60,14 +60,14 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
   const mailboxes = (boxes.data ?? []) as MailboxStatus[];
   const connected = mailboxes.length > 0;
   // Email contract v1 (VIB-512): efforts and attempts replace threads once EMAIL_OUTCOMES_V2=1, after reconciliation.
-  const outcomes = connected && outcomesV2() ? await loadOutcomes(db, member.code).catch(() => null) : null;
+  const outcomes = connected && outcomesV2() ? await loadOutcomes(db, member.code).catch(() => "unavailable" as const) : null;
   const r = teamReport({
     outcomes,
     activity, mail: connected && !mail.error ? (mail.data ?? []) as MailEvent[] : null, desk: desk.error ? null : (desk.data ?? []) as DeskSend[],
     memberEmail: member.authEmail, stock: (stock.data ?? []) as StockRow[], periodDays: days, now: new Date(),
   });
   const c = r.cur, p = r.prev, s = r.stock;
-  const mailMissing = !connected ? "not measured: mailbox not connected" : "not measured: mail events could not be read";
+  const mailMissing = !connected ? "not measured: mailbox not connected" : outcomes === "unavailable" ? "not measured: email outcomes could not be read" : "not measured: mail events could not be read";
   const crmMissing = activity ? "not measured: Twenty read failed" : "not measured: no CRM read yet (the team cron runs hourly)";
   const spark = (k: keyof (typeof r.weekly)[number]) => r.weekly.map((w) => w[k] as number | null);
   const href = (q: Record<string, string | number>) => `/performance/team?${new URLSearchParams({ member: member.code, days: String(days), ...Object.fromEntries(Object.entries(q).map(([k, v]) => [k, String(v)])) })}`;
@@ -106,7 +106,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
             <p className="text-ink-3">
               Coverage this period: {c.email.attempts} cold recipients, {c.email.coverage.unverified} not verified (counted), {c.email.coverage.policyFlagged} sent against a CRM restriction (counted, flagged),
               {" "}{c.email.coverage.ambiguous} on an address two CRM people share and {c.email.coverage.unmatched} not in the CRM (not attributed), {c.email.coverage.legacyRows} messages from the older sync.
-              {" "}Bounces {c.email.bounce.num} of {c.email.bounce.n}.
+              {" "}Bounces {c.email.bounce.num} of {c.email.bounce.n}{c.email.complete ? "" : " (partial: rates withheld until every message is reconciled)"}.
             </p>
           )}
         </div>
@@ -120,9 +120,10 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
       <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-3">
         <StatTile label="GTM emails sent" value={c.emailsSent == null ? null : fmt(c.emailsSent)} missing={mailMissing}
           delta={delta(c.emailsSent, p.emailsSent, days)} spark={connected ? spark("emailed") : undefined}
-          note={c.newThreads != null ? plural(c.newThreads, "first touch", "first touches") + ", " + plural((c.emailsSent ?? 0) - c.newThreads, "follow-up", "follow-ups") : undefined} />
+          note={c.email ? plural(c.email.newEfforts, "new outreach effort", "new outreach efforts") + `, ${c.email.attempts} cold recipients`
+            : c.newThreads != null ? plural(c.newThreads, "first touch", "first touches") + ", " + plural((c.emailsSent ?? 0) - c.newThreads, "follow-up", "follow-ups") : undefined} />
         <StatTile label="Reply rate" value={c.reply ? pct(c.reply.rate) : null}
-          missing={c.reply ? `needs ${REPLY_MIN_N} first touches at least 7 days old (${c.reply.n} so far, ${c.reply.replied} replied)` : mailMissing}
+          missing={c.email && !c.email.complete ? `withheld: ${c.email.coverage.withoutAttempts} messages in the period are not reconciled yet (gtm team replay)` : c.reply ? `needs ${REPLY_MIN_N} first touches at least 7 days old (${c.reply.n} so far, ${c.reply.replied} replied)` : mailMissing}
           note={c.reply?.rate != null ? `${c.reply.replied} of ${c.reply.n} first touches, bounces excluded` : undefined} />
         <StatTile label="Meetings" value={c.meetings == null ? null : fmt(c.meetings)} missing={crmMissing} delta={delta(c.meetings, p.meetings, days)} spark={spark("meetings")}
           note="meeting capture proposals tagged to them" />

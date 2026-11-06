@@ -71,7 +71,8 @@ export default async function PipelineOverview({ searchParams }: { searchParams:
     measured: {
       qualifiedFromMeeting: measuredRate(qualifiedIds.size, mtg?.discovery ?? null),
       meetingFromPositive: measuredRate(mtg?.discovery ?? null, posW),
-      positiveFromTouch: measuredRate(deskW?.positive ?? null, deskW?.firstTouches ?? null),
+      // A conversion rate is by the cohort of first touches at least 7 days old, never this period's replies over its sends.
+      positiveFromTouch: measuredRate(deskW?.maturePositive ?? null, deskW?.matureTouches ?? null),
     },
   });
 
