@@ -203,20 +203,20 @@ test("a row from the older sync is rewritten once with attempts; a single-recipi
 test("a reply in an outreach thread older than 30 days is found through history, after its first outcome", async () => {
   const row = await fresh({ history_id: "500", backfill_done: true });
   const db = admin();
-  const old = (await db.from("gtm_team_mail_events").insert({ member: "TSYNC", gmail_message_id: "o1", thread_id: "o10", kind: "outreach", at: "2026-10-02T10:00:00Z",
+  const old = (await db.from("gtm_team_mail_events").insert({ member: "TSYNC", gmail_message_id: "e1", thread_id: "e10", kind: "outreach", at: "2026-10-02T10:00:00Z",
     person_ids: [P1], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: BOX, calc_version: 2 }).select("id").single()).data!;
   assert.equal((await db.from("gtm_email_attempts").insert({ event_id: old.id, recipient_hash: addressHash("ana@prospect.test"), field: "to", match: "matched", person_id: P1, stream: "cold" })).error, null);
-  assert.equal((await db.from("gtm_team_mail_events").insert({ member: "TSYNC", gmail_message_id: "r1", thread_id: "o10", kind: "reply", at: "2026-10-03T10:00:00Z", mailbox: BOX, calc_version: 2 })).error, null);
+  assert.equal((await db.from("gtm_team_mail_events").insert({ member: "TSYNC", gmail_message_id: "c1", thread_id: "e10", kind: "reply", at: "2026-10-03T10:00:00Z", mailbox: BOX, calc_version: 2 })).error, null);
   await db.from("gtm_sync_state").insert({ key: stateKey("TSYNC", BOX), value: { pending: [], okAt: "2026-11-19T00:00:00Z" } });
   mock = installFetchMock(base([
-    { url: `${GM}history?startHistoryId=500`, json: { history: [{ messagesAdded: [{ message: { id: "r9", threadId: "o10", labelIds: ["INBOX", "UNREAD"] } }] }], historyId: "960" } },
-    { url: `${GM}threads/o10`, json: { id: "o10", messages: [sent("o1", Date.parse("2026-10-02T10:00:00Z"), "ana@prospect.test"),
-      { id: "r1", internalDate: String(Date.parse("2026-10-03T10:00:00Z")), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "ana@prospect.test" }] } },
-      { id: "r9", internalDate: String(Date.parse("2026-11-19T10:00:00Z")), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "Ana <ana@prospect.test>" }] } }] } },
+    { url: `${GM}history?startHistoryId=500`, json: { history: [{ messagesAdded: [{ message: { id: "c9", threadId: "e10", labelIds: ["INBOX", "UNREAD"] } }] }], historyId: "960" } },
+    { url: `${GM}threads/e10`, json: { id: "e10", messages: [sent("e1", Date.parse("2026-10-02T10:00:00Z"), "ana@prospect.test"),
+      { id: "c1", internalDate: String(Date.parse("2026-10-03T10:00:00Z")), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "ana@prospect.test" }] } },
+      { id: "c9", internalDate: String(Date.parse("2026-11-19T10:00:00Z")), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "Ana <ana@prospect.test>" }] } }] } },
   ]));
   const r = await syncMailbox(db, member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-20T00:00:00Z") });
   assert.equal(r.error, undefined, r.error ?? "");
-  const [late] = (await db.from("gtm_team_mail_events").select("kind,person_ids").eq("member", "TSYNC").eq("gmail_message_id", "r9")).data!;
+  const [late] = (await db.from("gtm_team_mail_events").select("kind,person_ids").eq("member", "TSYNC").eq("gmail_message_id", "c9")).data!;
   assert.deepEqual(late, { kind: "reply", person_ids: [P1] });
   assert.ok(!mock.calls.some((c) => c.url.startsWith("https://crm.test")), "no send to classify: no CRM read");
   assert.deepEqual((await state())?.threads, [], "the thread was re-read, so it is not kept for next time");
