@@ -17,7 +17,9 @@ export const maxDuration = 30;
 export const metadata = { title: "Conversations" };
 
 const WEEKS = 12;
-const BOUNCE_ALARM = 0.03;
+// Email contract v1 (VIB-496): alert above 2%. The cohort-based alert over the last 7 days, at any n, runs in email health;
+// this tile shows the period rate against the same threshold.
+const BOUNCE_ALARM = 0.02;
 
 export default async function Conversations({ searchParams }: { searchParams: Promise<{ owner?: string; period?: string }> }) {
   const sp = await searchParams;

@@ -40,6 +40,8 @@ test("a failure report names each recipient's own outcome; temporary and sender 
   ]);
   assert.equal(classifyStatus("5.4.1", "failed", "550 blocked by spam filter"), "failed_policy", "policy wording beats a generic 5.x");
   assert.equal(classifyStatus("5.0.0", "failed", "550 something"), "failed_unclassified");
+  assert.equal(classifyStatus("5.1.1", "failed", "550 5.1.1 authentication required"), "failed_policy", "sender wording wins over an address status");
+  assert.equal(classifyStatus("5.1.0", "failed", "550 Unauthenticated sender rejected"), "failed_policy");
   assert.equal(classifyStatus(null, null, ""), null, "no status is not applied");
   assert.deepEqual(parseDeliveryStatus("Reporting-MTA: dns; x\n\nAction: failed\nStatus: 5.1.1\n"), [], "no recipient, nothing to apply");
 });
@@ -49,6 +51,9 @@ test("only the new text of a reply counts: a quoted unsubscribe footer is not an
   assert.equal(newText(quoted), "Thanks, interested. Can we talk Tuesday?");
   assert.deepEqual(replyRule(quoted, false), { intent: "uncertain", opt_out: "none" });
   assert.deepEqual(replyRule("Please remove me from your list.", false), { intent: "uncertain", opt_out: "uncertain" }, "a possible opt-out is held for a person");
+  assert.deepEqual(replyRule("Thanks, interested.\n\nOn Thu, Nov 6, 2026, Sender\n<sender@hq.test> wrote:\nReply unsubscribe to stop these emails.", false),
+    { intent: "uncertain", opt_out: "none" }, "a wrapped attribution line still ends the new text");
+  assert.deepEqual(replyRule("On second thought, please remove me.", false), { intent: "uncertain", opt_out: "uncertain" }, "a sentence starting with On is not an attribution");
   assert.deepEqual(replyRule("No need to remove me, just not now.", false), { intent: "uncertain", opt_out: "none" });
   assert.deepEqual(replyRule("I am out of the office until Monday.", true), { intent: "auto_reply", opt_out: "none" });
   assert.deepEqual(replyRule("Auto: unsubscribe me", true), { intent: "uncertain", opt_out: "uncertain" }, "an automatic opt-out is still reviewed");

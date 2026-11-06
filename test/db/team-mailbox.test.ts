@@ -11,7 +11,7 @@ import { installFetchMock, type Route } from "../support/fetch-mock.ts";
 const l = local();
 Object.assign(process.env, { NEXT_PUBLIC_SUPABASE_URL: l.url, SUPABASE_SECRET_KEY: l.secretKey, TEAM_MAILBOX_KEY: randomBytes(32).toString("base64"), TWENTY_API_KEY: "twenty_test", TWENTY_BASE: "https://crm.test" });
 const { syncMailbox, mailboxAad, stateKey } = await import("../../lib/team/mailbox.ts");
-const { sealToken, addressHash } = await import("../../lib/team/crypto.ts");
+const { sealToken, addressHash, messageKey } = await import("../../lib/team/crypto.ts");
 const { parseMembers } = await import("../../lib/team/members.ts");
 const { TwentyReader } = await import("../../lib/twenty.ts");
 
@@ -262,4 +262,28 @@ test("more inbound threads than one run looks up stay queued; looked-up non-outr
   const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-20T00:00:00Z") });
   assert.equal(r.error, undefined, r.error ?? "");
   assert.deepEqual((await state())?.threads, ["e00c8"], "the 201st thread waits for the next run");
+});
+
+test("a copy of a send already counted from another mailbox is an observation; a reply in its thread reaches the original's person", async () => {
+  const row = await fresh();
+  const db = admin();
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+  const orig = (await db.from("gtm_team_mail_events").insert({ member: "TOTHR", gmail_message_id: "fe1", thread_id: "fe10", kind: "outreach", at: new Date(T0).toISOString(),
+    person_ids: [P1], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: "other@hq.test", message_key: messageKey("<m1@hq.test>"), calc_version: 2 }).select("id").single()).data!;
+  assert.equal((await db.from("gtm_email_attempts").insert({ event_id: orig.id, recipient_hash: addressHash("ana@prospect.test"), field: "to", match: "matched", person_id: P1, stream: "cold" })).error, null);
+  const copy = { ...sent("a1", T0, "ana@prospect.test"), payload: { headers: [{ name: "From", value: BOX }, { name: "To", value: "ana@prospect.test" }, { name: "Message-ID", value: "<m1@hq.test>" }] } };
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: copy },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [copy, { id: "c1", internalDate: String(T0 + 60_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "ana@prospect.test" }] } }] } },
+  ]));
+  const r = await syncMailbox(db, member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  assert.equal(r.copies, 1);
+  assert.equal((await attemptsOf("a1")).length, 0, "no second set of attempts");
+  const [reply] = (await db.from("gtm_team_mail_events").select("person_ids").eq("member", "TSYNC").eq("gmail_message_id", "c1")).data!;
+  assert.deepEqual(reply.person_ids, [P1], "attributed through the original's attempts");
+  await db.from("gtm_email_attempts").delete().eq("event_id", orig.id);
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
 });

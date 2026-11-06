@@ -14,9 +14,9 @@ const STALE_SYNC_MS = 3 * 3_600_000;
 export type HealthRun = { incidents: number; notified: boolean; dns?: DomainCheck[] | string; error?: string };
 
 export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], opts: { now: Date; mail: { to: string; from: string }; checkDomain?: typeof checkDomain }): Promise<HealthRun> {
-  const now = opts.now, observed: Incident[] = [], kinds = ["bounce_rate", "collection", "suppression"];
+  const now = opts.now, observed: Incident[] = [], kinds = ["bounce_rate", "collection", "health_check", "suppression"], unchecked = new Set<string>();
   // Suppression work waiting longer than two hourly runs, or failing: visible to both owners (VIB-497 section 4).
-  const ops = must(await db.from("gtm_email_sync_ops").select("state,reason,created_at,updated_at,destination").in("state", ["pending_review", "approved", "failed"]), "suppression state") as { state: string; reason: string; created_at: string; updated_at: string; destination: string }[];
+  const ops = must(await db.from("gtm_email_sync_ops").select("state,reason,created_at,updated_at,destination").in("state", ["pending_review", "approved", "queued", "applied", "failed"]), "suppression state") as { state: string; reason: string; created_at: string; updated_at: string; destination: string }[];
   const old = ops.filter((o) => o.state !== "failed" && now.getTime() - Date.parse(o.created_at) > 2 * 3_600_000);
   const reviews = old.filter((o) => o.reason === "OPT_OUT_REVIEW").length, waiting = old.length - reviews, failing = ops.filter((o) => o.state === "failed").length;
   if (reviews) observed.push({ key: "suppression:review", kind: "suppression", severity: "warning", summary: `${reviews} possible opt-out${reviews === 1 ? "" : "s"} waiting for a person's review (email is held on the desk meanwhile)`, detail: { reviews } });
@@ -30,8 +30,14 @@ export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], 
       else if (!b.last_sync_at || now.getTime() - Date.parse(b.last_sync_at) > STALE_SYNC_MS) observed.push({ key: k, kind: "collection", severity: "warning", summary: `${m.label}'s mailbox has not synced for over 3 hours` });
     }
     if (!boxes.length) continue;
-    const o = await loadOutcomes(db, m.code);
-    const b = bounceCheck(o.events, o.attempts, now.getTime());
+    let o: Awaited<ReturnType<typeof loadOutcomes>>;
+    try { o = await loadOutcomes(db, m.code); } catch (e) {
+      // The bounce check could not run: say so, and leave any open bounce incident open (review of #32, F5).
+      unchecked.add("bounce_rate");
+      observed.push({ key: `health_check:bounce:${m.code.toLowerCase()}`, kind: "health_check", severity: "warning", summary: `${m.label}: the bounce check could not read email outcomes (${(e as Error).message.slice(0, 120)})` });
+      continue;
+    }
+    const b = bounceCheck(o.events, o.attempts, now.getTime(), m.code);
     if (b.alert) observed.push({ key: `bounce:${m.code.toLowerCase()}`, kind: "bounce_rate", severity: "critical",
       summary: `${m.label}: ${b.num} of ${b.n} cold recipients in the last 7 days failed (${Math.round((b.num / b.n) * 1000) / 10}%, threshold 2%)`, detail: { num: b.num, n: b.n } });
   }
@@ -40,18 +46,26 @@ export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], 
   const { data: last } = await db.from("gtm_sync_state").select("value").eq("key", DNS_KEY).maybeSingle();
   const prev = (last?.value ?? null) as { at?: string; checks?: DomainCheck[] } | null;
   const domains = healthDomains();
-  if (domains.length) {
-    kinds.push("dns");
-    if (!prev?.at || now.getTime() - Date.parse(prev.at) > 20 * 3_600_000) {
+  // The DNS check needs its targets. Not configured (or nothing valid) is an incident, unless explicitly turned off.
+  const fingerprint = JSON.stringify(domains);
+  kinds.push("dns");
+  if (!domains.length) {
+    unchecked.add("dns");
+    if ((process.env.EMAIL_HEALTH_DOMAINS ?? "").trim().toLowerCase() !== "off") {
+      observed.push({ key: "health_check:dns", kind: "health_check", severity: "warning", summary: "The sending-domain DNS check has no valid targets: set EMAIL_HEALTH_DOMAINS (domain or domain:dkimSelector)" });
+    }
+  } else {
+    // A cached result is reused only for the same targets (review of #32, N1).
+    if (!prev?.at || now.getTime() - Date.parse(prev.at) > 20 * 3_600_000 || (prev as { targets?: string }).targets !== fingerprint) {
       try {
         dns = await Promise.all(domains.map((d) => (opts.checkDomain ?? checkDomain)(d.domain, d.selector)));
-        must(await db.from("gtm_sync_state").upsert({ key: DNS_KEY, value: { at: now.toISOString(), checks: dns }, updated_at: now.toISOString() }, { onConflict: "key" }), "save DNS check");
+        must(await db.from("gtm_sync_state").upsert({ key: DNS_KEY, value: { at: now.toISOString(), targets: fingerprint, checks: dns }, updated_at: now.toISOString() }, { onConflict: "key" }), "save DNS check");
       } catch (e) { dns = `DNS check failed: ${(e as Error).message.slice(0, 160)}`; }
     } else dns = prev.checks ?? [];
-    if (typeof dns === "string") observed.push({ key: "dns:check", kind: "dns", severity: "warning", summary: dns });
+    if (typeof dns === "string") { unchecked.add("dns"); observed.push({ key: "health_check:dns", kind: "health_check", severity: "warning", summary: dns }); }
     else for (const c of dns) if (c.problems.length) observed.push({ key: `dns:${c.domain}`, kind: "dns", severity: "critical", summary: `${c.domain}: ${c.problems.join(", ")}` });
   }
-  const fresh = await reconcileIncidents(db, observed, kinds, now);
+  const fresh = await reconcileIncidents(db, observed, kinds, now, unchecked);
   let notified = false;
   if (fresh.length) notified = (await notifyIncidents(db, fresh, { to: alertRecipients(opts.mail.to), from: opts.mail.from }, now)).sent;
   return { incidents: observed.length, notified, dns };

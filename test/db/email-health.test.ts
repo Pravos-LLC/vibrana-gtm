@@ -8,7 +8,7 @@ import { local } from "../support/local-supabase.ts";
 import { installFetchMock, type Route } from "../support/fetch-mock.ts";
 
 const l = local();
-Object.assign(process.env, { NEXT_PUBLIC_SUPABASE_URL: l.url, SUPABASE_SECRET_KEY: l.secretKey, TEAM_MAILBOX_KEY: randomBytes(32).toString("base64"), RESEND_API_KEY: "re_test", EMAIL_ALERT_TO: "a@team.test,b@team.test", EMAIL_HEALTH_DOMAINS: "" });
+Object.assign(process.env, { NEXT_PUBLIC_SUPABASE_URL: l.url, SUPABASE_SECRET_KEY: l.secretKey, TEAM_MAILBOX_KEY: randomBytes(32).toString("base64"), RESEND_API_KEY: "re_test", EMAIL_ALERT_TO: "a@team.test,b@team.test", EMAIL_HEALTH_DOMAINS: "off" });
 const { runEmailHealth } = await import("../../lib/email/run.ts");
 const { parseMembers } = await import("../../lib/team/members.ts");
 
