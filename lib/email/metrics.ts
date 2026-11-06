@@ -41,15 +41,18 @@ const inWin = (t: number, from: number, to: number) => t >= from && t < to;
 export type Rate = { rate: number | null; num: number; n: number };
 const rate = (num: number, n: number, min = MIN_N): Rate => ({ rate: n >= min && n > 0 ? num / n : null, num, n });
 
-export type Effort = { id: string; person: string; first: number; firstEventId: number; firstMember: string | null; firstFailed: boolean; firstConfirmedFailure: boolean; replied: boolean; positive: boolean; sends: number; threads: Set<string> };
+export type Effort = { id: string; person: string; first: number; firstEventId: number; firstMember: string | null; firstFailed: boolean; firstConfirmedFailure: boolean; replied: boolean; positive: boolean; sends: number;
+  /** Each send's mailbox thread and time: a reply is matched against sends made before it, never later ones. */
+  sent: { thread: string; at: number }[] };
 
 const threadKey = (e: EmailEvent) => `${e.mailbox ?? ""}|${e.thread_id}`;
 
 /**
  * Every effort with its first touch and outcome, across all mailboxes. Attempts without an episode are not efforts
- * (counted in coverage). A reply goes to the person's effort that sent into the reply's thread (the latest such before
- * it); with no thread match it goes to the only earlier effort, and when several could be meant it is not credited to
- * any (review of #31, B3). A person's desk decision on an effort outranks the reply decisions (B4).
+ * (counted in coverage). A reply goes to the effort whose latest send into the reply's thread, before the reply, is the
+ * most recent; a later send never moves an earlier reply. With no such send it goes to the only earlier effort, and
+ * when several could be meant it is not credited to any (review of #31, B3, R1). A person's desk decision on an effort
+ * outranks the reply decisions (B4).
  */
 export function efforts(events: EmailEvent[], attempts: EmailAttempt[], decisions: ReplyDecision[] = [], effortDecisions: EffortDecision[] = []): Effort[] {
   const byId = new Map(events.map((e) => [e.id, e]));
@@ -60,9 +63,9 @@ export function efforts(events: EmailEvent[], attempts: EmailAttempt[], decision
     const ev = byId.get(a.event_id);
     const t = ev ? ms(ev.at) : NaN;
     if (!ev || !Number.isFinite(t)) continue;
-    const e = by.get(a.episode_id) ?? { id: a.episode_id, person: a.person_id, first: Infinity, firstEventId: -1, firstMember: null, firstFailed: false, firstConfirmedFailure: false, replied: false, positive: false, sends: 0, threads: new Set<string>() };
+    const e = by.get(a.episode_id) ?? { id: a.episode_id, person: a.person_id, first: Infinity, firstEventId: -1, firstMember: null, firstFailed: false, firstConfirmedFailure: false, replied: false, positive: false, sends: 0, sent: [] };
     e.sends++;
-    e.threads.add(threadKey(ev));
+    e.sent.push({ thread: threadKey(ev), at: t });
     if (t < e.first) { e.first = t; e.firstEventId = a.event_id; e.firstMember = ev.member ?? null; e.firstFailed = ANY_FAILURE.has(a.delivery); e.firstConfirmedFailure = CONFIRMED_FAILURE.has(a.delivery); }
     by.set(a.episode_id, e);
   }
@@ -71,8 +74,10 @@ export function efforts(events: EmailEvent[], attempts: EmailAttempt[], decision
   for (const r of events) {
     if (r.kind !== "reply") continue;
     for (const p of r.person_ids) {
-      const earlier = (byPerson.get(p) ?? []).filter((e) => e.first < ms(r.at)).sort((a, b) => b.first - a.first);
-      const inThread = earlier.filter((e) => e.threads.has(threadKey(r)));
+      const at = ms(r.at), key = threadKey(r);
+      const earlier = (byPerson.get(p) ?? []).filter((e) => e.first < at);
+      const lastInThread = (e: Effort) => Math.max(-Infinity, ...e.sent.filter((x) => x.thread === key && x.at < at).map((x) => x.at));
+      const inThread = earlier.filter((e) => lastInThread(e) > -Infinity).sort((a, b) => lastInThread(b) - lastInThread(a));
       const target = inThread[0] ?? (earlier.length === 1 ? earlier[0] : undefined);
       if (!target) continue;
       target.replied = true;
@@ -91,8 +96,9 @@ export function efforts(events: EmailEvent[], attempts: EmailAttempt[], decision
 export type EmailStats = {
   messages: number; attempts: number; people: number; newEfforts: number; replies: number;
   replyRate: Rate; positiveRate: Rate; bounce: Rate;
-  /** False when some outreach in the window has no attempt rows (written by the older sync, or not yet reconciled): rates
-   *  are then withheld (null) rather than shown as measured; observed failures still count toward the alert (B6). */
+  /** False when some outreach in the window has no attempt rows (written by the older sync, or not yet reconciled), or when
+   *  collection itself is incomplete (a team mailbox backfilling, failing or stale): rates are then withheld (null) rather
+   *  than shown as measured; observed failures still count toward the alert (B6, R2). */
   complete: boolean;
   coverage: { ambiguous: number; unmatched: number; noEpisode: number; legacyRows: number; withoutAttempts: number; policyFlagged: number; unverified: number };
 };
@@ -104,7 +110,7 @@ export type EmailStats = {
  * (an activity count); reply rates are by the cohort of first touches.
  */
 export function emailStats(events: EmailEvent[], attempts: EmailAttempt[], decisions: ReplyDecision[], from: number, to: number, now: number,
-  opts: { member?: string; effortDecisions?: EffortDecision[] } = {}): EmailStats {
+  opts: { member?: string; effortDecisions?: EffortDecision[]; collectionComplete?: boolean } = {}): EmailStats {
   const mine = (e: EmailEvent) => !opts.member || e.member === opts.member;
   const outreach = events.filter((e) => e.kind === "outreach" && mine(e) && inWin(ms(e.at), from, to));
   // A copy of one message in a second mailbox is one message and one set of attempts.
@@ -116,7 +122,8 @@ export function emailStats(events: EmailEvent[], attempts: EmailAttempt[], decis
   const withAttempts = new Set(attempts.map((a) => a.event_id));
   const withoutAttempts = [...counted].filter((id) => !withAttempts.has(id)).length;
   const legacyRows = outreach.filter((e) => (e.calc_version ?? 1) < 2).length;
-  const complete = withoutAttempts === 0;
+  // Collection coverage is team-wide: an effort's sends and replies can sit in any mailbox.
+  const complete = withoutAttempts === 0 && opts.collectionComplete !== false;
   const all = efforts(events, attempts, decisions, opts.effortDecisions);
   const cohort = all.filter((e) => inWin(e.first, from, to) && (!opts.member || e.firstMember === opts.member));
   const mature = cohort.filter((e) => e.first <= now - MATURE_DAYS * DAY && !(e.firstConfirmedFailure && !e.replied));
@@ -140,7 +147,7 @@ export function emailStats(events: EmailEvent[], attempts: EmailAttempt[], decis
 /** The rolling 7-day bounce check: failed over attempts sent in the last 7 days, alerting above 2% at any n. */
 /** The rolling 7-day bounce check: failed over attempts sent in the last 7 days, alerting above 2% at any n. With partial
  *  coverage the rate is withheld but observed failures still alert (over the attempts that are covered). */
-export function bounceCheck(events: EmailEvent[], attempts: EmailAttempt[], now: number, member?: string): Rate & { alert: boolean; complete: boolean } {
-  const s = emailStats(events, attempts, [], now - 7 * DAY, now, now, { member });
+export function bounceCheck(events: EmailEvent[], attempts: EmailAttempt[], now: number, member?: string, collectionComplete?: boolean): Rate & { alert: boolean; complete: boolean } {
+  const s = emailStats(events, attempts, [], now - 7 * DAY, now, now, { member, collectionComplete });
   return { ...s.bounce, alert: s.bounce.n > 0 && s.bounce.num / s.bounce.n > BOUNCE_ALERT, complete: s.complete };
 }

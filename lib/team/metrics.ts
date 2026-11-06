@@ -123,7 +123,7 @@ function period(i: Inputs, w: Window): Period {
   for (const e of outreach ?? []) days.add(e.at.slice(0, 10));
   for (const d of desk ?? []) days.add(d.at.slice(0, 10));
   const o = i.outcomes, v2 = o != null;
-  const email = mail && o && o !== "unavailable" ? emailStats(o.events, o.attempts, o.decisions, w.from, w.to, i.now.getTime(), { member: o.member, effortDecisions: o.effortDecisions }) : null;
+  const email = mail && o && o !== "unavailable" ? emailStats(o.events, o.attempts, o.decisions, w.from, w.to, i.now.getTime(), { member: o.member, effortDecisions: o.effortDecisions, collectionComplete: o.collection.complete }) : null;
   return {
     email,
     contactsAdded: count(a?.people, (r) => r.createdAt, a?.errors.people),
