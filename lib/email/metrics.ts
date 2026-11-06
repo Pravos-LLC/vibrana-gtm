@@ -57,6 +57,13 @@ const threadKey = (e: EmailEvent) => `${e.mailbox ?? ""}|${e.thread_id}`;
 export function efforts(events: EmailEvent[], attempts: EmailAttempt[], decisions: ReplyDecision[] = [], effortDecisions: EffortDecision[] = []): Effort[] {
   const byId = new Map(events.map((e) => [e.id, e]));
   const intent = new Map(decisions.map((d) => [d.event_id, d.intent]));
+  // A copy of a send in another mailbox (same keyed Message-ID, no attempts of its own) shares the canonical send's
+  // conversation: a reply in the copy's thread matches the canonical send's thread (the earliest row holds the attempts).
+  const canon = new Map<string, EmailEvent>();
+  for (const e of events) if (e.kind === "outreach" && e.message_key && (!canon.has(e.message_key) || e.id < canon.get(e.message_key)!.id)) canon.set(e.message_key, e);
+  const alias = new Map<string, string>();
+  for (const e of events) { const c = e.kind === "outreach" && e.message_key ? canon.get(e.message_key) : undefined; if (c && c !== e && !alias.has(threadKey(e))) alias.set(threadKey(e), threadKey(c)); }
+  const convo = (e: EmailEvent) => alias.get(threadKey(e)) ?? threadKey(e);
   const by = new Map<string, Effort>();
   for (const a of attempts) {
     if (a.stream !== "cold" || !a.episode_id || !a.person_id) continue;
@@ -65,7 +72,7 @@ export function efforts(events: EmailEvent[], attempts: EmailAttempt[], decision
     if (!ev || !Number.isFinite(t)) continue;
     const e = by.get(a.episode_id) ?? { id: a.episode_id, person: a.person_id, first: Infinity, firstEventId: -1, firstMember: null, firstFailed: false, firstConfirmedFailure: false, replied: false, positive: false, sends: 0, sent: [] };
     e.sends++;
-    e.sent.push({ thread: threadKey(ev), at: t });
+    e.sent.push({ thread: convo(ev), at: t });
     if (t < e.first) { e.first = t; e.firstEventId = a.event_id; e.firstMember = ev.member ?? null; e.firstFailed = ANY_FAILURE.has(a.delivery); e.firstConfirmedFailure = CONFIRMED_FAILURE.has(a.delivery); }
     by.set(a.episode_id, e);
   }
@@ -74,7 +81,7 @@ export function efforts(events: EmailEvent[], attempts: EmailAttempt[], decision
   for (const r of events) {
     if (r.kind !== "reply") continue;
     for (const p of r.person_ids) {
-      const at = ms(r.at), key = threadKey(r);
+      const at = ms(r.at), key = convo(r);
       const earlier = (byPerson.get(p) ?? []).filter((e) => e.first < at);
       const lastInThread = (e: Effort) => Math.max(-Infinity, ...e.sent.filter((x) => x.thread === key && x.at < at).map((x) => x.at));
       const inThread = earlier.filter((e) => lastInThread(e) > -Infinity).sort((a, b) => lastInThread(b) - lastInThread(a));

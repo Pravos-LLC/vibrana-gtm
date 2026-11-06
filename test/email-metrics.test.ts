@@ -140,3 +140,10 @@ test("incomplete collection withholds every rate, while observed failures still 
   assert.equal(collectionOf([{ ...ok, last_sync_at: new Date(NOW - 4 * 3_600_000).toISOString() }], NOW).complete, false);
   assert.equal(collectionOf([], NOW).complete, false);
 });
+
+test("a reply in a copy's thread (another mailbox saw the same send) reaches the original's effort", () => {
+  const e1 = { ...send(20, "t1", ["p1"]), mailbox: "a@hq.test", message_key: "k1" }, e2 = { ...send(15, "t2", ["p1"]), mailbox: "a@hq.test", message_key: "k2" };
+  const copy = { ...send(20, "c1", ["p1"]), mailbox: "b@hq.test", message_key: "k1" }, r = { ...reply(9, "c1", "p1"), mailbox: "b@hq.test" };
+  const by = Object.fromEntries(efforts([e1, e2, copy, r], [att(e1, "p1", "e1"), att(e2, "p1", "e2")]).map((e) => [e.id, e]));
+  assert.deepEqual([by.e1.replied, by.e2.replied], [true, false]);
+});
