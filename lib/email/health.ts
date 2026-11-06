@@ -108,7 +108,8 @@ export async function notifyIncidents(db: SupabaseClient, incidents: { id: numbe
   assertLiveProvidersAllowed();
   const key = process.env.RESEND_API_KEY;
   if (!key) throw new Error("email health alert: RESEND_API_KEY is not set");
-  if (!mail.to.length) throw new Error("email health alert: no recipients (EMAIL_ALERT_TO)");
+  // Recipients are needed only for an incident whose request is not frozen yet; a frozen one is retried as stored.
+  if (!mail.to.length && incidents.some((i) => !i.detail?.envelope)) throw new Error("email health alert: no recipients (EMAIL_ALERT_TO)");
   // The whole request is fixed before its first attempt and stored on the incident, so every retry under the same
   // idempotency key is byte-identical: a recovery, a new summary or a changed EMAIL_ALERT_TO never alters it (review of
   // #32, round 3). The envelope holds team addresses only. One incident's failure never blocks the others.
