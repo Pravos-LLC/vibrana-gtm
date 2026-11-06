@@ -1745,18 +1745,23 @@ const commands: Record<string, () => Promise<void>> = {
       // member, over one window. Counts only; read only. Review this before setting EMAIL_OUTCOMES_V2=1.
       const days = Number(flag("--days") ?? 30);
       if (!Number.isInteger(days) || days < 1 || days > 400) throw new Error("--days must be 1 to 400");
-      const { adminDb } = await import("../lib/db");
+      const { adminDb, must } = await import("../lib/db");
       const { teamMembers } = await import("../lib/team/members");
       const { loadOutcomes } = await import("../lib/email/load");
       const { emailStats, bounceCheck } = await import("../lib/email/metrics");
       const { replyRate } = await import("../lib/team/metrics");
       const db = adminDb(), now = Date.now(), from = now - days * 86_400_000;
       const rows: Record<string, unknown>[] = [];
+      const boxes = must(await db.from("gtm_team_mailboxes").select("member,backfill_done,last_sync_at,last_error,granted_scopes"), "mailboxes") as { member: string; backfill_done: boolean; last_sync_at: string | null; last_error: string | null; granted_scopes: string[] }[];
       for (const m of teamMembers()) {
         const o = await loadOutcomes(db, m.code);
-        const legacyOutreach = o.events.filter((e) => e.kind === "outreach" && Date.parse(e.at) >= from).length;
-        const old = replyRate(o.events, from, now, now), v2 = emailStats(o.events, o.attempts, o.decisions, from, now, now), b = bounceCheck(o.events, o.attempts, now);
-        rows.push({ member: m.code, days, legacy: { outreachEvents: legacyOutreach, replyRate: old.rate, replied: old.replied, n: old.n },
+        const own = o.events.filter((e) => e.member === m.code);
+        const legacyOutreach = own.filter((e) => e.kind === "outreach" && Date.parse(e.at) >= from).length;
+        const old = replyRate(own, from, now, now), v2 = emailStats(o.events, o.attempts, o.decisions, from, now, now, { member: m.code, effortDecisions: o.effortDecisions }), b = bounceCheck(o.events, o.attempts, now, m.code);
+        // Not connected, still backfilling or failing is a coverage gap, never an ordinary read of zero.
+        const mb = boxes.filter((x) => x.member === m.code).map((x) => ({ backfillDone: x.backfill_done, lastSyncAt: x.last_sync_at, failing: !!x.last_error, scopes: x.granted_scopes }));
+        rows.push({ member: m.code, days, mailboxes: mb.length ? mb : "not connected", complete: v2.complete && mb.length > 0 && mb.every((x) => x.backfillDone && !x.failing),
+          legacy: { outreachEvents: legacyOutreach, replyRate: old.rate, replied: old.replied, n: old.n },
           v2: { messages: v2.messages, attempts: v2.attempts, people: v2.people, newEfforts: v2.newEfforts, replyRate: v2.replyRate, positiveRate: v2.positiveRate, bounce: v2.bounce, coverage: v2.coverage },
           bounce7d: b });
       }

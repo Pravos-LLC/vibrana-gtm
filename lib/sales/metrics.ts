@@ -132,6 +132,9 @@ export type DeskRow = {
 };
 export type ChannelStats = {
   firstTouches: number; followUps: number; replies: number; positive: number; bounces: number;
+  /** The cohort behind the rates: first touches in the window at least 7 days old, and how many of them got a positive
+   *  reply. Conversion inputs (the reverse funnel) use these, never the period's activity counts (review of #31, B5). */
+  matureTouches: number; maturePositive: number;
   /** Replies ÷ first touches sent in the window; null below MIN_MEASURED touches. */
   replyRate: number | null; positiveRate: number | null; bounceRate: number | null;
   linkedinNotes: number; linkedinAccepted: number; acceptRate: number | null; unlabeled: number;
@@ -157,7 +160,7 @@ export function deskStats(rows: DeskRow[], w: Window, ownerOf: (by: string | nul
   const accepted = notes.filter((r) => r.linkedin_status === "connected").length;
   const n = mature.length;
   return {
-    firstTouches: touches.length, followUps: email.filter((r) => inWindow(r.follow_up_sent_at, w)).length,
+    firstTouches: touches.length, matureTouches: n, maturePositive: mature.filter((r) => isPositive(r.reply_sentiment)).length, followUps: email.filter((r) => inWindow(r.follow_up_sent_at, w)).length,
     replies: replies.length, positive, bounces,
     replyRate: n >= MIN_MEASURED ? repliedTouches / n : null,
     positiveRate: n >= MIN_MEASURED ? mature.filter((r) => isPositive(r.reply_sentiment)).length / n : null,

@@ -60,14 +60,22 @@ test("a reply belongs to the person's effort that came before it; positive needs
 test("coverage: ambiguous and unmatched recipients, policy-flagged and unverified sends, legacy rows", () => {
   const a = send(5, "t1", ["p1"]), legacy = { ...send(5, "t2", ["p2"]), calc_version: 1 };
   const s = emailStats([a, legacy], [att(a, "p1", "e1", { policy_flags: ["UNSUBSCRIBED"], verification: "unverified" }), att(a, null, null, { match: "ambiguous" }), att(a, null, null)], [], NOW - 30 * DAY, NOW, NOW);
-  assert.deepEqual(s.coverage, { ambiguous: 1, unmatched: 1, noEpisode: 0, legacyRows: 1, policyFlagged: 1, unverified: 1 });
+  assert.deepEqual(s.coverage, { ambiguous: 1, unmatched: 1, noEpisode: 0, legacyRows: 1, withoutAttempts: 1, policyFlagged: 1, unverified: 1 });
   assert.equal(s.attempts, 1, "only cold attempts are the bounce denominator");
+  assert.equal(s.complete, false, "a message without attempts makes the window partial");
+  assert.equal(s.bounce.rate, null, "a partial window never shows a measured (healthy) rate");
 });
 
 test("bounce check: above 2% of the last 7 days' attempts alerts at any n; none sent is not a healthy zero", () => {
   const a = send(2, "t1", ["p1"]);
-  assert.deepEqual(bounceCheck([a], [att(a, "p1", "e1", { delivery: "failed_invalid_address" })], NOW), { rate: 1, num: 1, n: 1, alert: true });
-  assert.deepEqual(bounceCheck([], [], NOW), { rate: null, num: 0, n: 0, alert: false });
+  assert.deepEqual(bounceCheck([a], [att(a, "p1", "e1", { delivery: "failed_invalid_address" })], NOW), { rate: 1, num: 1, n: 1, alert: true, complete: true });
+  assert.deepEqual(bounceCheck([], [], NOW), { rate: null, num: 0, n: 0, alert: false, complete: true });
+  const legacy = Array.from({ length: 10 }, (_, i) => ({ ...send(2, `l${i}`, [`q${i}`]), calc_version: 1 }));
+  const ok = send(2, "t2", ["p2"]);
+  const partial = bounceCheck([...legacy, ok], [att(ok, "p2", "e2")], NOW);
+  assert.deepEqual([partial.rate, partial.alert, partial.complete], [null, false, false], "ten unreconciled sends and one clean attempt: not a healthy zero");
+  const failing = bounceCheck([...legacy, ok], [att(ok, "p2", "e2", { delivery: "failed_invalid_address" })], NOW);
+  assert.equal(failing.alert, true, "an observed failure still alerts with partial coverage");
 });
 
 test("legacy desk labels map to the contract's words; a human decision outranks a model's; superseded rows are ignored", () => {
@@ -79,4 +87,32 @@ test("legacy desk labels map to the contract's words; a human decision outranks 
     { event_id: 2, source: "human", intent: "interested", superseded_at: "2026-11-01T00:00:00Z" },
     { event_id: 2, source: "model", intent: "neutral", superseded_at: null },
   ]), [{ event_id: 1, intent: "not_now" }, { event_id: 2, intent: "neutral" }]);
+});
+
+test("an effort spans members: the first touch's sender owns the cohort; the other member's follow-up is activity only (B1)", () => {
+  const a = { ...send(20, "t1", ["p1"]), member: "A", mailbox: "a@hq.test" }, b = { ...send(10, "t9", ["p1"]), member: "B", mailbox: "b@hq.test" };
+  const r = { ...reply(9, "t9", "p1"), member: "B", mailbox: "b@hq.test" };
+  const at = [att(a, "p1", "e1"), att(b, "p1", "e1")];
+  const sa = emailStats([a, b, r], at, [], NOW - 30 * DAY, NOW, NOW, { member: "A" }), sb = emailStats([a, b, r], at, [], NOW - 30 * DAY, NOW, NOW, { member: "B" });
+  assert.deepEqual([sa.newEfforts, sa.replyRate.num, sa.messages], [1, 1, 1], "A's effort, answered through B's thread");
+  assert.deepEqual([sb.newEfforts, sb.messages, sb.replies], [0, 1, 1], "B's follow-up is a message and B saw the reply, but no new effort");
+});
+
+test("a late reply to an earlier effort's thread goes to that effort, not the newest; an unplaceable reply credits none (B3)", () => {
+  const e1 = { ...send(20, "t1", ["p1"]), mailbox: "a@hq.test" }, e2 = { ...send(10, "t2", ["p1"]), mailbox: "a@hq.test" };
+  const late = { ...reply(9, "t1", "p1"), mailbox: "a@hq.test" }, stray = { ...reply(8, "t7", "p1"), mailbox: "a@hq.test" };
+  const by = Object.fromEntries(efforts([e1, e2, late], [att(e1, "p1", "e1"), att(e2, "p1", "e2")]).map((e) => [e.id, e]));
+  assert.equal(by.e1.replied, true); assert.equal(by.e2.replied, false);
+  const none = Object.fromEntries(efforts([e1, e2, stray], [att(e1, "p1", "e1"), att(e2, "p1", "e2")]).map((e) => [e.id, e]));
+  assert.equal(none.e1.replied || none.e2.replied, false, "two earlier efforts and no thread match: not guessed");
+  const only = efforts([e1, stray], [att(e1, "p1", "e1")]);
+  assert.equal(only[0].replied, true, "one earlier effort: it is that one");
+});
+
+test("a person's desk label outranks a model decision on the same effort (B4)", () => {
+  const a = send(20, "t1", ["p1"]), r = reply(15, "t1", "p1");
+  const [e] = efforts([a, r], [att(a, "p1", "e1")], [{ event_id: r.id, intent: "interested" }], [{ episode_id: "e1", intent: "negative" }]);
+  assert.equal(e.positive, false, "the human's not-interested wins");
+  const [h] = efforts([a], [att(a, "p1", "e1")], [], [{ episode_id: "e1", intent: "positive" }]);
+  assert.deepEqual([h.replied, h.positive], [true, true], "a legacy positive label means interested, and implies the reply");
 });
