@@ -1736,6 +1736,24 @@ const commands: Record<string, () => Promise<void>> = {
     out(await pushSpend(rows));
   },
 
+  async team() {
+    // `gtm team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]`: the next hourly team run lists that mailbox's
+    // sent mail again from the date and re-reads its outreach threads, rewriting rows the older sync wrote (VIB-510).
+    // Reads Gmail only; sends nothing and writes no CRM record.
+    if (rest[0] !== "replay") throw new Error("usage: gtm team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]");
+    const code = flag("--member")?.toUpperCase(), since = flag("--since"), only = flag("--mailbox")?.toLowerCase();
+    if (!code || !since || !/^\d{4}-\d{2}-\d{2}$/.test(since)) throw new Error("usage: gtm team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]");
+    const { adminDb } = await import("../lib/db");
+    const { scheduleReplay } = await import("../lib/team/mailbox");
+    const db = adminDb();
+    const { data, error } = await db.from("gtm_team_mailboxes").select("address").eq("member", code);
+    if (error) throw new Error(error.message);
+    const boxes = (data ?? []).map((b) => b.address as string).filter((a) => !only || a === only);
+    if (!boxes.length) throw new Error(`no connected mailbox for ${code}${only ? ` at that address` : ""}`);
+    for (const b of boxes) await scheduleReplay(db, code, b, `${since}T00:00:00Z`);
+    out({ member: code, mailboxes: boxes.length, since }, () => console.log(`replay from ${since} scheduled for ${boxes.length} mailbox(es) of ${code}; the next hourly team run starts it`));
+  },
+
   async sync() {
     json = true;
     const results: Record<string, unknown> = {};
@@ -1957,6 +1975,8 @@ const help = `gtm <command> [--json]
   sales status [--json]    the take-home goal (this month, last 3 months, next month), coverage, win rate and the action
                            list; the same numbers as /pipeline
   sales run                do the hourly pipeline cron's work now: stage history, HQ inbox outcomes, lastContactedAt, site days
+  team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]   list a team mailbox's sent mail again from the
+                           date and re-read its outreach threads on the next hourly run (reconciles older rows; reads only)
   sales reconcile [--days 60] [--apply]   match incoming Wise credits to unpaid payment milestones (same currency,
                            95 to 100% of the amount); dry run unless --apply
   crm                      snapshot the Twenty funnel

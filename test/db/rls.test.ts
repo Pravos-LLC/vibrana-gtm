@@ -16,14 +16,15 @@ let sr: SupabaseClient;
 before(async () => {
   fx = await seed();
   sr = admin();
+  fxEventId = (await sr.from("gtm_team_mail_events").select("id").eq("gmail_message_id", "f1a7").single()).data!.id as number;
   db = { anon: anon(), owner: await signedIn("owner"), member: await signedIn("member"), team: await signedIn("team"), impostor: await signedIn("impostor") };
 });
 
 const OUTREACH_IDS_SOLO = OUTREACH_IDS.solo;
 // Service-key-only tables: RLS on, no policy and no grant for anon or authenticated, so not even the owner reads them.
-const SERVICE_ONLY = ["review_publications", "review_publication_cancellations", "client_feedback"];
+const SERVICE_ONLY = ["review_publications", "review_publication_cancellations", "client_feedback", "gtm_job_leases"];
 // Column-limited: the owner reads the listed columns only (a mailbox's status, never its sealed token).
-const COLUMN_LIMITED: Record<string, string> = { gtm_team_mailboxes: "member,address,key_version,backfill_done,connected_at,last_sync_at,last_error" };
+const COLUMN_LIMITED: Record<string, string> = { gtm_team_mailboxes: "member,address,key_version,backfill_done,connected_at,last_sync_at,last_error,granted_scopes,scopes_checked_at" };
 const OWNER_READABLE = TABLES.filter((t) => !SERVICE_ONLY.includes(t) && !(t in COLUMN_LIMITED));
 const DENIED = /permission denied|row-level security|violates row-level|not allowed|insufficient/i;
 
@@ -39,6 +40,7 @@ async function snapshot() {
 }
 
 // A valid row per table, so a denial is about privilege and never about a constraint.
+let fxEventId = 0;
 function probe(t: (typeof TABLES)[number]): { row: Record<string, unknown>; key: [string, unknown]; patch: Record<string, unknown> } {
   const id = `probe-${randomUUID().slice(0, 8)}`;
   switch (t) {
@@ -77,6 +79,12 @@ function probe(t: (typeof TABLES)[number]): { row: Record<string, unknown>; key:
     case "gtm_deal_stage_history": { const u = randomUUID(); return { row: { opportunity_id: u, stage: "PROPOSAL" }, key: ["opportunity_id", u], patch: { stage: "SIGNED" } }; }
     case "gtm_linkedin_connections": { const h = randomUUID().replace(/-/g, "").repeat(2); return { row: { owner: "PROBE", profile_hash: h, connected_on: "2026-01-01" }, key: ["profile_hash", h], patch: { icp: true } }; }
     case "gtm_linkedin_threads": { const h = randomUUID().replace(/-/g, "").repeat(2); return { row: { owner: "PROBE", thread_hash: h, first_at: "2026-01-01T00:00:00Z", last_at: "2026-01-01T00:00:00Z", started_by_owner: true, two_way: false, messages: 1, owner_messages: 1 }, key: ["thread_hash", h], patch: { two_way: true } }; }
+    case "gtm_email_attempts": { const h = randomUUID().replace(/-/g, ""); return { row: { recipient_hash: h, event_id: fxEventId, field: "cc", match: "unmatched", stream: "unknown" }, key: ["recipient_hash", h], patch: { policy_flags: ["CHANGED"] } }; }
+    case "gtm_email_reply_labels": return { row: { labeled_by: id, event_id: fxEventId, source: "deterministic", intent: "neutral" }, key: ["labeled_by", id], patch: { superseded_at: new Date().toISOString() } };
+    case "gtm_email_sync_ops": { const k = `probe:${id.replace(/[^a-z0-9]/g, "")}`; return { row: { op_key: k, destination: "origami", action: "exclusion_upsert", person_id: randomUUID(), reason: "PROBE", policy_version: "probe", observed_at: new Date().toISOString() }, key: ["op_key", k], patch: { attempts: 1 } }; }
+    case "gtm_email_incidents": { const k = `probe:${id.replace(/[^a-z0-9]/g, "")}`; return { row: { incident_key: k, kind: "probe", severity: "warning", summary: "probe" }, key: ["incident_key", k], patch: { summary: "changed" } }; }
+    case "gtm_dmarc_reports": { const k = randomUUID().replace(/-/g, "").repeat(2); return { row: { report_key: k, reporter: "probe", domain: "probe.example.com", begin_at: "2001-01-01T00:00:00Z", end_at: "2001-01-02T00:00:00Z", messages: 1, dmarc_pass: 1, dkim_aligned: 1, spf_aligned: 1 }, key: ["report_key", k], patch: { messages: 2 } }; }
+    case "gtm_job_leases": { const j = `probe-${id.replace(/[^a-z0-9]/g, "").slice(0, 40)}`; return { row: { job: j, holder: "probe", expires_at: "2001-01-01T00:00:00Z" }, key: ["job", j], patch: { holder: "changed" } }; }
     case "gtm_web_daily": return { row: { site: "probe.example.com", day: "2001-01-01", visitors: 1, pageviews: 1 }, key: ["site", "probe.example.com"], patch: { visitors: 2 } };
     case "gtm_sync_state": { const k = id.replace(/-/g, "_"); return { row: { key: k, value: {} }, key: ["key", k], patch: { value: { x: 1 } } }; }
     case "gtm_settings": return { row: { key: id, value: {} }, key: ["key", id], patch: { value: { x: 1 } } };
@@ -125,6 +133,9 @@ const SERVICE_RPCS: Record<string, { anon: boolean; authenticated: boolean; serv
   gtm_claim_legacy_send: { anon: false, authenticated: false, service: true },
   // Internal: only the SECURITY DEFINER claim calls it, no role can.
   gtm_delivery_require_service: { anon: false, authenticated: false, service: false },
+  // Job overlap protection (VIB-508): the cron's service key only.
+  gtm_release_lease: { anon: false, authenticated: false, service: true },
+  gtm_take_lease: { anon: false, authenticated: false, service: true },
 };
 
 // The lists this suite iterates must match what the migrations actually create, so a re-vendored
@@ -273,6 +284,15 @@ test("the secret key can write every table (service_role), except append-only ca
     if (t === "gtm_outreach_tracks") await sr.from(t).delete().eq("track", "guest");
     const ins = await sr.from(t).insert(p.row).select();
     assert.equal(ins.error, null, `${t} insert: ${ins.error?.message}`);
+    if (t === "gtm_email_reply_labels") {
+      // Reply decisions (VIB-508): superseded once, never edited or deleted, even by service_role.
+      const sup = await sr.from(t).update(p.patch).eq(...p.key as [string, string]).select();
+      assert.equal(sup.error, null, `${t} supersede: ${sup.error?.message}`);
+      assert.equal(sup.data?.length, 1, `${t} supersede hit the probe`);
+      assert.match((await sr.from(t).update({ intent: "interested" }).eq(...p.key as [string, string]).select()).error?.message ?? "", /append-only/, `${t} rows cannot be edited`);
+      assert.match((await sr.from(t).delete().eq(...p.key as [string, string]).select()).error?.message ?? "", /append-only/, `${t} rows cannot be deleted`);
+      continue;
+    }
     const appendOnly = ["gtm_story_stage_decisions", "gtm_storyboard_versions", "gtm_storyboard_scene_decisions"].includes(t);
     if (t === "review_publication_cancellations" || appendOnly) {
       if (appendOnly) {

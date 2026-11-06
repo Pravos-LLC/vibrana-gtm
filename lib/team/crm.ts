@@ -26,7 +26,7 @@ export type Activity = {
   errors: Record<string, string>;
 };
 
-type PersonNode = { id: string; createdAt: string; emails: { primaryEmail: string | null } | null; revEmailVerification: string | null; companyId: string | null; prospectNotSendable: boolean | null; lastContactedAt: string | null };
+type PersonNode = { id: string; createdAt: string; emails: { primaryEmail: string | null } | null; revEmailVerification: string | null; companyId: string | null; prospectNotSendable: string | null; lastContactedAt: string | null };
 type CompanyNode = { id: string; createdAt: string; accountOwnerId: string | null };
 type OppNode = { id: string; createdAt: string; stage: string | null; amount: { amountMicros: number | null; currencyCode: string | null } | null; companyId: string | null; pointOfContactId: string | null; createdBy: { source: string | null; name: string | null; workspaceMemberId: string | null } | null };
 
@@ -43,7 +43,8 @@ export async function collectActivity(reader: TwentyReader, member: TeamMember, 
   const people = await attempt("people", async () => (await reader.all<PersonNode>("people",
     "id createdAt emails { primaryEmail } revEmailVerification companyId prospectNotSendable lastContactedAt", mine, "PersonFilterInput"))
     .map((p) => ({ id: p.id, createdAt: p.createdAt, hasEmail: !!p.emails?.primaryEmail, verification: p.revEmailVerification, companyId: p.companyId,
-      notSendable: p.prospectNotSendable === true, lastContactedAt: p.lastContactedAt })), [] as ActivityPerson[]);
+      notSendable: !!String(p.prospectNotSendable ?? "").trim(),   // a TEXT reason code in Twenty: any nonempty reason blocks (VIB-510)
+      lastContactedAt: p.lastContactedAt })), [] as ActivityPerson[]);
   const companies = await attempt("companies", async () => (await reader.all<CompanyNode>("companies",
     "id createdAt accountOwnerId", mine, "CompanyFilterInput"))
     .map((c) => ({ id: c.id, createdAt: c.createdAt, hasOwner: !!c.accountOwnerId })), [] as ActivityCompany[]);
