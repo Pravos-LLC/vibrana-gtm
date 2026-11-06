@@ -9,29 +9,27 @@
 import type { Activity } from "./crm";
 import { emailStats, type EmailStats } from "../email/metrics";
 import type { Outcomes } from "../email/load";
+import { conversations } from "./conversations";
 
 export type MailEvent = { kind: "outreach" | "other_crm" | "reply" | "bounce"; at: string; thread_id: string; person_ids: string[]; message_key?: string | null; mailbox?: string | null };
 
 /**
  * One logical conversation per send, whatever mailboxes saw it. A send observed in two of the member's mailboxes (a
  * send-as alias, a delegated mailbox: same keyed Message-ID) keeps its earliest observation; the other observation's
- * thread is merged into that one, so its replies, bounces and later sends join the same conversation. Threads are
- * keyed by mailbox, since Gmail thread ids are per mailbox. Every reader calculation runs on this (review of #30, C2).
+ * thread is merged into that one, so its replies, bounces and later sends join the same conversation, also across
+ * chains of mailboxes (lib/team/conversations.ts). Threads are keyed by mailbox, since Gmail thread ids are per mailbox. Every reader calculation runs on this (review of #30, C2).
  */
 export function logicalMail(mail: MailEvent[]): MailEvent[] {
-  const key = (e: MailEvent) => `${e.mailbox ?? ""}|${e.thread_id}`;
+  const convo = conversations(mail);
   const canon = new Map<string, MailEvent>();
   for (const e of mail) {
     if (e.kind !== "outreach" || !e.message_key) continue;
     const c = canon.get(e.message_key);
     if (!c || t(e.at) < t(c.at) || (t(e.at) === t(c.at) && (e.mailbox ?? "") < (c.mailbox ?? ""))) canon.set(e.message_key, e);
   }
-  const alias = new Map<string, string>();
-  for (const e of mail) {
-    const c = e.kind === "outreach" && e.message_key ? canon.get(e.message_key) : undefined;
-    if (c && c !== e && !alias.has(key(e))) alias.set(key(e), key(c));
-  }
-  return mail.flatMap((e) => (e.kind === "outreach" && e.message_key && canon.get(e.message_key) !== e ? [] : [{ ...e, thread_id: alias.get(key(e)) ?? key(e) }]));
+  // Every event moves onto its conversation (threads linked by shared sends, transitively: review of #30, D2); a send's
+  // other observations are dropped.
+  return mail.flatMap((e) => (e.kind === "outreach" && e.message_key && canon.get(e.message_key) !== e ? [] : [{ ...e, thread_id: convo(e) }]));
 }
 export type DeskSend = { person: string; email_sent_at: string | null; linkedin_sent_at: string | null; email_sent_by: string | null; linkedin_sent_by: string | null };
 export type StockRow = { date: string; metrics: Record<string, number> };

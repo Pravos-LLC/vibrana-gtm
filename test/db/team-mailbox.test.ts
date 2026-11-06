@@ -311,3 +311,34 @@ test("the canonical observation's missing attempts are repaired on retry, even a
   assert.equal(att[0].event_id, mine.id);
   await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
 });
+
+test("a reply stored without a person before the canonical attempts existed gains the person on a later read (review of #30, D1)", async () => {
+  const row = await fresh();
+  const db = admin();
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+  const orig = (await db.from("gtm_team_mail_events").insert({ member: "TOTHR", gmail_message_id: "fe3", thread_id: "fe30", kind: "outreach", at: new Date(T0).toISOString(),
+    person_ids: [P1], recipient_hashes: [addressHash("ana@prospect.test")], mailbox: "other@hq.test", message_key: messageKey("<m3@hq.test>"), calc_version: 2 }).select("id").single()).data!;
+  const copy = { ...sent("a1", T0, "ana@prospect.test"), payload: { headers: [{ name: "From", value: BOX }, { name: "To", value: "ana@prospect.test" }, { name: "Message-ID", value: "<m3@hq.test>" }] } };
+  const answer = { id: "c1", internalDate: String(T0 + 60_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "ana@prospect.test" }] } };
+  const routes = () => base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: copy },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [copy, answer] } },
+  ]);
+  // The canonical observation's attempts are missing (its write failed): the reply is stored with nobody.
+  mock = installFetchMock(routes());
+  assert.equal((await syncMailbox(db, member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") })).error, undefined);
+  const replyOf = async () => (await db.from("gtm_team_mail_events").select("person_ids").eq("member", "TSYNC").eq("gmail_message_id", "c1")).data![0].person_ids;
+  assert.deepEqual(await replyOf(), []);
+  mock.restore();
+  // The canonical attempts are repaired; this mailbox reads its thread again.
+  assert.equal((await db.from("gtm_email_attempts").insert({ event_id: orig.id, recipient_hash: addressHash("ana@prospect.test"), field: "to", match: "matched", person_id: P1, stream: "cold" })).error, null);
+  await db.from("gtm_sync_state").delete().eq("key", stateKey("TSYNC", BOX));
+  await db.from("gtm_team_mailboxes").update({ backfill_done: false, history_id: null }).eq("member", "TSYNC");
+  mock = installFetchMock(routes());
+  assert.equal((await syncMailbox(db, member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T01:00:00Z") })).error, undefined);
+  assert.deepEqual(await replyOf(), [P1], "attributed through the repaired canonical attempt");
+  await db.from("gtm_email_attempts").delete().eq("event_id", orig.id);
+  await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+});
