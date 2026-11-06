@@ -74,3 +74,11 @@ test("an opt-out appends to existing consent evidence and never truncates it", (
   assert.ok(c.data.gtmConsentEvidence.startsWith(proof), "earlier proof kept whole");
   assert.match(c.data.gtmConsentEvidence, /UNSUBSCRIBED from an email reply on 2026-11-05 \(cockpit gtm:op:9\)\.$/);
 });
+
+test("a guest not in Twenty (guest-md:) is never looked up live, so the desk does not fail closed on them; a recorded address failure still holds", async () => {
+  let calls = 0;
+  const reader = { all: async () => { calls++; throw new Error("Twenty rejects a non-UUID id"); } } as unknown as Parameters<typeof S.emailHolds>[3];
+  const db = { from: () => { throw new Error("no operations lookup for a non-CRM id"); } } as unknown as Parameters<typeof S.emailHolds>[0];
+  assert.deepEqual(await S.emailHolds(db, "guest-md:some-guest", null, reader), []);
+  assert.equal(calls, 0);
+});

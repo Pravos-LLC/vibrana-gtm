@@ -243,9 +243,12 @@ export async function evidenceCurrent(db: SupabaseClient, op: StoredOp): Promise
  */
 export async function emailHolds(db: SupabaseClient, personId: string, address: string | null, reader?: TwentyReader): Promise<string[]> {
   const out: string[] = [];
+  // Twenty ids are UUIDs. A desk person with any other id (a guest not in Twenty, 'guest-md:<slug>', or a local fixture)
+  // has no CRM record and no operation, so only the address's recorded failures can hold them.
+  const inCrm = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(personId);
   // Twenty's own state first: a restriction or opt-out a person set there has no local operation (review of #33,
   // finding 4). Fails closed: if Twenty cannot be read, the desk does not record the send.
-  if (reader) {
+  if (reader && inCrm) {
     let live: Live | null;
     try { live = (await reader.all<Live>("people", READ, { id: { eq: personId } }, "PersonFilterInput", 1, 1))[0] ?? null; } catch {
       return ["the CRM could not be checked for email restrictions; try again"];
@@ -258,9 +261,7 @@ export async function emailHolds(db: SupabaseClient, personId: string, address: 
       }
     }
   }
-  // Operations are keyed by Twenty's UUID person id; any other id (a local fixture) cannot have one.
-  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(personId);
-  const ops = isUuid ? must(await db.from("gtm_email_sync_ops").select("action,reason,state,address_hash").eq("person_id", personId).eq("destination", "twenty").neq("state", "canceled"), "holds") as { action: string; reason: string; state: string; address_hash: string | null }[] : [];
+  const ops = inCrm ? must(await db.from("gtm_email_sync_ops").select("action,reason,state,address_hash").eq("person_id", personId).eq("destination", "twenty").neq("state", "canceled"), "holds") as { action: string; reason: string; state: string; address_hash: string | null }[] : [];
   if (ops.some((o) => o.action === "person_opt_out")) { const why = ops.some((o) => o.reason === "UNSUBSCRIBED") ? "they opted out" : "a possible opt-out is waiting for review"; if (!out.includes(why)) out.push(why); }
   if (address) {
     const h = addressHash(address);
