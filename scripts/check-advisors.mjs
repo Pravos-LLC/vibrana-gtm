@@ -8,6 +8,7 @@ const ALLOW = [
   { lint: "unused_index", why: "a freshly migrated CI database has never served a query, so every index is 'unused'" },
   { key: "rls_enabled_no_policy_public_review_publications", why: "deliberate deny-all: service_role only, no grants to anon/authenticated (content_review migration)" },
   { key: "rls_enabled_no_policy_public_review_publication_cancellations", why: "deliberate deny-all: service_role only, append-only tombstones" },
+  { key: "rls_enabled_no_policy_public_gtm_job_leases", why: "deliberate deny-all: service_role only; the team cron's overlap lease, taken through gtm_take_lease (email outcomes migration)" },
   { key: "rls_enabled_no_policy_public_client_feedback", why: "deliberate deny-all: service_role only (app/api/feedback), no grants to anon/authenticated (client_feedback migration)" },
 ];
 
