@@ -147,3 +147,12 @@ test("a reply in a copy's thread (another mailbox saw the same send) reaches the
   const by = Object.fromEntries(efforts([e1, e2, copy, r], [att(e1, "p1", "e1"), att(e2, "p1", "e2")]).map((e) => [e.id, e]));
   assert.deepEqual([by.e1.replied, by.e2.replied], [true, false]);
 });
+
+test("a reply reaches the effort across a chain of copies in three mailboxes", () => {
+  const m1a = { ...send(20, "a", ["p1"], "m1"), mailbox: "a@hq.test" }, m1b = { ...send(20, "b", ["p1"], "m1"), mailbox: "b@hq.test" };
+  const m2b = { ...send(16, "b", ["p1"], "m2"), mailbox: "b@hq.test" }, m2c = { ...send(16, "c", ["p1"], "m2"), mailbox: "c@hq.test" };
+  const other = { ...send(18, "z", ["p1"], "m9"), mailbox: "a@hq.test" };
+  const r = { ...reply(15, "c", "p1"), mailbox: "c@hq.test" };
+  const by = Object.fromEntries(efforts([m1a, m1b, m2b, m2c, other, r], [att(m1a, "p1", "e1"), att(m2b, "p1", "e1"), att(other, "p1", "e2")]).map((e) => [e.id, e]));
+  assert.deepEqual([by.e1.replied, by.e2.replied], [true, false]);
+});

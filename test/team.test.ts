@@ -375,3 +375,16 @@ test("a send seen in two of the member's mailboxes is one conversation: its copy
   assert.deepEqual(r.cur.reply, { rate: 0.1, replied: 1, n: 10 }, "the reply through the copy's thread answers the original send");
   assert.equal((r.cur.emailsSent ?? 0) - (r.cur.newThreads ?? 0), 0, "never a negative follow-up count");
 });
+
+test("threads linked through a chain of mailboxes are one conversation; a cycle resolves too (review of #30, D2)", () => {
+  const others = Array.from({ length: 9 }, (_, k) => ({ ...ev("outreach", 20, `o${k}`, [`q${k}`]), mailbox: "a@hq.test", message_key: `o${k}` }));
+  const m1a = { ...ev("outreach", 20, "a", ["p1"]), mailbox: "a@hq.test", message_key: "m1" }, m1b = { ...m1a, thread_id: "b", mailbox: "b@hq.test" };
+  const m2b = { ...ev("outreach", 16, "b", ["p1"]), mailbox: "b@hq.test", message_key: "m2" }, m2c = { ...m2b, thread_id: "c", mailbox: "c@hq.test" };
+  const reply = { ...ev("reply", 15, "c"), mailbox: "c@hq.test" };
+  const r = M.teamReport({ ...base, activity: activity(), mail: [...others, m1a, m1b, m2b, m2c, reply] });
+  assert.deepEqual(r.cur.reply, { rate: 0.1, replied: 1, n: 10 }, "the reply in C's thread answers the conversation that began in A");
+  assert.equal(r.cur.newThreads, 10);
+  // A cycle: m3 links a-b, m4 links b-a in the opposite direction.
+  const cyc = M.logicalMail([{ ...m1a, message_key: "m3" }, { ...m1b, message_key: "m3" }, { ...m2b, message_key: "m4" }, { ...m2b, thread_id: "a", mailbox: "a@hq.test", message_key: "m4" }, { ...ev("reply", 15, "b"), mailbox: "b@hq.test" }]);
+  assert.equal(new Set(cyc.map((e) => e.thread_id)).size, 1);
+});

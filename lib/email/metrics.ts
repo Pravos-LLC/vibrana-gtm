@@ -10,6 +10,7 @@
 // - Bounce rate: failed attempts over attempts sent in the window, no minimum n (the alert is about a handful of sends).
 // - Coverage: ambiguous and unmatched recipients, efforts without a resolved episode, and the calculation version mix.
 // - A source that was not read is null, never 0. Dates are UTC; windows are half-open [from, to).
+import { conversations } from "../team/conversations";
 
 export const DAY = 86_400_000;
 export const MATURE_DAYS = 7;
@@ -45,7 +46,6 @@ export type Effort = { id: string; person: string; first: number; firstEventId: 
   /** Each send's mailbox thread and time: a reply is matched against sends made before it, never later ones. */
   sent: { thread: string; at: number }[] };
 
-const threadKey = (e: EmailEvent) => `${e.mailbox ?? ""}|${e.thread_id}`;
 
 /**
  * Every effort with its first touch and outcome, across all mailboxes. Attempts without an episode are not efforts
@@ -57,13 +57,9 @@ const threadKey = (e: EmailEvent) => `${e.mailbox ?? ""}|${e.thread_id}`;
 export function efforts(events: EmailEvent[], attempts: EmailAttempt[], decisions: ReplyDecision[] = [], effortDecisions: EffortDecision[] = []): Effort[] {
   const byId = new Map(events.map((e) => [e.id, e]));
   const intent = new Map(decisions.map((d) => [d.event_id, d.intent]));
-  // A copy of a send in another mailbox (same keyed Message-ID, no attempts of its own) shares the canonical send's
-  // conversation: a reply in the copy's thread matches the canonical send's thread (the earliest row holds the attempts).
-  const canon = new Map<string, EmailEvent>();
-  for (const e of events) if (e.kind === "outreach" && e.message_key && (!canon.has(e.message_key) || e.id < canon.get(e.message_key)!.id)) canon.set(e.message_key, e);
-  const alias = new Map<string, string>();
-  for (const e of events) { const c = e.kind === "outreach" && e.message_key ? canon.get(e.message_key) : undefined; if (c && c !== e && !alias.has(threadKey(e))) alias.set(threadKey(e), threadKey(c)); }
-  const convo = (e: EmailEvent) => alias.get(threadKey(e)) ?? threadKey(e);
+  // Threads that share any keyed send are one conversation, across chains of mailboxes (lib/team/conversations.ts): a
+  // reply in a copy's thread matches the sends of the conversation it belongs to.
+  const convo = conversations(events);
   const by = new Map<string, Effort>();
   for (const a of attempts) {
     if (a.stream !== "cold" || !a.episode_id || !a.person_id) continue;
