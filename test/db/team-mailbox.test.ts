@@ -221,3 +221,45 @@ test("a reply in an outreach thread older than 30 days is found through history,
   assert.ok(!mock.calls.some((c) => c.url.startsWith("https://crm.test")), "no send to classify: no CRM read");
   assert.deepEqual((await state())?.threads, [], "the thread was re-read, so it is not kept for next time");
 });
+
+test("replies and a bounce in one run are written together (every row names its arrays)", async () => {
+  const row = await fresh();
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }, { id: "b2" }] } },
+    { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
+    { url: `${GM}messages/b2`, json: sent("b2", T0 + 1, "ana@prospect.test") },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), { id: "c1", internalDate: String(T0 + 60_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "ana@prospect.test" }] } }] } },
+    { url: `${GM}threads/b20`, json: { id: "b20", messages: [sent("b2", T0 + 1, "ana@prospect.test"), { id: "d9", internalDate: String(T0 + 60_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "mailer-daemon@googlemail.com" }] } }] } },
+  ]));
+  const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  assert.deepEqual((await events()).map((e) => [e.gmail_message_id, e.kind]), [["a1", "outreach"], ["b2", "outreach"], ["c1", "reply"], ["d9", "bounce"]]);
+  assert.equal((await attemptsOf("b2"))[0].delivery, "failed_unclassified", "b2 had one external recipient: its attempt is marked");
+});
+
+test("a failure report on a send with a second, unstored recipient is not pinned on the cold one", async () => {
+  const row = await fresh();
+  const two = { ...sent("a1", T0, "ana@prospect.test"), payload: { headers: [{ name: "From", value: BOX }, { name: "To", value: "ana@prospect.test" }, { name: "Cc", value: "someone@else.test" }] } };
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: two },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: "https://crm.test/graphql", body: page("companies", []), times: 1 },
+    { url: `${GM}threads/a10`, json: { id: "a10", messages: [two, { id: "d9", internalDate: String(T0 + 60_000), labelIds: ["INBOX"], payload: { headers: [{ name: "From", value: "mailer-daemon@googlemail.com" }] } }] } },
+  ]));
+  const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  assert.equal(r.unattributed_failures, 1);
+  assert.ok((await attemptsOf("a1")).every((a) => a.delivery === "no_failure_observed"));
+});
+
+test("more inbound threads than one run looks up stay queued; looked-up non-outreach threads leave the queue", async () => {
+  const row = await fresh({ history_id: "500", backfill_done: true });
+  await admin().from("gtm_sync_state").insert({ key: stateKey("TSYNC", BOX), value: { pending: [], okAt: "2026-11-19T00:00:00Z" } });
+  const added = Array.from({ length: 201 }, (_, i) => ({ message: { id: `f${i.toString(16).padStart(4, "0")}`, threadId: `e${i.toString(16).padStart(4, "0")}`, labelIds: ["INBOX"] } }));
+  mock = installFetchMock(base([{ url: `${GM}history?startHistoryId=500`, json: { history: [{ messagesAdded: added }], historyId: "990" } }]));
+  const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-20T00:00:00Z") });
+  assert.equal(r.error, undefined, r.error ?? "");
+  assert.deepEqual((await state())?.threads, ["e00c8"], "the 201st thread waits for the next run");
+});
