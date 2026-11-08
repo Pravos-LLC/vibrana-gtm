@@ -403,3 +403,33 @@ test("the paid model answers when the free one refuses; when neither answers, th
     assert.deepEqual((await labelsOf("r1")).map((l) => [l.source, l.model, l.intent]), [["deterministic", null, "uncertain"], ["model", "jev-1.13", "not_now"]]);
   } finally { delete process.env.EMAIL_CLASSIFIER; delete process.env.OPENCODE_API_KEY; }
 });
+
+test("a reply with nothing safe to send is recorded as skipped once and never retried; no request reaches the model", async () => {
+  Object.assign(process.env, { EMAIL_CLASSIFIER: "jev", OPENCODE_API_KEY: "oc_test" });
+  try {
+    let row = await fresh({ granted_scopes: READONLY });
+    const quotedOnly = "> Previous message quoted in full";
+    mock = installFetchMock(base([
+      { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+      { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
+      { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+      { url: "https://crm.test/graphql", body: page("companies", []), times: 1 },
+      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("r1", T0 + 3_600_000, quotedOnly)] } },
+      { url: `${GM}messages/r1`, json: replyWithText("r1", T0 + 3_600_000, quotedOnly) },
+    ]));
+    const first = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+    assert.equal(first.error, undefined, first.error ?? "");
+    assert.deepEqual([first.model_labeled, first.model_skipped, first.model_failed], [0, 1, 0]);
+    assert.equal(mock.calls.filter((c) => c.url === JEV).length, 0, "nothing was sent to the model");
+    assert.deepEqual((await labelsOf("r1")).map((l) => [l.source, l.model, l.intent]), [["deterministic", null, "uncertain"], ["model", "none:no_text", "uncertain"]]);
+    mock.restore();
+    row = { ...row, ...(await admin().from("gtm_team_mailboxes").select("history_id,backfill_done").eq("member", "TSYNC").single()).data! };
+    mock = installFetchMock(base([
+      { url: `${GM}history`, json: { history: [], historyId: "901" } },
+      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("r1", T0 + 3_600_000, quotedOnly)] } },
+    ]));
+    const second = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T01:00:00Z") });
+    assert.equal(second.error, undefined, second.error ?? "");
+    assert.equal(mock.calls.filter((c) => c.url.includes("messages/r1")).length, 0, "the reply is done: its text is not read again");
+  } finally { delete process.env.EMAIL_CLASSIFIER; delete process.env.OPENCODE_API_KEY; }
+});

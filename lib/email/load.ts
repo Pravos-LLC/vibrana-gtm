@@ -14,7 +14,8 @@ export function currentDecisions(rows: { event_id: number | null; source: string
   for (const r of rows) {
     if (r.event_id == null || r.superseded_at) continue;
     // A rule decision that found nothing (the completion record of a checked reply) says nothing: it never outranks a model.
-    if (r.source === "deterministic" && r.intent === "uncertain" && (r.opt_out ?? "none") === "none") continue;
+    // Nor does a model record that found nothing or skipped the reply (no new text to send).
+    if ((r.source === "deterministic" || r.source === "model") && r.intent === "uncertain" && (r.opt_out ?? "none") === "none") continue;
     const k = rank(r.source), cur = best.get(r.event_id);
     if (!cur || k > cur.rank) best.set(r.event_id, { rank: k, intent: r.intent });
   }

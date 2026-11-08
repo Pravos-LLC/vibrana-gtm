@@ -45,7 +45,18 @@ export function parseDeliveryStatus(text: string): FailureRecipient[] {
   return out;
 }
 
-/** The new text of a reply: no quoted lines, nothing from an attribution line ("On ... wrote:") or a forwarded header on. */
+// Where quoted mail starts, in the languages mail clients write it (English, German, French, Spanish, Portuguese, Italian,
+// Dutch, Nordic). Conservative: anything from the first marker on is dropped (review of #34, finding 1).
+const SEPARATOR = /^\s*-{2,}\s*(Original Message|Forwarded message|Ursprüngliche Nachricht|Weitergeleitete Nachricht|Message d'origine|Message transféré|Mensaje original|Mensagem original|Messaggio originale|Oorspronkelijk bericht|Originalmeddelande|Opprinnelig melding|Original meddelelse|Alkuperäinen viesti)/i;
+const OUTLOOK_RULE = /^\s*_{10,}\s*$/;
+const HEADER = /^\s*\*?(From|Von|De|Da|Van|Från|Fra|Lähettäjä|Sent|Gesendet|Envoyé|Enviado|Inviato|Verzonden|Skickat|Sendt|Date|Datum|Fecha|Data|Subject|Betreff|Objet|Asunto|Assunto|Oggetto|Onderwerp|Ämne|Emne|To|An|À|Para|Aan|Till|Til|Cc)\*?\s*:\s*\S/i;
+const ATTRIBUTION_END = /(wrote|schrieb|a écrit|escribió|escreveu|ha scritto|schreef|skrev|kirjoitti)\s*:\s*$/i;
+// German and Dutch put the sender after the verb ("Am ... schrieb Sender <a@b>:").
+const ATTRIBUTION_VERB = /\b(wrote|schrieb|a écrit|escribió|escreveu|ha scritto|schreef|skrev|kirjoitti)\b.*:\s*$/i;
+const ATTRIBUTION_START = /^\s*(On|Am|Le|El|Em|Il|Op|Den|Dne)\s/i;
+
+/** The new text of a reply: no quoted lines, nothing from an attribution line ("On ... wrote:", "Am ... schrieb:"), a
+ *  quoted-message separator or a mail header block on, in the common mail-client languages. */
 export function newText(text: string): string {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
@@ -53,8 +64,9 @@ export function newText(text: string): string {
     const l = lines[i];
     if (/^\s*>/.test(l)) continue;
     // An attribution line, also when a mail client wraps it over up to three lines ("On Thu, ..., Sender" / "<a@b> wrote:").
-    if (/^\s*On\s/i.test(l) && lines.slice(i, i + 3).some((x) => /wrote:\s*$/i.test(x))) break;
-    if (/^\s*-{2,}\s*(Original Message|Forwarded message)/i.test(l) || (/^\s*From:\s.+$/i.test(l) && out.length > 0)) break;
+    if (ATTRIBUTION_START.test(l) && lines.slice(i, i + 3).some((x) => ATTRIBUTION_END.test(x) || ATTRIBUTION_VERB.test(x))) break;
+    if (ATTRIBUTION_END.test(l)) break;
+    if (SEPARATOR.test(l) || OUTLOOK_RULE.test(l) || (HEADER.test(l) && out.length > 0)) break;
     out.push(l);
   }
   return out.join("\n").trim();

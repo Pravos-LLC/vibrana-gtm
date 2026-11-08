@@ -6,6 +6,7 @@
 // - An intent counts only at confidence >= INTENT_MIN; otherwise it is "uncertain" and left to a person.
 // - "Asked to stop" at >= STOP_MIN is a possible opt-out: it opens a review (VIB-513) and is never applied.
 // - The model never outranks a person's label or the rules (lib/email/load.ts currentDecisions).
+// - Only the reply's new text leaves, with addresses and phone numbers masked; when that cannot be isolated, nothing is sent.
 // - The text is sent once and kept nowhere: not stored, not logged, not in errors.
 import { providerFetch } from "../demo-safety";
 import { newText } from "./rules";
@@ -16,6 +17,7 @@ export const INTENT_MIN = 0.8;
 export const STOP_MIN = 0.5;
 export const MAX_CHARS = 4000;
 export const DECISION_VERSION = 1;
+export const ATTEMPT_MS = 20_000, RESERVE_MS = 15_000, MIN_ATTEMPT_MS = 3_000;
 
 export const INTENTS = ["interested", "not_now", "not_interested", "referral", "neutral", "auto_reply"] as const;
 export type Intent = (typeof INTENTS)[number] | "uncertain";
@@ -40,6 +42,30 @@ const QUESTIONS = {
 } as const;
 
 export type ModelDecision = { intent: Intent; opt_out: "none" | "uncertain"; model: string; confidence: number; stop: number; billing: string | null };
+/** decided: the model answered. skipped: nothing safe to send (terminal; recorded so the reply is done). failed: no model
+ *  answered in time or in shape (the reply is tried again next run). `attempts` counts real requests sent. */
+export type ClassifyResult =
+  | { status: "decided"; decision: ModelDecision; attempts: number }
+  | { status: "skipped"; reason: "no_text" | "quoted_header"; attempts: 0 }
+  | { status: "failed"; attempts: number };
+
+const EMAIL = /[^\s@<>()"',;:]+@[^\s@<>()"',;:]+\.[a-z]{2,}/gi;
+const PHONE = /\+?\d[\d\s().-]{7,}\d/g;
+// A labeled line carrying an address or a date ("Original sender: a@b", "Sent: 5 Nov 2026"): likely quoted mail.
+const HEADER_LEFT = /^\s*\*?[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ ]{1,24}\*?\s*:\s*.*(@|\d{4})/m;
+
+/**
+ * What may leave for the model: the reply's new text (lib/email/rules.ts newText, quoted text in the common mail-client
+ * languages removed), addresses and phone numbers masked, 4,000 characters at most. When something that looks like a mail
+ * header survives, nothing is sent: the boundary errs toward sending less (review of #34, finding 1).
+ */
+export function outboundText(text: string): { text: string } | { skip: "no_text" | "quoted_header" } {
+  const fresh = newText(text);
+  if (!fresh) return { skip: "no_text" };
+  if (HEADER_LEFT.test(fresh)) return { skip: "quoted_header" };
+  const masked = fresh.replace(EMAIL, "[email]").replace(PHONE, "[phone]").slice(0, MAX_CHARS).trim();
+  return masked ? { text: masked } : { skip: "no_text" };
+}
 
 export const classifierEnabled = (env: Record<string, string | undefined> = process.env) =>
   env.EMAIL_CLASSIFIER?.trim().toLowerCase() === "jev" && !!env.OPENCODE_API_KEY?.trim();
@@ -59,27 +85,32 @@ export function readAnswer(body: unknown, model: string): ModelDecision | null {
 }
 
 /**
- * Classifies one reply. Returns null when there is no new text, the classifier is off, or no model answered in the
- * expected shape; the caller then leaves the reply for the next run. Errors carry the model and status only.
+ * Classifies one reply within the caller's deadline: every attempt gets only the time left (minus a reserve for saving
+ * results), and the fallback never resets it (review of #34, finding 3). Errors carry nothing of the text or the key.
  */
-export async function classifyReply(text: string, opts: { env?: Record<string, string | undefined>; fetcher?: typeof fetch; timeoutMs?: number } = {}): Promise<ModelDecision | null> {
+export async function classifyReply(text: string, opts: { env?: Record<string, string | undefined>; fetcher?: typeof fetch; deadline?: number; now?: () => number } = {}): Promise<ClassifyResult> {
   const env = opts.env ?? process.env;
-  if (!classifierEnabled(env)) return null;
-  const state = newText(text).slice(0, MAX_CHARS);
-  if (!state) return null;
+  if (!classifierEnabled(env)) return { status: "failed", attempts: 0 };
+  const out = outboundText(text);
+  if ("skip" in out) return { status: "skipped", reason: out.skip, attempts: 0 };
+  const now = opts.now ?? Date.now;
   const send = providerFetch(opts.fetcher ?? fetch);
+  let attempts = 0;
   for (const model of MODELS) {
+    const left = opts.deadline != null ? opts.deadline - RESERVE_MS - now() : ATTEMPT_MS;
+    if (left < MIN_ATTEMPT_MS) break;   // not enough time left: the reply waits for the next run
+    attempts++;
     try {
       const res = await send(ENDPOINT, {
         method: "POST",
         headers: { authorization: `Bearer ${env.OPENCODE_API_KEY!.trim()}`, "content-type": "application/json" },
-        body: JSON.stringify({ model, state, questions: QUESTIONS }),
-        signal: AbortSignal.timeout(opts.timeoutMs ?? 20_000),
+        body: JSON.stringify({ model, state: out.text, questions: QUESTIONS }),
+        signal: AbortSignal.timeout(Math.min(ATTEMPT_MS, left)),
       });
       if (!res.ok) continue;   // the next model (the free one may be gone or rate-limited)
       const decision = readAnswer(await res.json().catch(() => null), model);
-      if (decision) return decision;
+      if (decision) return { status: "decided", decision, attempts };
     } catch { /* timeout or network: try the next model */ }
   }
-  return null;
+  return { status: "failed", attempts };
 }

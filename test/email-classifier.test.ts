@@ -1,8 +1,9 @@
-// The reply classifier (lib/email/classifier.ts): Jev's answer shape, the thresholds, free-then-paid fallback, and that only
-// the reply's new text is sent. No network: the fetcher is a stub. Synthetic text only.
+// The reply classifier (lib/email/classifier.ts): Jev's answer shape, the thresholds, free-then-paid fallback, the outbound
+// text boundary (only new text, masked, quoted mail in several languages removed), skips, and the shared deadline. No
+// network: the fetcher is a stub. Synthetic text only.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifierEnabled, classifyReply, readAnswer, ENDPOINT, MAX_CHARS } from "../lib/email/classifier.ts";
+import { classifierEnabled, classifyReply, outboundText, readAnswer, ENDPOINT, MAX_CHARS, RESERVE_MS } from "../lib/email/classifier.ts";
 
 const ON = { EMAIL_CLASSIFIER: "jev", OPENCODE_API_KEY: "oc_test" };
 const answer = (choice: string, confidence: number, stop: number, billing = "free") =>
@@ -18,6 +19,7 @@ const stub = (responses: (Response | Error)[]) => {
   return { fetcher, calls };
 };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const decided = (r: Awaited<ReturnType<typeof classifyReply>>) => { assert.equal(r.status, "decided"); return (r as { decision: ReturnType<typeof readAnswer> & object }).decision; };
 
 test("off unless EMAIL_CLASSIFIER=jev and a key are both set; off sends nothing", async () => {
   assert.equal(classifierEnabled({}), false);
@@ -25,7 +27,7 @@ test("off unless EMAIL_CLASSIFIER=jev and a key are both set; off sends nothing"
   assert.equal(classifierEnabled({ OPENCODE_API_KEY: "k" }), false);
   assert.equal(classifierEnabled(ON), true);
   const s = stub([]);
-  assert.equal(await classifyReply("Interested, let's talk.", { env: {}, fetcher: s.fetcher }), null);
+  assert.deepEqual(await classifyReply("Interested, let's talk.", { env: {}, fetcher: s.fetcher }), { status: "failed", attempts: 0 });
   assert.equal(s.calls.length, 0);
 });
 
@@ -45,33 +47,63 @@ test("an answer outside the expected shape is no answer, never a guess", () => {
   assert.equal(readAnswer({ answers: { intent: { choice: "interested", confidence: 1 } } }, "m"), null, "the opt-out question is required");
 });
 
-test("the free model first; the paid one when the free one fails; neither answering is null", async () => {
+test("the free model first; the paid one when the free one fails; neither answering is a failure to retry", async () => {
   const ok = stub([json(answer("interested", 0.95, 0.01))]);
-  const a = await classifyReply("Sounds good, can we talk Tuesday?", { env: ON, fetcher: ok.fetcher });
-  assert.equal(a!.model, "jev-1.13-free");
+  const a = decided(await classifyReply("Sounds good, can we talk Tuesday?", { env: ON, fetcher: ok.fetcher }));
+  assert.equal(a.model, "jev-1.13-free");
   assert.equal(ok.calls[0].url, ENDPOINT);
   assert.equal(ok.calls[0].auth, "Bearer oc_test");
   assert.equal(ok.calls[0].body.model, "jev-1.13-free");
   assert.deepEqual(Object.keys(ok.calls[0].body.questions as object), ["intent", "asked_to_stop"]);
 
   const fallback = stub([json({ error: "rate limited" }, 429), json(answer("referral", 0.9, 0, "paid"))]);
-  const b = await classifyReply("Talk to my colleague instead.", { env: ON, fetcher: fallback.fetcher });
-  assert.deepEqual([b!.model, b!.intent, b!.billing], ["jev-1.13", "referral", "paid"]);
+  const b = decided(await classifyReply("Talk to my colleague instead.", { env: ON, fetcher: fallback.fetcher }));
+  assert.deepEqual([b.model, b.intent, b.billing], ["jev-1.13", "referral", "paid"]);
   assert.deepEqual(fallback.calls.map((c) => c.body.model), ["jev-1.13-free", "jev-1.13"]);
 
   const timeout = stub([new Error("timeout"), json({ unexpected: true })]);
-  assert.equal(await classifyReply("Maybe later.", { env: ON, fetcher: timeout.fetcher }), null);
+  assert.deepEqual(await classifyReply("Maybe later.", { env: ON, fetcher: timeout.fetcher }), { status: "failed", attempts: 2 });
 });
 
-test("only the new text is sent, capped in length; a reply with no new text is not sent at all", async () => {
-  const s = stub([json(answer("neutral", 0.9, 0))]);
-  const quoted = "What does it cost?\n\nOn Thu, Nov 5, 2026, Sender <s@hq.test> wrote:\n> Reply unsubscribe to stop these emails.";
-  await classifyReply(quoted, { env: ON, fetcher: s.fetcher });
-  assert.equal(s.calls[0].body.state, "What does it cost?");
-  const long = stub([json(answer("neutral", 0.9, 0))]);
-  await classifyReply("x".repeat(MAX_CHARS + 500), { env: ON, fetcher: long.fetcher });
-  assert.equal(String(long.calls[0].body.state).length, MAX_CHARS);
-  const empty = stub([]);
-  assert.equal(await classifyReply("> only quoted text", { env: ON, fetcher: empty.fetcher }), null);
-  assert.equal(empty.calls.length, 0);
+test("only the new text leaves: quoted mail in several languages and Outlook layouts is removed (review of #34, finding 1)", () => {
+  const cases: [string, string][] = [
+    ["Thanks.\n\n-----Ursprüngliche Nachricht-----\nVon: Sender <s@example.test>\nGesendet: Donnerstag\nAn: R <r@example.test>\nBetreff: Hi\nQUOTED", "Thanks."],
+    ["Merci.\n\nLe jeu. 5 nov. 2026 à 10:00, Sender <s@example.test> a écrit :\nQUOTED", "Merci."],
+    ["Gracias.\n\nEl jue, 5 nov 2026, Sender escribió:\nQUOTED", "Gracias."],
+    ["Am Do., 5. Nov. 2026 um 10:00 Uhr schrieb Sender <s@example.test>:\nQUOTED", ""],
+    ["Sure, Tuesday works.\n________________________________\nFrom: Sender <s@example.test>\nSent: Thursday\nQUOTED", "Sure, Tuesday works."],
+    ["Sounds good.\n\nFrom: Sender <s@example.test>\nSent: Thursday\nQUOTED", "Sounds good."],
+  ];
+  for (const [input, expected] of cases) {
+    const out = outboundText(input);
+    if (expected) { assert.ok("text" in out, input); assert.equal((out as { text: string }).text, expected); }
+    else assert.deepEqual(out, { skip: "no_text" });
+    assert.ok(!JSON.stringify(out).includes("QUOTED"), input);
+  }
+});
+
+test("addresses and phone numbers are masked; a surviving header line means nothing is sent", () => {
+  assert.deepEqual(outboundText("Reach my colleague at jo.doe@example.test or +44 20 7946 0958."), { text: "Reach my colleague at [email] or [phone]." });
+  assert.deepEqual(outboundText("Thanks\nOriginal sender: s@example.test"), { skip: "quoted_header" });
+  assert.deepEqual(outboundText("> only quoted text"), { skip: "no_text" });
+  assert.equal((outboundText("x".repeat(MAX_CHARS + 500)) as { text: string }).text.length, MAX_CHARS);
+});
+
+test("a skipped reply makes no request and is terminal (review of #34, finding 2)", async () => {
+  const s = stub([]);
+  assert.deepEqual(await classifyReply("", { env: ON, fetcher: s.fetcher }), { status: "skipped", reason: "no_text", attempts: 0 });
+  assert.deepEqual(await classifyReply("> quoted only", { env: ON, fetcher: s.fetcher }), { status: "skipped", reason: "no_text", attempts: 0 });
+  assert.equal(s.calls.length, 0);
+});
+
+test("the shared deadline: no request without time left; the fallback never resets the budget (review of #34, finding 3)", async () => {
+  let t = 1_000_000;
+  const none = stub([]);
+  assert.deepEqual(await classifyReply("Maybe later.", { env: ON, fetcher: none.fetcher, deadline: t + RESERVE_MS + 1_000, now: () => t }), { status: "failed", attempts: 0 });
+  assert.equal(none.calls.length, 0, "under the minimum per-attempt time: nothing is sent");
+  // The free model uses up the time; the paid fallback is not tried.
+  const slow = { calls: 0 } as { calls: number };
+  const fetcher = (async () => { slow.calls++; t += 30_000; throw new Error("timeout"); }) as unknown as typeof fetch;
+  assert.deepEqual(await classifyReply("Maybe later.", { env: ON, fetcher, deadline: t + RESERVE_MS + 25_000, now: () => t }), { status: "failed", attempts: 1 });
+  assert.equal(slow.calls, 1);
 });

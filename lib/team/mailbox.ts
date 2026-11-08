@@ -268,7 +268,7 @@ export type SyncResult = {
   address: string; sends: number; outreach: number; other_crm: number; replies: number; bounces: number; threads_checked: number; pending: number; complete: boolean;
   attempts: number; reconciled: number; ambiguous_only: number; unattributed_failures: number;
   /** With gmail.readonly: failure reports read per recipient, replies checked by the deterministic rules. */
-  reports_read: number; replies_checked: number; possible_opt_outs: number; model_labeled: number; model_failed: number;
+  reports_read: number; replies_checked: number; possible_opt_outs: number; model_labeled: number; model_skipped: number; model_failed: number;
   /** A copy of a message already counted from another mailbox (same Message-ID): an observation, not another send. */
   copies: number;
   /** A Gmail id another mailbox of the member already holds while the member-wide key exists (until the schema follow-up). */
@@ -382,7 +382,7 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
 }): Promise<SyncResult> {
   const now = opts.now ?? new Date(), fetcher = opts.fetcher ?? fetch, clock = opts.clock ?? Date.now;
   const result: SyncResult = { address: row.address, sends: 0, outreach: 0, other_crm: 0, replies: 0, bounces: 0, threads_checked: 0, pending: 0, complete: true,
-    attempts: 0, reconciled: 0, ambiguous_only: 0, unattributed_failures: 0, reports_read: 0, replies_checked: 0, possible_opt_outs: 0, model_labeled: 0, model_failed: 0, copies: 0, id_collisions: 0 };
+    attempts: 0, reconciled: 0, ambiguous_only: 0, unattributed_failures: 0, reports_read: 0, replies_checked: 0, possible_opt_outs: 0, model_labeled: 0, model_skipped: 0, model_failed: 0, copies: 0, id_collisions: 0 };
   const bodies = canReadBodies(row.granted_scopes);
   const late = () => opts.deadline != null && clock() > opts.deadline;
   const key = stateKey(row.member, row.address);
@@ -636,9 +636,15 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
             if (rule.opt_out !== "none") result.possible_opt_outs++;
             ruled.push({ replyId: r.id, persons: who, intent: rule.intent, opt_out: rule.opt_out });   // neutral too: the completion record
             if (classifierOn && rule.intent !== "auto_reply") {
-              const decision = modelCalls < MODEL_CAP && !late() ? (modelCalls++, await classifyReply(text)) : null;
-              if (decision) { modeled.push({ replyId: r.id, persons: who, intent: decision.intent, opt_out: decision.opt_out, model: decision.model }); result.model_labeled++; }
-              else { result.model_failed++; bodyPending.add(threadId); }   // read again next run
+              const res = modelCalls < MODEL_CAP && !late() ? await classifyReply(text, { deadline: opts.deadline, now: clock }) : null;
+              modelCalls += res?.attempts ?? 0;   // only real requests count toward the cap (review of #34, finding 2)
+              if (res?.status === "decided") {
+                modeled.push({ replyId: r.id, persons: who, intent: res.decision.intent, opt_out: res.decision.opt_out, model: res.decision.model }); result.model_labeled++;
+              } else if (res?.status === "skipped") {
+                // Nothing safe to send (no new text, HTML only, or a quoted header): recorded as done, never retried, and it
+                // says nothing (currentDecisions ignores it).
+                modeled.push({ replyId: r.id, persons: who, intent: "uncertain", opt_out: "none", model: `none:${res.reason}` }); result.model_skipped++;
+              } else { result.model_failed++; bodyPending.add(threadId); }   // read again next run
             }
           }
         }
