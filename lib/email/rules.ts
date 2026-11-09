@@ -73,7 +73,9 @@ export function newText(text: string): string {
     // An attribution line, also when a mail client wraps it over up to three lines ("On Thu, ..., Sender" / "<a@b> wrote:").
     if (ATTRIBUTION_START.test(l) && lines.slice(i, i + 3).some((x) => ATTRIBUTION_END.test(x) || ATTRIBUTION_VERB.test(x))) break;
     if (ADDRESS_COLON.test(l) || NAMED_SEPARATOR.test(l)) break;
-    if ((DASHED_WORDS.test(l) || OUTLOOK_RULE.test(l)) && lines.slice(i + 1, i + 3).some((x) => FROM_HEADER.test(x))) break;
+    // The framed line itself stays: its words may be the person's own ("----- Please remove me -----" right above quoted
+    // mail, review of #34, round 5). A real separator carries no request; the outbound text (strictText) drops the line.
+    if ((DASHED_WORDS.test(l) || OUTLOOK_RULE.test(l)) && lines.slice(i + 1, i + 3).some((x) => FROM_HEADER.test(x))) { out.push(l); break; }
     if (FROM_HEADER.test(l) && out.length > 0) break;
     out.push(l);
   }
