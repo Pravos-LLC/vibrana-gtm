@@ -269,6 +269,8 @@ export type SyncResult = {
   attempts: number; reconciled: number; ambiguous_only: number; unattributed_failures: number;
   /** With gmail.readonly: failure reports read per recipient, replies checked by the deterministic rules. */
   reports_read: number; replies_checked: number; possible_opt_outs: number; model_labeled: number; model_skipped: number; model_failed: number;
+  /** Replies left for the next run without a request: the run's model cap or time ran out (VIB-517). Not failures. */
+  model_waiting: number;
   /** A copy of a message already counted from another mailbox (same Message-ID): an observation, not another send. */
   copies: number;
   /** A Gmail id another mailbox of the member already holds while the member-wide key exists (until the schema follow-up). */
@@ -383,7 +385,7 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
 }): Promise<SyncResult> {
   const now = opts.now ?? new Date(), fetcher = opts.fetcher ?? fetch, clock = opts.clock ?? Date.now;
   const result: SyncResult = { address: row.address, sends: 0, outreach: 0, other_crm: 0, replies: 0, bounces: 0, threads_checked: 0, pending: 0, complete: true,
-    attempts: 0, reconciled: 0, ambiguous_only: 0, unattributed_failures: 0, reports_read: 0, replies_checked: 0, possible_opt_outs: 0, model_labeled: 0, model_skipped: 0, model_failed: 0, copies: 0, id_collisions: 0 };
+    attempts: 0, reconciled: 0, ambiguous_only: 0, unattributed_failures: 0, reports_read: 0, replies_checked: 0, possible_opt_outs: 0, model_labeled: 0, model_skipped: 0, model_failed: 0, model_waiting: 0, copies: 0, id_collisions: 0 };
   const bodies = canReadBodies(row.granted_scopes);
   const late = () => opts.deadline != null && clock() > opts.deadline;
   const key = stateKey(row.member, row.address);
@@ -645,7 +647,12 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
                 // Nothing safe to send (no new text, HTML only, or a quoted header): recorded as done, never retried, and it
                 // says nothing (currentDecisions ignores it).
                 modeled.push({ replyId: r.id, persons: who, intent: "uncertain", opt_out: "none", model: `none:${res.reason}` }); result.model_skipped++;
-              } else { result.model_failed++; bodyPending.add(threadId); }   // read again next run
+              } else {
+                // Read again next run. A request that went out and got no usable answer is a failure; a reply the cap or the
+                // clock left unasked is only waiting (VIB-517).
+                if (res && res.attempts > 0) result.model_failed++; else result.model_waiting++;
+                bodyPending.add(threadId);
+              }
             }
           }
         }

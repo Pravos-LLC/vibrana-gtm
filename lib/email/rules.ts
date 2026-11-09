@@ -73,9 +73,14 @@ export function newText(text: string): string {
     // An attribution line, also when a mail client wraps it over up to three lines ("On Thu, ..., Sender" / "<a@b> wrote:").
     if (ATTRIBUTION_START.test(l) && lines.slice(i, i + 3).some((x) => ATTRIBUTION_END.test(x) || ATTRIBUTION_VERB.test(x))) break;
     if (ADDRESS_COLON.test(l) || NAMED_SEPARATOR.test(l)) break;
-    // The framed line itself stays: its words may be the person's own ("----- Please remove me -----" right above quoted
-    // mail, review of #34, round 5). A real separator carries no request; the outbound text (strictText) drops the line.
-    if ((DASHED_WORDS.test(l) || OUTLOOK_RULE.test(l)) && lines.slice(i + 1, i + 3).some((x) => FROM_HEADER.test(x))) { out.push(l); break; }
+    // A framed or ruled line right above a sender header starts quoted mail. The framed line itself, and any line between it
+    // and the header, stay: their words may be the person's own ("----- Please remove me -----", or a request typed under
+    // Outlook's rule; review of #34, round 5, and VIB-517). A real separator carries no request, and a real Outlook header
+    // block follows its rule directly. The outbound text (strictText) still drops all of it.
+    if (DASHED_WORDS.test(l) || OUTLOOK_RULE.test(l)) {
+      const h = lines.slice(i + 1, i + 3).findIndex((x) => FROM_HEADER.test(x));
+      if (h >= 0) { out.push(...lines.slice(i, i + 1 + h).filter((x) => !/^\s*>/.test(x))); break; }
+    }
     if (FROM_HEADER.test(l) && out.length > 0) break;
     out.push(l);
   }
