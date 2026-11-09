@@ -42,7 +42,7 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
     const memberDeadline = Date.now() + share;
     reader.setDeadline(memberDeadline);
     // The mailbox first, so this run's sends are in the mail events the activity's "emailed by them" lookup reads
-    // (review of #36, L1). It stops 45 s before the member's share ends, leaving the CRM read its time.
+    // (review of #36, L1). It stops 60 s before the member's share ends, leaving the CRM read at least that (review r2, R6).
     try {
       const cfg = gmailConfig();
       const boxes = must(await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext,history_id,backfill_done,last_sync_at,granted_scopes").eq("member", m.code), "mailboxes") as MailboxRow[];
@@ -50,7 +50,7 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
       else if (!cfg) r.mailbox = "TEAM_GMAIL_CLIENT_ID / TEAM_GMAIL_CLIENT_SECRET are not set";
       else {
         r.mailbox = [];
-        for (const b of boxes) r.mailbox.push(await syncMailbox(db, m, b, reader, { cfg, now, deadline: memberDeadline - 45_000 }));
+        for (const b of boxes) r.mailbox.push(await syncMailbox(db, m, b, reader, { cfg, now, deadline: memberDeadline - 60_000 }));
       }
     } catch (e) { r.mailbox = `error: ${(e as Error).message.slice(0, 200)}`; }
 
@@ -67,11 +67,13 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
       } else {
         await saveActivity(db, a);
         r.activity = failed.length ? `partial: ${failed.join(", ")}` : "ok";
-        const s = stock(a, now);
-        must(await db.from("gtm_team_stock_daily").upsert({ member: m.code, date: now.toISOString().slice(0, 10), captured_at: now.toISOString(), metrics: {
-          sendable: s.sendable, verified: s.verified, with_email: s.withEmail, people: s.total,
-          open_tasks: s.openTasks, overdue_tasks: s.overdueTasks, companies_no_owner: s.companiesNoOwner,
-        } }, { onConflict: "member,date" }), "stock snapshot");
+        const s = stock(a, now), date = now.toISOString().slice(0, 10);
+        const metrics: Record<string, number | null> = { open_tasks: s.openTasks, overdue_tasks: s.overdueTasks, companies_no_owner: s.companiesNoOwner };
+        if (!a.errors.people) Object.assign(metrics, { sendable: s.sendable, verified: s.verified, with_email: s.withEmail, people: s.total });
+        // Unmeasured people never overwrite the day's measured ones (review r2, R2): keep any people keys already saved today.
+        const today = a.errors.people ? (await db.from("gtm_team_stock_daily").select("metrics").eq("member", m.code).eq("date", date).maybeSingle()).data : null;
+        const kept = Object.fromEntries(Object.entries((today?.metrics ?? {}) as Record<string, number | null>).filter(([k]) => ["sendable", "verified", "with_email", "people"].includes(k)));
+        must(await db.from("gtm_team_stock_daily").upsert({ member: m.code, date, captured_at: now.toISOString(), metrics: { ...kept, ...metrics } }, { onConflict: "member,date" }), "stock snapshot");
         r.stock = failed.length ? "partial" : "ok";
       }
     } catch (e) { r.activity ??= `error: ${(e as Error).message.slice(0, 200)}`; r.stock ??= "skipped"; }

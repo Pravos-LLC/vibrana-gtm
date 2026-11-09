@@ -123,15 +123,26 @@ test("incremental: an hour later only changed and new people are read", async ()
 
 test("an update that committed out of order (stamped before a change already read) is still read: each pass overlaps", async () => {
   await reset();
-  const people = dataset(50);
+  // Live-like times: the CRM's clock and the run's clock agree, as in production.
+  const now = Date.now();
+  const people = dataset(50).map((p, i) => ({ ...p, updatedAt: iso(now - 3 * 3_600_000 + i * 1000) }));
   await runMirror(db(), reader(people));
-  const base = Date.parse(people[49].updatedAt);
-  // B commits first at t+2 min and is read; A was stamped at t+1 min but committed afterwards.
-  people[10] = { ...people[10], updatedAt: iso(base + 120_000), verification: "VERIFIED" };
+  // B commits first, stamped a minute ago, and is read; A was stamped two minutes ago but committed afterwards.
+  people[10] = { ...people[10], updatedAt: iso(now - 60_000), verification: "VERIFIED" };
   await runMirror(db(), reader(people));
-  people[20] = { ...people[20], updatedAt: iso(base + 60_000), notSendable: "OPTED_OUT" };
+  people[20] = { ...people[20], updatedAt: iso(now - 120_000), notSendable: "OPTED_OUT" };
   await runMirror(db(), reader(people));
   assert.equal((await row(people[20].id)).not_sendable, true, "the late commit is in the mirror");
+});
+
+test("a quiet CRM after a burst: the next pass re-reads only the boundary, not the burst's last 10 minutes (review r2, R3)", async () => {
+  await reset();
+  // A burst that ended days ago: 300 changes over its last 10 minutes.
+  const end = Date.now() - 3 * 86_400_000;
+  const people = dataset(300).map((p, i) => ({ ...p, updatedAt: iso(end - (300 - i) * 2000) }));
+  await runMirror(db(), reader(people));
+  const r = await runMirror(db(), reader(people));
+  assert.ok(r.changes.rows <= 2, `re-read ${r.changes.rows} rows`);
 });
 
 test("a bulk update of more people than a page in one millisecond: read by id, then the stream carries on", async () => {
@@ -148,6 +159,32 @@ test("a bulk update of more people than a page in one millisecond: read by id, t
   const { count } = await db().from("gtm_crm_people").select("id", { count: "exact", head: true }).in("id", people.slice(0, 150).map((p) => p.id)).eq("email_verification", "VERIFIED");
   assert.equal(count, 150, "every person in the bulk millisecond was read");
   assert.equal((await row(people[200].id)).has_email, false, "and the change after it");
+});
+
+test("a bulk update too big for one run: the by-id read resumes where it stopped and finishes (review r2, R1)", async () => {
+  await reset();
+  const people = dataset(650);
+  await runMirror(db(), reader(people));
+  const bulk = iso(Date.parse("2026-11-09T10:00:00.456Z"));
+  for (const p of people) p.updatedAt = bulk;
+  let runs = 0, done = false;
+  while (!done && runs < 20) {
+    runs++;
+    const r = await runMirror(db(), reader(people, 4));     // about 3 reads a run
+    assert.notEqual(r.failed, true, `run ${runs} made progress`);
+    done = r.changes.caughtUp;
+  }
+  assert.ok(done, "the bulk millisecond was read to the end across runs");
+  const { count } = await db().from("gtm_crm_people").select("id", { count: "exact", head: true }).eq("updated_at", bulk);
+  assert.equal(count, 650);
+});
+
+test("a whole run that moves nothing is not progress: it fails and records why", async () => {
+  await reset();
+  await runMirror(db(), reader(dataset(30)));
+  const r = await runMirror(db(), reader(dataset(30), 1));   // the deadline comes before the first read
+  assert.equal(r.failed, true);
+  assert.match((await loadMirrorState(db()))!.lastError ?? "", /without moving/);
 });
 
 test("a soft delete in Twenty marks the mirror row deleted, and counts still match", async () => {
@@ -193,6 +230,23 @@ test("an erasure: the same difference twice starts a resync, and the id sweep ma
   const { data } = await db().from("gtm_crm_people").select("id").in("id", [...gone]).not("deleted_at", "is", null);
   assert.equal(data?.length, 4);
   assert.equal(mirrorReadiness(await loadMirrorState(db())).ready, true, "a resync keeps people measured");
+});
+
+test("a difference a resync cannot fix: one resync, then an incident and no more resyncs that day (review r2, R4)", async () => {
+  await reset();
+  const people = dataset(120);
+  await runMirror(db(), reader(people));
+  // Twenty's count is off by 3 for a reason the mirror cannot see (a person Twenty counts but will not list).
+  const skewed = () => { let n = 0; const f = fakeTwenty(people); return new TwentyReader({ pauseMs: 0, sleep: async () => {}, now: () => n++ * 1000, deadline: 1e9,
+    fetcher: (async (u: RequestInfo | URL, init?: RequestInit) => { const res = await f(u, init); const j = await res.json() as { data: { people: { totalCount?: number } } };
+      if (j.data.people.totalCount != null) j.data.people.totalCount += 3; return Response.json(j); }) as typeof fetch }); };
+  const results = [];
+  for (let i = 0; i < 6; i++) results.push(await runMirror(db(), skewed()));
+  assert.equal(results.filter((r) => r.resync).length, 1, "one resync, not one every two runs");
+  const s = (await loadMirrorState(db()))!;
+  assert.equal(s.unresolvedDiff, 3);
+  assert.equal(mirrorProblems(s)[0]?.key, "health_check:crm_mirror:counts");
+  assert.equal(mirrorReadiness(s).ready, true, "people stay measured; the incident says why the counts differ");
 });
 
 test("the sweep's breaker: it refuses to remove most of a page's range, removes nothing, holds, and raises one incident", async () => {
@@ -308,6 +362,9 @@ test("team run: a mirror that is not ready marks people not measured, and still 
     const edges = object === "companies" ? [{ node: company }] : [];
     return Response.json({ data: { [object]: { pageInfo: { hasNextPage: false, endCursor: null }, edges } } });
   }) as typeof fetch;
+  // A good people count saved earlier today must survive a later unmeasured run (review r2, R2).
+  const today = new Date().toISOString().slice(0, 10);
+  await db().from("gtm_team_stock_daily").upsert({ member: "TMIR", date: today, metrics: { people: 5, sendable: 1 } }, { onConflict: "member,date" });
   try {
     const out = await runTeam(db(), members, { deadline: Date.now() + 120_000 });
     assert.match(String(out.TMIR?.activity), /partial: people/);
@@ -316,6 +373,9 @@ test("team run: a mirror that is not ready marks people not measured, and still 
     assert.equal(a?.companies.length, 1, "the member's companies were saved, not frozen");
     const { data } = await db().from("gtm_team_stock_daily").select("metrics").eq("member", "TMIR");
     assert.equal(data?.length, 1, "the day's stock snapshot is written");
+    const m = data![0].metrics as Record<string, number | null>;
+    assert.equal(m.people, 5); assert.equal(m.sendable, 1, "the morning's measured people are kept");
+    assert.equal(m.companies_no_owner, 1, "and the rest is today's");
   } finally {
     globalThis.fetch = original;
     await db().from("gtm_sync_state").delete().like("key", "team.%tmir%");

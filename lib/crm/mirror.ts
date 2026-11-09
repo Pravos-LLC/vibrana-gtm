@@ -53,7 +53,13 @@ type Page<N = Node> = { pageInfo: { hasNextPage: boolean; endCursor: string | nu
  * One stream's position. `since` is the last change a finished pass saw; a pass reads from `from` (since minus the
  * overlap, fixed when the pass starts so its cursor stays valid) and pages with `after`.
  */
-export type Stream = { since: string; from: string | null; after: string | null; maxSeen: string | null };
+export type Stream = {
+  since: string; from: string | null; after: string | null; maxSeen: string | null;
+  /** When the last finished pass read its last page: the overlap runs back from here, not from `since` (review r2, R3). */
+  passEndedAt: string | null;
+  /** A millisecond being read by id after the cursor stalled, and the id cursor's place: saved, so a deadline resumes it. */
+  tie: { at: string; after: string | null } | null;
+};
 export type MirrorState = {
   changes: Stream;
   deletes: Stream;
@@ -76,19 +82,22 @@ export type MirrorState = {
   /** The signed difference (Twenty minus mirror) at the last check, and how many checks in a row have shown it. */
   diff: number;
   diffRuns: number;
+  /** The last resync, and a difference that survived it: at most one resync a day, then an incident (review r2, R4). */
+  lastResyncAt: string | null;
+  unresolvedDiff: number | null;
   /** An id sweep in progress (after a resync starts), with its cursor and the last id it covered. */
   sweep: { after: string | null; lastId: string | null; removed: number } | null;
   /** Why the sweep stopped (its breaker). Raised as a health incident until an operator clears it (docs/deployment.md). */
   sweepError: string | null;
 };
 
-const stream0 = (since: string): Stream => ({ since, from: null, after: null, maxSeen: null });
+const stream0 = (since: string): Stream => ({ since, from: null, after: null, maxSeen: null, passEndedAt: null, tie: null });
 export const initialState = (now = new Date()): MirrorState => ({
   changes: stream0(EPOCH),
   // People soft-deleted before the mirror existed are never copied (the change stream reads live people only).
   deletes: stream0(now.toISOString()),
   backfillDone: false, startedAt: now.toISOString(), lastOkAt: null, caughtUpAt: null, lastError: null, lastRunAt: null,
-  twentyTotal: null, mirrorLive: null, countCutoff: null, countsCheckedAt: null, diff: 0, diffRuns: 0,
+  twentyTotal: null, mirrorLive: null, countCutoff: null, countsCheckedAt: null, diff: 0, diffRuns: 0, lastResyncAt: null, unresolvedDiff: null,
   sweep: null, sweepError: null,
 });
 
@@ -132,6 +141,9 @@ export function mirrorProblems(s: MirrorState | null, now = Date.now()): { key: 
   }
   if (!fresh(s.caughtUpAt ?? (s.backfillDone ? null : s.startedAt), now, CATCHUP_MS)) {
     return [{ key: "health_check:crm_mirror:stale", summary: "CRM mirror: has not caught up with the CRM for over 24 hours; people are not measured" }];
+  }
+  if (s.unresolvedDiff) {
+    return [{ key: "health_check:crm_mirror:counts", summary: `CRM mirror: Twenty and the mirror still disagree by ${s.unresolvedDiff} people after a resync; it retries once a day (check for erasures or restores in Twenty)` }];
   }
   return [];
 }
@@ -180,18 +192,29 @@ async function upsertNodes(db: SupabaseClient, nodes: Node[], what: string) {
  * Every person whose `field` falls in one millisecond, read by id with an exact cursor: what the stream does when its
  * own cursor stops moving because more people than a page share that millisecond.
  */
-async function readTie(db: SupabaseClient, reader: TwentyReader, field: "updatedAt" | "deletedAt", at: string, out: { rows: number; ties: number }) {
+async function readTie(db: SupabaseClient, reader: TwentyReader, s: MirrorState, st: Stream, field: "updatedAt" | "deletedAt", out: { rows: number; ties: number; pages: number }) {
+  const tie = st.tie!;
   const q = `query($f:PersonFilterInput,$a:String){ people(filter:$f, first:${PAGE}, after:$a, orderBy:[{id:AscNullsFirst}]) { pageInfo { hasNextPage endCursor } edges { node { ${FIELDS} } } } }`;
-  const f = { and: [{ [field]: { gte: at } }, { [field]: { lt: plusMs(at, 1) } }] };
-  let after: string | null = null;
+  // One top-level range on the field: inside an `and`, Twenty leaves most soft-deleted people out (measured 2026-11-09).
+  const f = { [field]: { gte: tie.at, lt: plusMs(tie.at, 1) } };
   out.ties++;
   for (;;) {
-    const d: { people: Page } = await reader.read<{ people: Page }>(q, { f, a: after });
+    const d: { people: Page } = await reader.read<{ people: Page }>(q, { f, a: tie.after });
     out.rows += await upsertNodes(db, d.people.edges.map((e) => e.node), `mirror ${field} tie`);
+    out.pages++;
     const more = d.people.pageInfo.hasNextPage && !!d.people.pageInfo.endCursor;
-    if (!more) return;
-    if (d.people.pageInfo.endCursor === after) throw new Error(`Twenty people (${field} ${at}): the id cursor did not advance`);
-    after = d.people.pageInfo.endCursor;
+    if (more && d.people.pageInfo.endCursor === tie.after) throw new Error(`Twenty people (${field} ${tie.at}): the id cursor did not advance`);
+    if (!more) {
+      // The millisecond is done: the stream goes on from the next one.
+      st.from = plusMs(tie.at, 1);
+      st.after = null;
+      st.tie = null;
+      await saveState(db, s);
+      return;
+    }
+    // Saved after every page, so a deadline mid-way resumes here next run (review r2, R1).
+    tie.after = d.people.pageInfo.endCursor;
+    await saveState(db, s);
   }
 }
 
@@ -201,11 +224,15 @@ async function stream(db: SupabaseClient, reader: TwentyReader, s: MirrorState, 
   const field = which === "changes" ? "updatedAt" : "deletedAt";
   const q = `query($f:PersonFilterInput,$a:String){ people(filter:$f, first:${PAGE}, after:$a, orderBy:[{${field}:AscNullsFirst},{id:AscNullsFirst}]) { pageInfo { hasNextPage endCursor } edges { node { ${FIELDS} } } } }`;
   if (st.from == null) {
-    // A new pass: from a little before the last change seen, fixed for the whole pass so its cursor stays valid.
-    st.from = st.since === EPOCH ? EPOCH : new Date(Math.max(0, Date.parse(st.since) - OVERLAP_MS)).toISOString();
+    // A new pass. It reaches back OVERLAP_MS before the previous pass's last read (a write stamped then may have
+    // committed after it), but never further than the last change seen: a quiet CRM re-reads almost nothing (R3).
+    // Fixed for the whole pass so its cursor stays valid.
+    const back = st.passEndedAt ? Date.parse(st.passEndedAt) - OVERLAP_MS : Date.parse(st.since) - OVERLAP_MS;
+    st.from = st.since === EPOCH ? EPOCH : new Date(Math.max(0, Math.min(Date.parse(st.since), back))).toISOString();
     st.after = null;
     await saveState(db, s);
   }
+  if (st.tie) await readTie(db, reader, s, st, field, out);
   let lastIds: Set<string> | null = null;
   for (;;) {
     const d = await reader.read<{ people: Page }>(q, { f: { [field]: { gte: st.from } }, a: st.after });
@@ -219,18 +246,17 @@ async function stream(db: SupabaseClient, reader: TwentyReader, s: MirrorState, 
       // More people than a page share the boundary millisecond: read them by id, then go on from the next millisecond.
       const at = (which === "changes" ? nodes[nodes.length - 1]?.updatedAt : nodes[nodes.length - 1]?.deletedAt) ?? null;
       if (!at) throw new Error(`Twenty people (${which}): the cursor did not advance`);
-      const ms = new Date(Math.floor(Date.parse(at))).toISOString();
-      await readTie(db, reader, field, ms, out);
-      st.from = plusMs(ms, 1);
-      st.after = null;
-      lastIds = null;
+      st.tie = { at: new Date(Math.floor(Date.parse(at))).toISOString(), after: null };
       await saveState(db, s);
+      await readTie(db, reader, s, st, field, out);
+      lastIds = null;
       continue;
     }
     lastIds = new Set(nodes.map((n) => n.id));
     if (more) st.after = d.people.pageInfo.endCursor;
     else {
       st.since = st.maxSeen ?? st.since;
+      st.passEndedAt = new Date().toISOString();
       st.from = null;
       st.after = null;
       st.maxSeen = null;
@@ -303,6 +329,8 @@ export async function runMirror(db: SupabaseClient, reader: TwentyReader, opts: 
     return { ...out, skipped: s.lastError, failed: true };
   }
   await saveState(db, s);
+  // Progress is pages read and written this run: each one moves a saved place (stream, tie or sweep cursor).
+  const pagesRead = () => out.changes.pages + out.deletes.pages + (out.sweep?.pages ?? 0);
   try {
     await stream(db, reader, s, "changes", out.changes);
     await stream(db, reader, s, "deletes", out.deletes);
@@ -326,12 +354,19 @@ export async function runMirror(db: SupabaseClient, reader: TwentyReader, opts: 
         const diff = twenty - mirror;
         s.diffRuns = diff === 0 ? 0 : diff === s.diff ? s.diffRuns + 1 : 1;
         s.diff = diff;
+        if (diff === 0) s.unresolvedDiff = null;
         if (s.diffRuns >= 2) {
-          // A difference that persisted: re-read every person (upserts clear a stale deleted_at) and sweep ids.
-          out.resync = true;
-          s.diff = 0; s.diffRuns = 0;
-          s.changes = stream0(EPOCH);
-          s.sweep = { after: null, lastId: null, removed: 0 };
+          if (fresh(s.lastResyncAt, Date.now(), 24 * 3_600_000)) {
+            // The difference survived a resync: another one would not fix it. Say so, retry at most once a day.
+            s.unresolvedDiff = diff;
+          } else {
+            // A difference that persisted: re-read every person (upserts clear a stale deleted_at) and sweep ids.
+            out.resync = true;
+            s.diff = 0; s.diffRuns = 0;
+            s.lastResyncAt = new Date().toISOString();
+            s.changes = { ...stream0(EPOCH), passEndedAt: null };
+            s.sweep = { after: null, lastId: null, removed: 0 };
+          }
         }
       }
     }
@@ -340,10 +375,14 @@ export async function runMirror(db: SupabaseClient, reader: TwentyReader, opts: 
     await saveState(db, s);
   } catch (e) {
     out.stopped = (e as Error).message.slice(0, 200);
-    if (isDeadline(e)) {
-      // Stopped by its own deadline mid-pass: progress, not a failure (the next run carries on from the saved page).
+    if (isDeadline(e) && pagesRead() > 0) {
+      // Stopped by its own deadline after moving its saved place: progress, not a failure (the next run carries on).
       s.lastOkAt = new Date().toISOString();
       s.lastError = null;
+    } else if (isDeadline(e)) {
+      // A whole run without moving its saved place is no progress (review r2, R1): count it as a failure.
+      out.failed = true;
+      s.lastError = "a whole run ended at its deadline without moving the mirror's saved place";
     } else {
       out.failed = true;
       s.lastError = out.stopped;
