@@ -149,9 +149,15 @@ export type GEvent = {
 export const EVENT_FIELDS = "nextPageToken,items(id,iCalUID,status,eventType,visibility,start,originalStartTime,attendees(email,displayName,self,resource,responseStatus))";
 
 /** The event's identity across calendars: its iCalendar UID (the same on every attendee's copy, whoever organized it), plus
- *  the instance's original start for one occurrence of a series. Falls back to Google's id. */
-export const eventIdentity = (e: GEvent) =>
-  e.iCalUID ? `${e.iCalUID}${e.originalStartTime ? `|${e.originalStartTime.dateTime ?? e.originalStartTime.date ?? ""}` : ""}` : e.id;
+ *  the instance's original start (as a UTC instant) for one occurrence of a series. Falls back to Google's id. */
+export const eventIdentity = (e: GEvent) => {
+  if (!e.iCalUID) return e.id;
+  const o = e.originalStartTime;
+  if (!o) return e.iCalUID;
+  // Google renders dateTime in each calendar's own time zone: the instance is the instant, so every copy keys the same.
+  const at = o.dateTime && !Number.isNaN(Date.parse(o.dateTime)) ? new Date(o.dateTime).toISOString() : o.date ?? "";
+  return `${e.iCalUID}|${at}`;
+};
 
 export type Candidate = { key: string; start: string; day: string; externals: string[]; names: string[] };
 export type Gone = { key: string; why: string };
@@ -336,10 +342,12 @@ export const captureKey = (key: string) => `calendar:${key}`;
 export const isManual = (r: MeetingRow) => r.mtgKindSource === "MANUAL" || (!!r.mtgAutoKind && r.mtgKind !== r.mtgAutoKind);
 
 const ROW_NAMESPACE = Buffer.from("6f1c9d2e4b7a5c3e9a1d2f8e7b6c5a40", "hex");
-/** The Twenty row id for an event's meeting (a UUID v5 of its capture key): a second create of the same meeting is refused
- *  by Twenty, so a retry, an overlapping run or a lost map write cannot make a duplicate (meeting_ledger.record_id). */
-export function rowId(key: string): string {
-  const h = createHash("sha1").update(ROW_NAMESPACE).update(`${captureKey(key)}|meeting`).digest();
+/** The Twenty row id for a member's meeting (a UUID v5 of its capture key and the member): a second create of the same
+ *  meeting is refused by Twenty, so a retry, an overlapping run or a lost map write cannot make a duplicate
+ *  (meeting_ledger.record_id). Per member, so when one member declines or is uninvited, another attending member's sync
+ *  writes its own row instead of finding the first in the trash. */
+export function rowId(key: string, member: string): string {
+  const h = createHash("sha1").update(ROW_NAMESPACE).update(`${captureKey(key)}|${member}|meeting`).digest();
   h[6] = (h[6] & 0x0f) | 0x50;
   h[8] = (h[8] & 0x3f) | 0x80;
   const x = h.subarray(0, 16).toString("hex");
@@ -526,7 +534,7 @@ async function syncOne(db: SupabaseClient, reader: TwentyReader, member: string,
   const byId = new Map(rows.map((r) => [r.id, r]));
   const wanted = (ids: string[]) => ids.filter((id) => !byId.has(id));
   for (const r of await readIds(reader, wanted([...mine.values()].filter((m) => !m.removed_at && m.meeting_id).map((m) => m.meeting_id!)), false)) byId.set(r.id, r);
-  const fresh = wants.filter((w) => !mine.has(w.key) && !claimed.has(w.key)).map((w) => rowId(w.key));
+  const fresh = wants.filter((w) => !mine.has(w.key) && !claimed.has(w.key)).map((w) => rowId(w.key, member));
   for (const r of await readIds(reader, wanted(fresh), false)) byId.set(r.id, r);
   const trashed = new Set((await readIds(reader, wanted(fresh), true)).map((r) => r.id));
   const taken = new Set(maps.filter((m) => !m.removed_at && m.meeting_id).map((m) => m.meeting_id!));
@@ -535,9 +543,17 @@ async function syncOne(db: SupabaseClient, reader: TwentyReader, member: string,
     must(await db.from("gtm_calendar_meetings").upsert({ ...m, updated_at: stamp }, { onConflict: "member,event_key" }), "save meeting map");
   const close = (m: MapRow, reason: string) => save({ ...m, removed_at: stamp, removed_reason: reason });
 
-  // Privacy first, never behind the breaker: the row goes whoever made it and whatever its kind.
+  // Privacy first, never behind the breaker: the row goes whoever made it and whatever its kind, and on every member's
+  // calendar: a shared invite marked Private on one copy withdraws the row another member's sync already wrote.
+  const othersLive = maps.filter((m) => m.member !== member && !m.removed_at && m.meeting_id);
   for (const [key, why] of gone) {
     if (!(PRIVACY as readonly string[]).includes(why)) continue;
+    for (const o of othersLive.filter((o) => o.event_key === key)) {
+      const [row] = await readIds(reader, [o.meeting_id!], false);
+      if (row) { await withdraw(reader, row.id, true); result.removed++; }
+      await close(o, why);
+      o.removed_at = stamp;
+    }
     const m = mine.get(key);
     if (!m) {
       await save({ member, event_key: key, meeting_id: null, origin: "withheld", start_at: stamp, kind: null, removed_at: stamp, removed_reason: why });
@@ -594,7 +610,7 @@ async function syncOne(db: SupabaseClient, reader: TwentyReader, member: string,
       if (Date.parse(map.start_at) !== Date.parse(w.start) || map.kind !== w.choice.kind) await save({ ...map, start_at: w.start, kind: w.choice.kind });
       continue;
     }
-    const id = rowId(w.key);
+    const id = rowId(w.key, member);
     const record = (meetingId: string, origin: "created" | "adopted") => save({ member, event_key: w.key, meeting_id: meetingId, origin, start_at: w.start, kind: w.choice.kind });
     if (byId.has(id)) { await record(id, "created"); taken.add(id); continue; }            // made by a run whose map write was lost
     if (trashed.has(id)) { await save({ member, event_key: w.key, meeting_id: id, origin: "created", start_at: w.start, kind: w.choice.kind, removed_at: stamp, removed_reason: "person_deleted" }); continue; }

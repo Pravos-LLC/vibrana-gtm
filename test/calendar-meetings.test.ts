@@ -4,6 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 Object.assign(process.env, {
@@ -43,11 +44,14 @@ test("a gmail calendar does not drop gmail guests as its own domain", () => {
 
 test("an event's identity is its iCalendar UID (plus the instance start), the same on every attendee's copy", () => {
   assert.equal(C.eventIdentity({ id: "a1", iCalUID: "uid@outlook" }), "uid@outlook");
-  assert.equal(C.eventIdentity({ id: "a1_20261104", iCalUID: "uid@google", originalStartTime: { dateTime: "2026-11-04T08:00:00Z" } }), "uid@google|2026-11-04T08:00:00Z");
+  assert.equal(C.eventIdentity({ id: "a1_20261104", iCalUID: "uid@google", originalStartTime: { dateTime: "2026-11-04T08:00:00Z" } }), "uid@google|2026-11-04T08:00:00.000Z");
   assert.equal(C.eventIdentity({ id: "a1" }), "a1");
-  assert.match(C.rowId("k".repeat(32)), /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-  assert.equal(C.rowId("k".repeat(32)), C.rowId("k".repeat(32)), "deterministic");
-  assert.notEqual(C.rowId("k".repeat(32)), C.rowId("j".repeat(32)));
+  assert.match(C.rowId("k".repeat(32), "JOHN"), /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(C.rowId("k".repeat(32), "JOHN"), C.rowId("k".repeat(32), "JOHN"), "deterministic");
+  assert.notEqual(C.rowId("k".repeat(32), "JOHN"), C.rowId("j".repeat(32), "JOHN"));
+  assert.notEqual(C.rowId("k".repeat(32), "JOHN"), C.rowId("k".repeat(32), "ABE"), "per member");
+  assert.equal(C.eventIdentity({ id: "x", iCalUID: "u", originalStartTime: { dateTime: "2026-11-04T16:00:00+08:00" } }),
+    C.eventIdentity({ id: "y", iCalUID: "u", originalStartTime: { dateTime: "2026-11-04T09:00:00+01:00" } }), "an instance is the same instant in any calendar's time zone");
 });
 
 test("the breaker matches the ledger: more than 3, or at least 2 and more than 20%", () => {
@@ -123,6 +127,7 @@ test("the deny-list fails closed and catches domains, organization names and mat
   assert.equal(C.denyList({ MEETING_DENY_LIST: "not json" }), null);
   for (const bad of ["{}", "[]", '{"domains":[],"organisations":["Hush Corp"]}', '{"domains":[]}', '{"domains":"x","organizations":[]}'])
     assert.equal(C.denyList({ MEETING_DENY_LIST: bad }), null, `a malformed list fails closed: ${bad}`);
+  assert.equal(C.denyList({ MEETING_DENY_LIST: '{"domains":[],"organizations":[],"organisations":["Hush Corp"]}' }), null, "an unknown key fails closed");
   assert.deepEqual(C.denyList({ MEETING_DENY_LIST: '{"domains":[],"organizations":[]}' }), { domains: [], organizations: [] }, "an intentionally empty list");
   const d = C.denyList()!;
   assert.ok(C.eventDenied(["a@mail.secret-client.test"], [], d));
@@ -142,6 +147,14 @@ test("a person's word: manual kinds keep kind and links, time and name still fol
   assert.deepEqual(Object.keys(C.rowChanges(row, want)).sort(), ["mtgAt", "mtgExternalCount", "name"]);
   assert.equal(C.rowChanges(row, want).name, "2026-11-05 meeting: Old", "a manual row keeps its own label; only the date follows the event");
   assert.deepEqual(Object.keys(C.rowChanges({ ...row, mtgKind: "OTHER" }, want)).sort(), ["mtgAt", "mtgAutoKind", "mtgCompanyId", "mtgExternalCount", "mtgKind", "name"]);
+});
+
+test("disconnecting a calendar revokes only when no mailbox and no other member's calendar uses the account", () => {
+  const src = readFileSync(new URL("../app/pipeline/meetings/actions.ts", import.meta.url), "utf8");
+  assert.match(src, /from\("gtm_team_mailboxes"\)\.select\("member"\)\.eq\("address", row\.address\)/);
+  assert.match(src, /from\("gtm_team_calendars"\)\.select\("member"\)\.eq\("address", row\.address\)\.neq\("member", row\.member\)/);
+  assert.match(src, /if \(!mailbox\.error && !mailbox\.data\?\.length && !other\.error && !other\.data\?\.length\) \{\s*try \{ await revokeToken/);
+  assert.equal((src.match(/revokeToken\(/g) ?? []).length, 1);
 });
 
 test("the consent URL asks only for calendar read access and lets the member pick the account", () => {
@@ -298,7 +311,7 @@ test("sync: creates with the derived id, adopts the owner's Granola row (not ano
   assert.equal(r1.error, undefined);
   assert.deepEqual({ events: r1.events, business: r1.business, created: r1.created, adopted: r1.adopted }, { events: 3, business: 2, created: 1, adopted: 1 });
   const [made] = twenty.creates();
-  assert.equal(made.id, C.rowId(eventKey("rob-call")), "the row id is derived from the event");
+  assert.equal(made.id, C.rowId(eventKey("rob-call"), "JOHN"), "the row id is derived from the event");
   assert.deepEqual({ name: made.data!.name, kind: made.data!.mtgKind, person: made.data!.mtgPersonId, deal: made.data!.mtgOpportunityId }, { name: "2026-11-04 meeting: Pikl", kind: "CLIENT", person: "pr", deal: "won" });
   const map = db.tables.gtm_calendar_meetings.find((m) => m.origin === "adopted")!;
   assert.equal(map.meeting_id, "granola-row", "John's own row is adopted, Abe's is not");
@@ -322,7 +335,7 @@ test("sync: a create whose answer is lost is not made twice; a lost map write is
   const r = res(await sync(db, twenty, () => events));
   assert.equal(r.error, undefined);
   assert.equal(twenty.state.meetings.length, 1, "one row, though the reader sent the create twice");
-  assert.equal(db.tables.gtm_calendar_meetings[0].meeting_id, C.rowId(eventKey("rob-call")));
+  assert.equal(db.tables.gtm_calendar_meetings[0].meeting_id, C.rowId(eventKey("rob-call"), "JOHN"));
   db.tables.gtm_calendar_meetings = [];                         // the map write was lost
   await sync(db, twenty, () => events);
   assert.equal(twenty.state.meetings.length, 1);
@@ -340,7 +353,7 @@ test("sync: privacy withdraws whatever made the row and whatever its kind, and h
   let events = [ev("rob-call", "2026-11-04T16:00:00+08:00", ["rob@pikl.test"]), ev("other", "2026-11-05T16:00:00+08:00", ["rob@pikl.test"])];
   const db = freshDb([conn("ABE", ABE), conn()]);
   await sync(db, twenty, () => events);
-  const row = twenty.state.meetings.find((m) => m.id === C.rowId(eventKey("rob-call")))!;
+  const row = twenty.state.meetings.find((m) => m.id === C.rowId(eventKey("rob-call"), "ABE"))!;   // Abe's calendar is synced first
   row.mtgKind = "PARTNER"; row.mtgKindSource = "MANUAL";        // a person's word
   events = [{ ...events[0], visibility: "private" }, events[1]];
   const r = await sync(db, twenty, () => events);
@@ -415,13 +428,13 @@ test("sync: cancellations pass the ledger's breaker; an owner releases the held 
   assert.equal(held.held, 4); assert.match(held.error!, /held/);
   assert.equal(twenty.state.meetings.length, 9);
   // A person marks one of them manual, then an owner applies the held set.
-  twenty.state.meetings.find((m) => m.id === C.rowId(eventKey("e1")))!.mtgKindSource = "MANUAL";
+  twenty.state.meetings.find((m) => m.id === C.rowId(eventKey("e1"), "JOHN"))!.mtgKindSource = "MANUAL";
   const heldState = db.tables.gtm_sync_state.find((r) => r.key === C.heldKey("JOHN"))!;
   db.tables.gtm_sync_state.push({ key: C.releaseKey("JOHN"), value: heldState.value });
   const applied = res(await sync(db, twenty, () => events));
   assert.deepEqual({ removed: applied.removed, kept: applied.kept, held: applied.held }, { removed: 3, kept: 1, held: undefined });
   assert.ok(!db.tables.gtm_sync_state.some((r) => r.key === C.releaseKey("JOHN") || r.key === C.heldKey("JOHN")), "the release is used once");
-  assert.ok(twenty.state.meetings.some((m) => m.id === C.rowId(eventKey("e1"))), "the manual row stays");
+  assert.ok(twenty.state.meetings.some((m) => m.id === C.rowId(eventKey("e1"), "JOHN")), "the manual row stays");
   // Everything back on the calendar: nothing withdrawn is recreated.
   const creates = twenty.creates().length;
   await sync(db, twenty, () => all);
@@ -471,4 +484,54 @@ test("sync: without the deny-list nothing is read or written; a held lease skips
   assert.match((await sync(db, twenty, () => [])).skipped!, /holds the lease/);
   const odd = res(await sync(freshDb([conn("ZED", "zed@x.test")]), twenty, () => []), "ZED", "zed@x.test");
   assert.match(odd.error!, /not an owner option/);
+});
+
+const shared = (id: string, extra: Record<string, unknown> = {}) => ({ ...ev(id, "2026-11-04T16:00:00+08:00", ["rob@pikl.test"]), iCalUID: "shared@uid", ...extra });
+/** Abe's calendar answers first (connections are ordered by member), then John's. */
+function twoCalendars(abe: () => unknown[], john: () => unknown[]) {
+  let n = 0;
+  return (async (url: string) => {
+    if (String(url).startsWith("https://oauth2.googleapis.com/token")) return new Response(JSON.stringify({ access_token: "at" }), { status: 200 });
+    n++;
+    return new Response(JSON.stringify({ items: n % 2 === 1 ? abe() : john() }), { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
+test("sync: when the member whose sync wrote a shared meeting declines, the other attending member's sync writes it (review NEW-1)", async () => {
+  const twenty = fakeTwenty({ people: [pikl()], companies: [], opps: [], meetings: [] });
+  const db = freshDb([conn("ABE", ABE), conn()]);
+  let abe: unknown[] = [shared("a-copy")];
+  const john = () => [shared("j-copy")];
+  await C.syncCalendars(db, reader(twenty.fetcher), { now: NOW, fetcher: twoCalendars(() => abe, john) });
+  assert.equal(twenty.state.meetings.length, 1);
+  assert.equal(twenty.state.meetings[0].mtgOwner, "ABE");
+  abe = [shared("a-copy", { attendees: [{ email: ABE, self: true, responseStatus: "declined" }, { email: "rob@pikl.test" }] })];
+  await C.syncCalendars(db, reader(twenty.fetcher), { now: NOW, fetcher: twoCalendars(() => abe, john) });
+  assert.deepEqual(twenty.state.meetings.map((m) => m.mtgOwner), ["JOHN"], "John attended: his row replaces Abe's");
+  assert.ok(!db.tables.gtm_calendar_meetings.some((m) => m.removed_reason === "person_deleted"));
+});
+
+test("sync: one recurring instance on calendars in two time zones is one meeting (review NEW-2)", async () => {
+  const twenty = fakeTwenty({ people: [pikl()], companies: [], opps: [], meetings: [] });
+  const db = freshDb([conn("ABE", ABE), conn()]);
+  const inst = (zoned: string) => ({ ...ev("i", zoned, ["rob@pikl.test"]), iCalUID: "series@uid", originalStartTime: { dateTime: zoned } });
+  await C.syncCalendars(db, reader(twenty.fetcher), { now: NOW, fetcher: twoCalendars(() => [inst("2026-11-04T09:00:00+01:00")], () => [inst("2026-11-04T16:00:00+08:00")]) });
+  assert.equal(twenty.creates().length, 1);
+});
+
+test("sync: marking a shared invite Private on one calendar withdraws the row the other calendar wrote (review NEW-3)", async () => {
+  const twenty = fakeTwenty({ people: [pikl()], companies: [], opps: [], meetings: [] });
+  const db = freshDb([conn("ABE", ABE), conn()]);
+  let john: unknown[] = [shared("j-copy")];
+  // Abe has not got the invite yet; John's sync writes the row.
+  await C.syncCalendars(db, reader(twenty.fetcher), { now: NOW, fetcher: twoCalendars(() => [], () => john) });
+  assert.equal(twenty.state.meetings.length, 1);
+  // Abe now has it, marked Private on his copy.
+  await C.syncCalendars(db, reader(twenty.fetcher), { now: NOW, fetcher: twoCalendars(() => [shared("a-copy", { visibility: "private" })], () => john) });
+  assert.equal(twenty.state.meetings.length, 0);
+  assert.equal(twenty.trash[0].name, "Retracted meeting");
+  assert.ok(db.tables.gtm_calendar_meetings.some((m) => m.member === "JOHN" && m.removed_reason === "private"));
+  john = [shared("j-copy")];
+  await C.syncCalendars(db, reader(twenty.fetcher), { now: NOW, fetcher: twoCalendars(() => [shared("a-copy", { visibility: "private" })], () => john) });
+  assert.equal(twenty.creates().length, 1, "and it stays out");
 });
