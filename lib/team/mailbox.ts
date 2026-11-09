@@ -13,7 +13,7 @@
 // `gtm team replay` re-lists from a date to reconcile rows written by the older sync.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
-import { must } from "../db";
+import { DbError, must } from "../db";
 import { header, type MailMessage, type MailThread } from "../outreach/mailbox";
 import { createHash } from "node:crypto";
 import { TwentyError, type TwentyReader } from "../twenty";
@@ -303,15 +303,49 @@ const failure = (e: unknown): string => {
   if (e instanceof TwentyError) return "The CRM rejected a lookup; the sync retries next hour.";
   const status = (e as { status?: number }).status;
   if (status) return `Gmail answered ${status}; the sync retries next hour.`;
-  return "The sync stopped early; it resumes where it left off next hour.";
+  return `The sync stopped early (${failedStep(e)}); it resumes where it left off next hour.`;
 };
+
+/**
+ * Where an unexpected failure happened, in words safe for last_error and the alert email: the fixed step label of a failed
+ * database call (lib/db.ts DbError, set in code), the violated constraint's name when there is one, else the error type.
+ * Never the database message itself (it can quote a value) and never a provider body.
+ */
+// PostgreSQL's constraint-violation messages, matched whole (anchored), so a quoted value inside another error's message
+// can never pass as a constraint name (review of #38, B1). Only names on this schema's own tables (gtm_*) are shown.
+const PG_CONSTRAINT: [RegExp, string][] = [
+  [/^new row for relation "gtm_[a-z0-9_]{1,60}" violates check constraint "(gtm_[a-z0-9_]{1,80})"$/, "check"],
+  [/^duplicate key value violates unique constraint "(gtm_[a-z0-9_]{1,80})"$/, "unique"],
+  [/^insert or update on table "gtm_[a-z0-9_]{1,60}" violates foreign key constraint "(gtm_[a-z0-9_]{1,80})"$/, "foreign key"],
+  [/^null value in column "[a-z0-9_]{1,60}" of relation "gtm_[a-z0-9_]{1,60}" violates not-null constraint$/, "not-null"],
+];
+function constraintOf(e: DbError): string | null {
+  const detail = e.message.slice(e.step.length + 2);
+  for (const [re, kind] of PG_CONSTRAINT) {
+    const m = re.exec(detail);
+    if (m) return m[1] ? `${kind} constraint ${m[1]}` : `${kind} constraint`;
+  }
+  return null;
+}
+
+export function failedStep(e: unknown): string {
+  try {
+    if (e instanceof DbError) {
+      const label = /^[a-z][a-z ,'-]{2,60}$/.test(e.step) ? e.step : "a database step";
+      const constraint = constraintOf(e);
+      return constraint ? `at "${label}", ${constraint}` : `at "${label}"`;
+    }
+    const type = e instanceof Error && /^[A-Za-z]{1,40}$/.test(e.name) ? e.name : "unknown error";
+    return type;
+  } catch { return "unknown error"; }
+}
 
 /** Every row of a select, 1000 at a time (PostgREST caps a response at max_rows). Past `max` rows it throws rather than
  *  return a silently truncated list (VIB-516). The select must be ordered by a unique key so pages neither skip nor repeat. */
 export async function selectAll<T>(page: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>, what: string, max = 200_000): Promise<T[]> {
   const out: T[] = [];
   for (let from = 0; ; from += 1000) {
-    if (from >= max) throw new Error(`${what}: more than ${max} rows; refusing to return a silently truncated list`);
+    if (from >= max) throw new DbError(what, `more than ${max} rows; refusing to return a silently truncated list`);
     const rows = must(await page(from, from + 999), what) as T[];
     out.push(...rows);
     if (rows.length < 1000) return out;
@@ -331,7 +365,7 @@ async function insertOnce(db: SupabaseClient, rows: Record<string, unknown>[]) {
     if (error.code === "42P10") continue;   // that key does not exist (yet, or any more)
     if (error.code === "23505" && rows.length > 1) { for (const r of rows) await insertOnce(db, [r]); return; }   // one clash loses nothing else
     if (error.code === "23505") return;     // the row exists under the other key: read back below
-    throw new Error(`save mail events: ${error.message}`);
+    throw new DbError("save mail events", error.message);
   }
   throw new Error("save mail events: no unique key on gtm_team_mail_events matches");
 }
@@ -712,14 +746,14 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
       const ev = outcomes.get(r.replyId);
       if (!ev) continue;
       const { error } = await db.from("gtm_email_reply_labels").insert({ event_id: ev.id, person_id: r.persons.length === 1 ? r.persons[0] : null, source: "deterministic", intent: r.intent, opt_out: r.opt_out, decision_version: 1 });
-      if (error && error.code !== "23505") throw new Error(`save reply rule: ${error.message}`);   // one current rule decision per reply
+      if (error && error.code !== "23505") throw new DbError("save reply rule", error.message);   // one current rule decision per reply
     }
     for (const r of modeled) {
       const ev = outcomes.get(r.replyId);
       if (!ev) continue;
       const { error } = await db.from("gtm_email_reply_labels").insert({ event_id: ev.id, person_id: r.persons.length === 1 ? r.persons[0] : null, source: "model", model: r.model,
         intent: r.intent, opt_out: r.opt_out, decision_version: MODEL_DECISION_VERSION });
-      if (error && error.code !== "23505") throw new Error(`save model decision: ${error.message}`);   // one current model decision per reply
+      if (error && error.code !== "23505") throw new DbError("save model decision", error.message);   // one current model decision per reply
     }
 
     // Every sent message up to now was listed and classified: this run is the watermark a history reset reads back from.
