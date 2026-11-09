@@ -636,7 +636,7 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
             if (rule.opt_out !== "none") result.possible_opt_outs++;
             ruled.push({ replyId: r.id, persons: who, intent: rule.intent, opt_out: rule.opt_out });   // neutral too: the completion record
             if (classifierOn && rule.intent !== "auto_reply") {
-              const res = modelCalls < MODEL_CAP && !late() ? await classifyReply(text, { deadline: opts.deadline, now: clock }) : null;
+              const res = modelCalls < MODEL_CAP && !late() ? await classifyReply(text, { deadline: opts.deadline, now: clock, maxAttempts: MODEL_CAP - modelCalls }) : null;
               modelCalls += res?.attempts ?? 0;   // only real requests count toward the cap (review of #34, finding 2)
               if (res?.status === "decided") {
                 modeled.push({ replyId: r.id, persons: who, intent: res.decision.intent, opt_out: res.decision.opt_out, model: res.decision.model }); result.model_labeled++;

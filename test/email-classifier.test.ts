@@ -73,6 +73,11 @@ test("only the new text leaves: quoted mail in several languages and Outlook lay
     ["Am Do., 5. Nov. 2026 um 10:00 Uhr schrieb Sender <s@example.test>:\nQUOTED", ""],
     ["Sure, Tuesday works.\n________________________________\nFrom: Sender <s@example.test>\nSent: Thursday\nQUOTED", "Sure, Tuesday works."],
     ["Sounds good.\n\nFrom: Sender <s@example.test>\nSent: Thursday\nQUOTED", "Sounds good."],
+    // Language-independent markers (round 2): Russian Outlook, Japanese Gmail, a bare ruled line, a header in any alphabet.
+    ["Спасибо.\n\n-----Исходное сообщение-----\nОт: Sender <s@example.test>\nОтправлено: 5 ноября 2026\nQUOTED", "Спасибо."],
+    ["Спасибо.\n\nОт: Sender <s@example.test>\nОтправлено: 5 ноября 2026\nQUOTED", "Спасибо."],
+    ["ありがとう。\n\n2026年11月5日(木) 10:00 Sender <s@example.test>:\nQUOTED", "ありがとう。"],
+    ["Ok.\n==========\nQUOTED", "Ok."],
   ];
   for (const [input, expected] of cases) {
     const out = outboundText(input);
@@ -84,7 +89,9 @@ test("only the new text leaves: quoted mail in several languages and Outlook lay
 
 test("addresses and phone numbers are masked; a surviving header line means nothing is sent", () => {
   assert.deepEqual(outboundText("Reach my colleague at jo.doe@example.test or +44 20 7946 0958."), { text: "Reach my colleague at [email] or [phone]." });
-  assert.deepEqual(outboundText("Thanks\nOriginal sender: s@example.test"), { skip: "quoted_header" });
+  assert.deepEqual(outboundText("Thanks\nOriginal sender: s@example.test"), { text: "Thanks" }, "a header after the reply ends it");
+  assert.deepEqual(outboundText("Original sender: s@example.test\nThanks"), { skip: "quoted_header" }, "a header that cannot be cut off: nothing is sent");
+  assert.deepEqual(outboundText("Отправитель: s@example.test\nСпасибо"), { skip: "quoted_header" }, "in any alphabet");
   assert.deepEqual(outboundText("> only quoted text"), { skip: "no_text" });
   assert.equal((outboundText("x".repeat(MAX_CHARS + 500)) as { text: string }).text.length, MAX_CHARS);
 });
@@ -106,4 +113,10 @@ test("the shared deadline: no request without time left; the fallback never rese
   const fetcher = (async () => { slow.calls++; t += 30_000; throw new Error("timeout"); }) as unknown as typeof fetch;
   assert.deepEqual(await classifyReply("Maybe later.", { env: ON, fetcher, deadline: t + RESERVE_MS + 25_000, now: () => t }), { status: "failed", attempts: 1 });
   assert.equal(slow.calls, 1);
+});
+
+test("the run's cap holds per request: a reply never makes more attempts than the cap has left", async () => {
+  const s = stub([json({}, 503), json(answer("neutral", 0.9, 0))]);
+  assert.deepEqual(await classifyReply("Maybe later.", { env: ON, fetcher: s.fetcher, maxAttempts: 1 }), { status: "failed", attempts: 1 });
+  assert.equal(s.calls.length, 1, "the paid fallback is not tried when only one request is left");
 });

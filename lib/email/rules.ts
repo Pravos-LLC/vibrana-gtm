@@ -49,6 +49,12 @@ export function parseDeliveryStatus(text: string): FailureRecipient[] {
 // Dutch, Nordic). Conservative: anything from the first marker on is dropped (review of #34, finding 1).
 const SEPARATOR = /^\s*-{2,}\s*(Original Message|Forwarded message|Ursprüngliche Nachricht|Weitergeleitete Nachricht|Message d'origine|Message transféré|Mensaje original|Mensagem original|Messaggio originale|Oorspronkelijk bericht|Originalmeddelande|Opprinnelig melding|Original meddelelse|Alkuperäinen viesti)/i;
 const OUTLOOK_RULE = /^\s*_{10,}\s*$/;
+// Language-independent markers (review of #34, round 2): a dashed or ruled separator line in any language
+// ("-----Исходное сообщение-----"), an attribution line carrying an address and ending in a colon (Gmail's "On ... wrote:"
+// in every language), and a header line in any alphabet ("От: Name <a@b>") once the reply has started.
+const ANY_SEPARATOR = /^\s*(-{3,}.*-{3,}|[-_=*~]{8,})\s*$/u;
+const ADDRESS_COLON = /[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+.*[:：]\s*$/u;
+const ANY_HEADER = /^\s*\*?\p{L}[\p{L} ]{0,24}\*?\s*[:：]\s*.*(@|\d)/u;
 const HEADER = /^\s*\*?(From|Von|De|Da|Van|Från|Fra|Lähettäjä|Sent|Gesendet|Envoyé|Enviado|Inviato|Verzonden|Skickat|Sendt|Date|Datum|Fecha|Data|Subject|Betreff|Objet|Asunto|Assunto|Oggetto|Onderwerp|Ämne|Emne|To|An|À|Para|Aan|Till|Til|Cc)\*?\s*:\s*\S/i;
 const ATTRIBUTION_END = /(wrote|schrieb|a écrit|escribió|escreveu|ha scritto|schreef|skrev|kirjoitti)\s*:\s*$/i;
 // German and Dutch put the sender after the verb ("Am ... schrieb Sender <a@b>:").
@@ -66,7 +72,8 @@ export function newText(text: string): string {
     // An attribution line, also when a mail client wraps it over up to three lines ("On Thu, ..., Sender" / "<a@b> wrote:").
     if (ATTRIBUTION_START.test(l) && lines.slice(i, i + 3).some((x) => ATTRIBUTION_END.test(x) || ATTRIBUTION_VERB.test(x))) break;
     if (ATTRIBUTION_END.test(l)) break;
-    if (SEPARATOR.test(l) || OUTLOOK_RULE.test(l) || (HEADER.test(l) && out.length > 0)) break;
+    if (SEPARATOR.test(l) || OUTLOOK_RULE.test(l) || ANY_SEPARATOR.test(l) || ADDRESS_COLON.test(l)) break;
+    if ((HEADER.test(l) || ANY_HEADER.test(l)) && out.length > 0) break;
     out.push(l);
   }
   return out.join("\n").trim();

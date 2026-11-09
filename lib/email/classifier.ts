@@ -52,7 +52,7 @@ export type ClassifyResult =
 const EMAIL = /[^\s@<>()"',;:]+@[^\s@<>()"',;:]+\.[a-z]{2,}/gi;
 const PHONE = /\+?\d[\d\s().-]{7,}\d/g;
 // A labeled line carrying an address or a date ("Original sender: a@b", "Sent: 5 Nov 2026"): likely quoted mail.
-const HEADER_LEFT = /^\s*\*?[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ ]{1,24}\*?\s*:\s*.*(@|\d{4})/m;
+const HEADER_LEFT = /^\s*\*?\p{L}[\p{L} ]{1,24}\*?\s*[:：]\s*.*(@|\d{4})/mu;
 
 /**
  * What may leave for the model: the reply's new text (lib/email/rules.ts newText, quoted text in the common mail-client
@@ -88,7 +88,7 @@ export function readAnswer(body: unknown, model: string): ModelDecision | null {
  * Classifies one reply within the caller's deadline: every attempt gets only the time left (minus a reserve for saving
  * results), and the fallback never resets it (review of #34, finding 3). Errors carry nothing of the text or the key.
  */
-export async function classifyReply(text: string, opts: { env?: Record<string, string | undefined>; fetcher?: typeof fetch; deadline?: number; now?: () => number } = {}): Promise<ClassifyResult> {
+export async function classifyReply(text: string, opts: { env?: Record<string, string | undefined>; fetcher?: typeof fetch; deadline?: number; now?: () => number; maxAttempts?: number } = {}): Promise<ClassifyResult> {
   const env = opts.env ?? process.env;
   if (!classifierEnabled(env)) return { status: "failed", attempts: 0 };
   const out = outboundText(text);
@@ -96,7 +96,7 @@ export async function classifyReply(text: string, opts: { env?: Record<string, s
   const now = opts.now ?? Date.now;
   const send = providerFetch(opts.fetcher ?? fetch);
   let attempts = 0;
-  for (const model of MODELS) {
+  for (const model of MODELS.slice(0, Math.max(0, opts.maxAttempts ?? MODELS.length))) {
     const left = opts.deadline != null ? opts.deadline - RESERVE_MS - now() : ATTEMPT_MS;
     if (left < MIN_ATTEMPT_MS) break;   // not enough time left: the reply waits for the next run
     attempts++;
