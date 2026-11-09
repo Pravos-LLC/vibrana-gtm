@@ -6,7 +6,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { adminDb } from "@/lib/db";
-import { calendarAad, calendarScopes } from "@/lib/team/calendar";
+import { calendarAad, calendarScopes, heldKey, releaseKey } from "@/lib/team/calendar";
 import { authUrl, gmailConfig, revokeToken } from "@/lib/team/mailbox";
 import { openToken, pkceChallenge, randomToken, signState } from "@/lib/team/crypto";
 import { COOKIE_PATH, NONCE_COOKIE, VERIFIER_COOKIE, redirectUri, viewer } from "@/lib/team/connect";
@@ -39,10 +39,28 @@ export async function disconnectCalendar(form: FormData): Promise<void> {
   // One Google client serves the mailbox and the calendar, and Google revokes the whole grant for an account: revoke only
   // when no mailbox connection uses this address, else the token is just deleted.
   const mailbox = await db.from("gtm_team_mailboxes").select("member").eq("address", row.address).limit(1);
-  if (!mailbox.error && !mailbox.data?.length) {
+  // ...nor when another member's calendar connection uses the same Google account.
+  const other = await db.from("gtm_team_calendars").select("member").eq("address", row.address).neq("member", row.member).limit(1);
+  if (!mailbox.error && !mailbox.data?.length && !other.error && !other.data?.length) {
     try { await revokeToken(openToken(row.token_ciphertext, calendarAad(row.member, row.address))); } catch { /* deleted below either way */ }
   }
   const del = await db.from("gtm_team_calendars").delete().eq("member", row.member).eq("address", row.address);
   revalidatePath("/pipeline/meetings");
   redirect(`${PAGE}${del.error ? "disconnect-failed" : "disconnected"}`);
+}
+
+/** Applies the removals the breaker held for a member's calendar: the next sync withdraws exactly that set (any owner may
+ *  apply it; the set is the one shown on the page). */
+export async function applyHeldRemovals(form: FormData): Promise<void> {
+  const v = await viewer();
+  if (!v) redirect(`${PAGE}not-member`);
+  const member = String(form.get("member") ?? "");
+  if (!/^[A-Z][A-Z0-9_]{1,19}$/.test(member)) redirect(`${PAGE}invalid`);
+  const db = adminDb();
+  const { data, error } = await db.from("gtm_sync_state").select("value").eq("key", heldKey(member));
+  const keys = (data?.[0]?.value as { keys?: string[] } | undefined)?.keys ?? [];
+  if (error || !keys.length) redirect(`${PAGE}nothing-held`);
+  const saved = await db.from("gtm_sync_state").upsert({ key: releaseKey(member), value: { keys, by: v.email, at: new Date().toISOString() }, updated_at: new Date().toISOString() }, { onConflict: "key" });
+  revalidatePath("/pipeline/meetings");
+  redirect(`${PAGE}${saved.error ? "save-failed" : "released"}`);
 }

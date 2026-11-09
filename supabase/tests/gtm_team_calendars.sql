@@ -2,7 +2,7 @@
 -- psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/tests/gtm_team_calendars.sql   (also `supabase test db`)
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(13);
+select plan(16);
 
 create or replace function pg_temp.as_role(r text, owner boolean) returns void language plpgsql as $$
 begin
@@ -31,6 +31,13 @@ select throws_ok($$insert into public.gtm_calendar_meetings (member, event_key, 
   values ('JOHN', repeat('a', 32), '00000000-0000-4000-8000-000000000004', 'adopted', now(), 'OTHER')$$,
   '23505', null, 'an event maps to one meeting row per member');
 
+select lives_ok($$insert into public.gtm_calendar_meetings (member, event_key, origin, start_at, removed_at, removed_reason)
+  values ('JOHN', repeat('c', 32), 'withheld', now(), now(), 'private')$$, 'a private event is withheld with no meeting row');
+select throws_ok($$insert into public.gtm_calendar_meetings (member, event_key, origin, start_at, removed_at, removed_reason)
+  values ('JOHN', repeat('d', 32), 'withheld', now(), now(), 'cancelled')$$, '23514', null, 'only a privacy reason withholds');
+select throws_ok($$insert into public.gtm_calendar_meetings (member, event_key, origin, start_at, kind)
+  values ('JOHN', repeat('e', 32), 'created', now(), 'OTHER')$$, '23514', null, 'a created or adopted row names its meeting');
+
 select pg_temp.as_role('anon', null);
 select throws_ok($$select member from public.gtm_team_calendars$$, '42501', null, 'anonymous cannot read calendar connections');
 select throws_ok($$select member from public.gtm_calendar_meetings$$, '42501', null, 'anonymous cannot read the meeting map');
@@ -42,7 +49,7 @@ select is((select count(*) from public.gtm_calendar_meetings), 0::bigint, 'a sig
 select pg_temp.as_role('authenticated', true);
 select is((select count(*) from public.gtm_team_calendars), 1::bigint, 'the owner sees the calendar connection status');
 select throws_ok($$select token_ciphertext from public.gtm_team_calendars$$, '42501', null, 'not even the owner can read the sealed token');
-select is((select count(*) from public.gtm_calendar_meetings), 1::bigint, 'the owner reads the meeting map');
+select is((select count(*) from public.gtm_calendar_meetings), 2::bigint, 'the owner reads the meeting map');
 
 select * from finish();
 rollback;

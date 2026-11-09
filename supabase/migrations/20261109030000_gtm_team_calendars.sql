@@ -5,9 +5,10 @@
 --    status columns but never the ciphertext (column grants below), only the service role can. A member may connect a
 --    calendar on a different address from their mailbox (John's client meetings live on his personal domain's calendar).
 -- 2. gtm_calendar_meetings: which Twenty `meeting` row stands for which calendar event, so the hourly sync is idempotent
---    and can withdraw a row it created when the event is cancelled. The event is kept only as a keyed hash of its id; no
---    title, description, location or attendee address is stored, and an event with no attendee the CRM knows is never
---    written at all.
+--    and can withdraw a row it created when the event is cancelled. The event is kept only as a keyed hash of its
+--    calendar identity; no title, description, location or attendee address is stored. A `withheld` row (no meeting id)
+--    records that an event must never get a row (marked Private, or on the NDA deny-list), so another member's calendar
+--    holding the same invite cannot write it either.
 
 create table public.gtm_team_calendars (
   member text not null check (member ~ '^[A-Z][A-Z0-9_]{1,19}$'),
@@ -25,15 +26,23 @@ create table public.gtm_team_calendars (
 create table public.gtm_calendar_meetings (
   member text not null check (member ~ '^[A-Z][A-Z0-9_]{1,19}$'),
   event_key text not null check (event_key ~ '^[A-Za-z0-9_-]{32}$'),
-  meeting_id uuid not null,
+  meeting_id uuid,
   -- created: the sync made the Twenty row (it may withdraw it); adopted: the row already existed (a Granola or hand-made
-  -- row for the same meeting), the sync links to it and never deletes it.
-  origin text not null check (origin in ('created', 'adopted')),
+  -- row for the same meeting), the sync links to it and withdraws it only for a privacy reason; withheld: no row, ever.
+  origin text not null check (origin in ('created', 'adopted', 'withheld')),
   start_at timestamptz not null,
-  kind text not null check (kind in ('CLIENT', 'DISCOVERY', 'PARTNER', 'OTHER')),
+  kind text check (kind is null or kind in ('CLIENT', 'DISCOVERY', 'PARTNER', 'OTHER')),
   removed_at timestamptz,
+  -- Why the row was withdrawn. Privacy reasons (private, deny_list, suppressed, erased), person_deleted and kept_manual are
+  -- final for every member; the others (declined, cancelled, no longer in the CRM...) are this member's calendar only.
+  removed_reason text check (removed_reason is null or removed_reason in
+    ('cancelled', 'declined', 'not_a_meeting', 'all_day', 'internal', 'large_event', 'no_crm_match', 'missing',
+     'private', 'deny_list', 'suppressed', 'erased', 'person_deleted', 'kept_manual')),
   updated_at timestamptz not null default now(),
-  primary key (member, event_key)
+  primary key (member, event_key),
+  constraint gtm_calendar_meetings_shape check (
+    (origin = 'withheld' and meeting_id is null and removed_at is not null and removed_reason in ('private', 'deny_list', 'suppressed'))
+    or (origin <> 'withheld' and meeting_id is not null and kind is not null))
 );
 create index gtm_calendar_meetings_meeting_idx on public.gtm_calendar_meetings (meeting_id);
 

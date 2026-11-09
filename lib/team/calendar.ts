@@ -21,21 +21,31 @@
 //   PARTNER; else OTHER. A suppressed person is never linked.
 // - The row's name is composed, "<date> meeting: <CRM company, else CRM person>", never calendar text.
 //
-// Rows and people's word:
+// Rows, people's word and privacy (review of #39):
+// - Rows are created with an id derived from the event (rowId), so a retried create, an overlapping run or a lost map
+//   write can never make a second row; an id already in Twenty's trash means a person deleted it, and it is not recreated.
 // - A meeting already in Twenty for the same owner within 3 hours, at the same company or person (a Granola or
-//   hand-made row), is adopted: linked, never edited or deleted by this sync.
-// - A row this sync created follows the event: time and name always; kind and links unless a person changed the kind
-//   (Kind source Manual, or a kind different from the automatic one).
-// - When the event is cancelled, declined, made private, or stops matching the CRM, a row the sync created is deleted
-//   (Twenty's soft delete, restorable), unless a person changed its kind; then it is kept and left alone. A row a person
-//   deleted is never recreated. More than BREAKER_MIN removals that are also more than BREAKER_SHARE of the member's live
-//   rows hold every removal for review instead.
-// - One meeting on two members' calendars is written once, for the member whose sync saw it first.
+//   hand-made row), is adopted: linked, and never edited or deleted except for a privacy reason.
+// - A row this sync created follows the event: time, date and count always; kind, links and the name's label unless a
+//   person changed the kind (Kind source Manual, or a kind different from the automatic one).
+// - Privacy reasons (the event marked Private, the NDA deny-list, a matched person whose queue is SUPPRESSED) withdraw the
+//   row whoever made it and whatever its kind: its fields are stripped ("Retracted meeting", no links, time or count) and
+//   it goes to Twenty's trash. They are final for every member: the map keeps a `withheld` row, so another member's copy
+//   of the invite is never written either. A matched person who is otherwise protected (unsubscribed, invalid) holds the
+//   meeting: no row is created, none is removed.
+// - Other reasons (cancelled, declined, no longer matching the CRM, gone from the listing) trash a row the sync created,
+//   unless a person changed its kind (then it is kept and no longer managed). They pass a breaker (the ledger's: more than
+//   3, or at least 2 and more than 20% of the member's live rows, in one run) that holds them until an owner applies the
+//   held removals on Pipeline > Meetings.
+// - Once a day a sweep re-checks every meeting row the member owns, of any age and whoever wrote it: a linked company on
+//   the deny-list, a linked person now SUPPRESSED or erased from the CRM, withdraws it (erasures behind the same breaker).
+// - Everything withdrawn is final. One meeting on two members' calendars (same iCalendar UID and instance) is written once.
+import { createHash, randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 import { must } from "../db";
 import { demoMode } from "../demo";
-import type { TwentyReader } from "../twenty";
+import { TwentyError, type TwentyReader } from "../twenty";
 import { domainOf, FREEMAIL } from "./classify";
 import { eventKey, openToken } from "./crypto";
 import { accessToken, gmailConfig, ignoredDomains, ReconnectError, selectAll, type GmailConfig } from "./mailbox";
@@ -48,10 +58,15 @@ export const calendarAad = (member: string, address: string) => `calendar:${memb
 export const TEAM_DOMAINS = ["vibrana.ai", "vibranahq.com", "john-ellison.com"];
 export const MAX_EXTERNAL = 15;
 export const LOOKBACK_DAYS = 60;
-export const LOOKAHEAD_DAYS = 21;
+export const LOOKAHEAD_DAYS = 90;
 export const ADOPT_WINDOW_MS = 3 * 3_600_000;
-export const BREAKER_MIN = 5;
-export const BREAKER_SHARE = 0.3;
+/** The ledger's breaker (meeting_ledger.breaker_tripped): more than `most`, or at least two and more than `share` of `of`. */
+export const breakerTripped = (n: number, of: number, most = 3, share = 0.2) => n > most || (n >= 2 && n > share * Math.max(of, 1));
+/** Twenty's `mtgOwner` options: a member code outside them cannot own a row. */
+export const OWNER_CODES = ["JOHN", "ABE"];
+export const PRIVACY = ["private", "deny_list", "suppressed", "erased"] as const;
+/** Map reasons that end the meeting for every member, not just the one whose calendar said so. */
+const FINAL_FOR_ALL = new Set<string>([...PRIVACY, "person_deleted", "kept_manual"]);
 const DAY = 86_400_000;
 const NOT_PEOPLE = /@(resource|group)\.calendar\.google\.com$|@group\.v\.calendar\.google\.com$|^(no-?reply|do-?not-?reply|notifications?|calendar-notification)[+@.\-_]/;
 const OPEN_STAGES = ["IDENTIFIED", "CONTACTED", "QUALIFIED", "PROPOSAL"];
@@ -90,11 +105,13 @@ export function denyList(env: Record<string, string | undefined> = process.env):
   const raw = env.MEETING_DENY_LIST?.trim();
   if (!raw) return null;
   try {
-    const d = JSON.parse(raw) as { domains?: unknown; organizations?: unknown };
-    if (!d || typeof d !== "object" || !Array.isArray(d.domains ?? []) || !Array.isArray(d.organizations ?? [])) return null;
+    const d = JSON.parse(raw) as Record<string, unknown>;
+    // Both lists must be present, and nothing else: a typo ("organisations") must not read as an empty list.
+    if (!d || typeof d !== "object" || Array.isArray(d) || !Array.isArray(d.domains) || !Array.isArray(d.organizations)) return null;
+    if (Object.keys(d).some((k) => k !== "domains" && k !== "organizations")) return null;
     return {
-      domains: ((d.domains ?? []) as unknown[]).map((x) => String(x).trim().toLowerCase().replace(/^@/, "")).filter(Boolean),
-      organizations: ((d.organizations ?? []) as unknown[]).map((x) => String(x).trim()).filter(Boolean),
+      domains: (d.domains as unknown[]).map((x) => String(x).trim().toLowerCase().replace(/^@/, "")).filter(Boolean),
+      organizations: (d.organizations as unknown[]).map((x) => String(x).trim()).filter(Boolean),
     };
   } catch { return null; }
 }
@@ -125,28 +142,35 @@ export function companyDenied(company: { name?: string | null; domain?: string |
 /* ------------------------------------------------------------------------------------------------ events */
 
 export type GEvent = {
-  id: string; status?: string; eventType?: string; visibility?: string;
-  start?: { dateTime?: string; date?: string };
+  id: string; iCalUID?: string; status?: string; eventType?: string; visibility?: string;
+  start?: { dateTime?: string; date?: string }; originalStartTime?: { dateTime?: string; date?: string };
   attendees?: { email?: string; displayName?: string; self?: boolean; resource?: boolean; responseStatus?: string }[];
 };
-export const EVENT_FIELDS = "nextPageToken,items(id,status,eventType,visibility,start,attendees(email,displayName,self,resource,responseStatus))";
+export const EVENT_FIELDS = "nextPageToken,items(id,iCalUID,status,eventType,visibility,start,originalStartTime,attendees(email,displayName,self,resource,responseStatus))";
 
-export type Candidate = { id: string; start: string; day: string; externals: string[]; names: string[] };
-export type Sorted = { live: Candidate[]; gone: { id: string; why: string }[] };
+/** The event's identity across calendars: its iCalendar UID (the same on every attendee's copy, whoever organized it), plus
+ *  the instance's original start for one occurrence of a series. Falls back to Google's id. */
+export const eventIdentity = (e: GEvent) =>
+  e.iCalUID ? `${e.iCalUID}${e.originalStartTime ? `|${e.originalStartTime.dateTime ?? e.originalStartTime.date ?? ""}` : ""}` : e.id;
+
+export type Candidate = { key: string; start: string; day: string; externals: string[]; names: string[] };
+export type Gone = { key: string; why: string };
+export type Sorted = { live: Candidate[]; gone: Gone[] };
 
 /** Pure: which events may be a meeting (live) and which must not have a row (gone, with the reason). `self` is the
  *  calendar's own address; `team` holds every team address; `ignored` the extra domains (TEAM_IGNORE_DOMAINS). */
-export function sortEvents(items: GEvent[], self: string, team: string[], ignored: string[]): Sorted {
+export function sortEvents(items: GEvent[], self: string, team: string[], ignored: string[], key: (identity: string) => string = eventKey): Sorted {
   const out: Sorted = { live: [], gone: [] };
   self = self.toLowerCase();
   const teamSet = new Set([self, ...team].map((a) => a.toLowerCase()));
-  const domains = [...TEAM_DOMAINS, ...ignored, domainOf(self)];
+  // The calendar's own domain is the team's, unless it is a freemail domain (a gmail calendar must not drop gmail guests).
+  const domains = [...TEAM_DOMAINS, ...ignored, ...(FREEMAIL.has(domainOf(self)) ? [] : [domainOf(self)])];
   for (const e of items) {
     if (!e?.id) continue;
-    const gone = (why: string) => out.gone.push({ id: e.id, why });
+    const k = key(eventIdentity(e));
+    const gone = (why: string) => out.gone.push({ key: k, why });
     if (e.status === "cancelled") { gone("cancelled"); continue; }
     if (e.eventType && e.eventType !== "default") { gone("not_a_meeting"); continue; }
-    if (e.visibility === "private" || e.visibility === "confidential") { gone("private"); continue; }
     const dt = e.start?.dateTime;
     if (!dt || Number.isNaN(Date.parse(dt))) { gone("all_day"); continue; }
     const attendees = e.attendees ?? [];
@@ -156,9 +180,11 @@ export function sortEvents(items: GEvent[], self: string, team: string[], ignore
       return email.includes("@") && !a.self && !a.resource && !teamSet.has(email) && !NOT_PEOPLE.test(email) && !onDomain(domainOf(email), domains);
     });
     if (!external.length) { gone("internal"); continue; }
+    // After the guest check, so only an event that could have been a meeting is withheld for every member.
+    if (e.visibility === "private" || e.visibility === "confidential") { gone("private"); continue; }
     if (external.length > MAX_EXTERNAL) { gone("large_event"); continue; }
     out.live.push({
-      id: e.id, start: new Date(dt).toISOString(), day: dt.slice(0, 10),
+      key: k, start: new Date(dt).toISOString(), day: dt.slice(0, 10),
       externals: [...new Set(external.map((a) => a.email!.trim().toLowerCase()))],
       names: external.map((a) => a.displayName ?? "").filter(Boolean),
     });
@@ -309,7 +335,21 @@ export const captureKey = (key: string) => `calendar:${key}`;
 /** A person's word (meeting_ledger.is_manual): Kind source Manual, or a kind different from the automatic one. */
 export const isManual = (r: MeetingRow) => r.mtgKindSource === "MANUAL" || (!!r.mtgAutoKind && r.mtgKind !== r.mtgAutoKind);
 
-export type MapRow = { member: string; event_key: string; meeting_id: string; origin: "created" | "adopted"; start_at: string; kind: Kind; removed_at: string | null };
+const ROW_NAMESPACE = Buffer.from("6f1c9d2e4b7a5c3e9a1d2f8e7b6c5a40", "hex");
+/** The Twenty row id for an event's meeting (a UUID v5 of its capture key): a second create of the same meeting is refused
+ *  by Twenty, so a retry, an overlapping run or a lost map write cannot make a duplicate (meeting_ledger.record_id). */
+export function rowId(key: string): string {
+  const h = createHash("sha1").update(ROW_NAMESPACE).update(`${captureKey(key)}|meeting`).digest();
+  h[6] = (h[6] & 0x0f) | 0x50;
+  h[8] = (h[8] & 0x3f) | 0x80;
+  const x = h.subarray(0, 16).toString("hex");
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
+}
+
+export type MapRow = {
+  member: string; event_key: string; meeting_id: string | null; origin: "created" | "adopted" | "withheld"; start_at: string;
+  kind: Kind | null; removed_at: string | null; removed_reason: string | null;
+};
 
 export type Want = { key: string; start: string; day: string; externals: number; choice: Choice };
 
@@ -322,30 +362,54 @@ export function rowFields(w: Want, member: string) {
   };
 }
 
-/** Pure: what to change on a row this sync created. Time, name and count always; kind and links only without a person's word. */
+/** Pure: what to change on a row this sync created. Time, date and count always; kind, links and the label only without a
+ *  person's word (a manual row keeps its own label, only the date in its name follows the event). */
 export function rowChanges(row: MeetingRow, want: ReturnType<typeof rowFields>): Partial<ReturnType<typeof rowFields>> {
-  const keys: (keyof typeof want)[] = isManual(row) ? ["name", "mtgAt", "mtgExternalCount"] : ["name", "mtgAt", "mtgExternalCount", "mtgKind", "mtgAutoKind", "mtgCompanyId", "mtgPersonId", "mtgOpportunityId"];
+  const manual = isManual(row);
+  const target = manual ? { ...want, name: (row.name ?? want.name).replace(/^\d{4}-\d{2}-\d{2}/, want.name.slice(0, 10)) } : want;
+  const keys: (keyof typeof want)[] = manual ? ["name", "mtgAt", "mtgExternalCount"] : ["name", "mtgAt", "mtgExternalCount", "mtgKind", "mtgAutoKind", "mtgCompanyId", "mtgPersonId", "mtgOpportunityId"];
   const out: Partial<typeof want> = {};
   for (const k of keys) {
     const have = row[k as keyof MeetingRow];
-    const same = k === "mtgAt" ? !!have && Date.parse(String(have)) === Date.parse(String(want[k])) : (have ?? null) === (want[k] ?? null);
-    if (!same) (out as Record<string, unknown>)[k] = want[k];
+    const same = k === "mtgAt" ? !!have && Date.parse(String(have)) === Date.parse(String(target[k])) : (have ?? null) === (target[k] ?? null);
+    if (!same) (out as Record<string, unknown>)[k] = target[k];
   }
   return out;
 }
 
-/** Pure: an existing row for the same meeting (same owner, within ADOPT_WINDOW_MS, same company or person). */
+/** Pure: an existing row for the same meeting (same owner, within ADOPT_WINDOW_MS, same company or person), never a row
+ *  this sync made for another event, a withdrawn row, or one already mapped. */
 export function adoptable(rows: MeetingRow[], member: string, w: Want, taken: Set<string>): MeetingRow | null {
   const t = Date.parse(w.start);
-  const hits = rows.filter((r) => r.mtgOwner === member && r.name !== RETRACTED && !taken.has(r.id) && r.mtgAt && Math.abs(Date.parse(r.mtgAt) - t) <= ADOPT_WINDOW_MS &&
+  const hits = rows.filter((r) => r.mtgOwner === member && r.name !== RETRACTED && !taken.has(r.id) && !(r.mtgCaptureKey ?? "").startsWith("calendar:") &&
+    r.mtgAt && Math.abs(Date.parse(r.mtgAt) - t) <= ADOPT_WINDOW_MS &&
     ((w.choice.company && r.mtgCompanyId === w.choice.company.id) || (w.choice.person && r.mtgPersonId === w.choice.person.id)));
   return hits.sort((a, b) => Math.abs(Date.parse(a.mtgAt!) - t) - Math.abs(Date.parse(b.mtgAt!) - t))[0] ?? null;
 }
 
+/** What a privacy withdrawal leaves before the row goes to the trash: nothing a person could read back (meeting_ledger.retract). */
+const STRIPPED = { name: RETRACTED, mtgKind: "OTHER", mtgAutoKind: "OTHER", mtgCompanyId: null, mtgPersonId: null, mtgOpportunityId: null, mtgAt: null, mtgExternalCount: null };
+
+/** An error to store: Twenty's own messages can echo a filter value (an attendee's address), so only its codes are kept. */
+export function safeError(e: unknown): string {
+  if (e instanceof TwentyError) {
+    const codes = [...new Set((Array.isArray(e.errors) ? e.errors : []).map((x: { extensions?: { code?: string } }) => x?.extensions?.code).filter(Boolean))];
+    return `Twenty refused a request (${codes.join(", ") || "no code"})`;
+  }
+  return String((e as Error)?.message ?? e).replace(/[^\s@]+@[^\s@]+\.[A-Za-z]{2,}/g, "<address>").slice(0, 300);
+}
+
 /* ------------------------------------------------------------------------------------------------ sync */
 
-export type CalendarResult = { events: number; business: number; created: number; updated: number; adopted: number; removed: number; kept: number; held?: number; error?: string };
+export type CalendarResult = {
+  events: number; business: number; created: number; updated: number; adopted: number; removed: number; kept: number;
+  withheld?: number; held?: number; swept?: number; error?: string;
+};
 export type CalendarRun = { skipped?: string; calendars?: Record<string, CalendarResult> };
+export const LEASE = "pipeline.calendar";
+export const heldKey = (member: string) => `calendar.held.${member.toLowerCase()}`;
+export const releaseKey = (member: string) => `calendar.release.${member.toLowerCase()}`;
+export const sweepKey = (member: string) => `calendar.sweep.${member.toLowerCase()}`;
 
 type Connection = { member: string; address: string; token_ciphertext: string };
 
@@ -357,6 +421,15 @@ export async function syncCalendars(db: SupabaseClient, reader: TwentyReader, op
   if (!deny) return { skipped: "MEETING_DENY_LIST is not set or malformed: no meeting is written without the NDA deny-list" };
   const connections = must(await db.from("gtm_team_calendars").select("member,address,token_ciphertext").order("member"), "calendar connections") as Connection[];
   if (!connections.length) return { skipped: "no calendar connected" };
+  // One sync at a time: Vercel can deliver a cron twice, and two runs must not race on the same rows.
+  const holder = randomUUID();
+  const lease = await db.rpc("gtm_take_lease", { p_job: LEASE, p_holder: holder, p_seconds: 300 });
+  if (lease.error) return { skipped: `the calendar lease could not be taken (${lease.error.code ?? "error"})` };
+  if (lease.data !== true) return { skipped: "another calendar sync holds the lease" };
+  try { return await syncLeased(db, reader, connections, deny, cfg, opts); } finally { await db.rpc("gtm_release_lease", { p_job: LEASE, p_holder: holder }); }
+}
+
+async function syncLeased(db: SupabaseClient, reader: TwentyReader, connections: Connection[], deny: DenyList, cfg: GmailConfig, opts: { now?: Date; deadline?: number; fetcher?: typeof fetch }): Promise<CalendarRun> {
   const now = opts.now ?? new Date();
   const timeMin = new Date(now.getTime() - LOOKBACK_DAYS * DAY).toISOString(), timeMax = new Date(now.getTime() + LOOKAHEAD_DAYS * DAY).toISOString();
   const mailboxes = must(await db.from("gtm_team_mailboxes").select("address"), "team mailboxes") as { address: string }[];
@@ -364,34 +437,59 @@ export async function syncCalendars(db: SupabaseClient, reader: TwentyReader, op
     ...teamMembers().flatMap((m) => [m.authEmail, ...m.mailboxes])].map((a) => a.toLowerCase()))];
   let opps: CrmOpp[] | null = null;
   const run: CalendarRun = { calendars: {} };
-  for (const c of connections) {
+  for (const [i, c] of connections.entries()) {
+    // A fair share of what is left, so a slow first calendar cannot starve the next one.
+    if (opts.deadline != null) reader.setDeadline(Date.now() + Math.max(5_000, (opts.deadline - Date.now()) / (connections.length - i)));
     const label = `${c.member}:${c.address}`;
     const result: CalendarResult = { events: 0, business: 0, created: 0, updated: 0, adopted: 0, removed: 0, kept: 0 };
-    let error: string | null = null;
     try {
-      const token = await accessToken(cfg, openToken(c.token_ciphertext, calendarAad(c.member, c.address)), opts.fetcher ?? fetch);
+      if (!OWNER_CODES.includes(c.member)) throw new Error(`${c.member} is not an owner option of Twenty's meeting object; add it to mtgOwner first`);
+      let token: string;
+      try { token = await accessToken(cfg, openToken(c.token_ciphertext, calendarAad(c.member, c.address)), opts.fetcher ?? fetch); } catch (e) {
+        if (e instanceof ReconnectError) throw new ReconnectError("Google no longer accepts the stored calendar connection. Reconnect the calendar.");
+        throw e;
+      }
       const items = await listEvents(token, timeMin, timeMax, opts.fetcher ?? fetch, opts.deadline);
       result.events = items.length;
       opps ??= await reader.all<CrmOpp>("opportunities", "id stage companyId", null, "OpportunityFilterInput", 100, 2_000);
       await syncOne(db, reader, c.member, c.address, items, { team, ignored: ignoredDomains(), deny, opps, timeMin, timeMax, now }, result);
+      await sweep(db, reader, c.member, deny, now, result);
     } catch (e) {
-      error = (e as Error).message.slice(0, 500);
-      result.error = error;
+      result.error = safeError(e);
     }
     run.calendars![label] = result;
-    must(await db.from("gtm_team_calendars").update({ last_sync_at: now.toISOString(), last_error: error, last_result: result }).eq("member", c.member).eq("address", c.address), "save calendar sync");
+    must(await db.from("gtm_team_calendars").update({ last_sync_at: now.toISOString(), last_error: result.error ?? null, last_result: result }).eq("member", c.member).eq("address", c.address), "save calendar sync");
   }
+  if (opts.deadline != null) reader.setDeadline(opts.deadline);
   return run;
 }
 
 type Ctx = { team: string[]; ignored: string[]; deny: DenyList; opps: CrmOpp[]; timeMin: string; timeMax: string; now: Date };
 
+const readIds = async (reader: TwentyReader, ids: string[], trash: boolean) => {
+  const out: MeetingRow[] = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const f = trash ? { and: [{ id: { in: ids.slice(i, i + 50) } }, { deletedAt: { is: "NOT_NULL" } }] } : { id: { in: ids.slice(i, i + 50) } };
+    out.push(...await reader.all<MeetingRow>("meetings", ROW_FIELDS, f, "MeetingFilterInput", 100, 100));
+  }
+  return out;
+};
+async function withdraw(reader: TwentyReader, id: string, privacy: boolean) {
+  if (privacy) await reader.read("mutation($id:UUID!,$d:MeetingUpdateInput!){ updateMeeting(id:$id, data:$d) { id } }", { id, d: STRIPPED });
+  await reader.read("mutation($id:UUID!){ deleteMeeting(id:$id) { id } }", { id });
+}
+const getState = async <T>(db: SupabaseClient, key: string) =>
+  ((must(await db.from("gtm_sync_state").select("value").eq("key", key), `read ${key}`) as { value: T }[])[0]?.value ?? null);
+const setState = async (db: SupabaseClient, key: string, value: unknown, now: Date) =>
+  must(await db.from("gtm_sync_state").upsert({ key, value, updated_at: now.toISOString() }, { onConflict: "key" }), `save ${key}`);
+
 async function syncOne(db: SupabaseClient, reader: TwentyReader, member: string, address: string, items: GEvent[], ctx: Ctx, result: CalendarResult) {
   const sorted = sortEvents(items, address, ctx.team, ctx.ignored);
-  const gone = new Map(sorted.gone.map((g) => [eventKey(g.id), g.why]));
+  const seen = new Set([...sorted.live.map((e) => e.key), ...sorted.gone.map((g) => g.key)]);
+  const gone = new Map(sorted.gone.map((g) => [g.key, g.why]));
   const live = sorted.live.filter((e) => {
     if (!eventDenied(e.externals, e.names, ctx.deny)) return true;
-    gone.set(eventKey(e.id), "deny_list");
+    gone.set(e.key, "deny_list");
     return false;
   });
   const emails = [...new Set(live.flatMap((e) => e.externals))];
@@ -399,77 +497,160 @@ async function syncOne(db: SupabaseClient, reader: TwentyReader, member: string,
   const domains = [...new Set(emails.filter((e) => !(byEmail.get(e) ?? []).length).map(domainOf))];
   const byDomain = domains.length ? await companiesByDomain(reader, domains) : new Map<string, CrmCompany[]>();
   const wants: Want[] = [];
+  const holds = new Set<string>();
   for (const e of live) {
-    const key = eventKey(e.id);
+    const people = e.externals.flatMap((x) => byEmail.get(x) ?? []);
+    // Every company the meeting touches, not just the chosen one: a denied company on any attendee excludes it.
+    const companies = [...people.map((p) => (p.company ? { name: p.company.name, domain: hostOf(p.company.domainName?.primaryLinkUrl) } : null)),
+      ...e.externals.flatMap((x) => byDomain.get(domainOf(x)) ?? []).map((c) => ({ name: c.name, domain: hostOf(c.domainName?.primaryLinkUrl) }))];
+    if (companies.some((co) => companyDenied(co, ctx.deny))) { gone.set(e.key, "deny_list"); continue; }
+    if (people.some(suppressed)) { gone.set(e.key, "suppressed"); continue; }
+    // Capture's PROTECTED hold: someone who opted out (or is invalid) is in it; no row is created and none is removed.
+    if (people.some(protectedPerson)) { holds.add(e.key); continue; }
     const choice = choose(e.externals, byEmail, byDomain, ctx.opps);
-    if (!choice) { gone.set(key, "no_crm_match"); continue; }
-    // A matched person whose company is on the deny-list excludes the meeting even from a personal address.
-    const denied = [...e.externals.flatMap((x) => byEmail.get(x) ?? []).map((p) => p.company ? { name: p.company.name, domain: hostOf(p.company.domainName?.primaryLinkUrl) } : null), choice.company]
-      .some((co) => companyDenied(co, ctx.deny));
-    if (denied) { gone.set(key, "deny_list"); continue; }
-    wants.push({ key, start: e.start, day: e.day, externals: e.externals.length, choice });
+    if (!choice) { gone.set(e.key, "no_crm_match"); continue; }
+    wants.push({ key: e.key, start: e.start, day: e.day, externals: e.externals.length, choice });
   }
   result.business = wants.length;
 
-  const maps = await selectAll<MapRow>((from, to) => db.from("gtm_calendar_meetings").select("member,event_key,meeting_id,origin,start_at,kind,removed_at").order("event_key").range(from, to), "meeting map");
+  const maps = await selectAll<MapRow>((from, to) => db.from("gtm_calendar_meetings").select("member,event_key,meeting_id,origin,start_at,kind,removed_at,removed_reason").order("event_key").range(from, to), "meeting map");
   const mine = new Map(maps.filter((m) => m.member === member).map((m) => [m.event_key, m]));
-  const others = new Set(maps.filter((m) => m.member !== member && !m.removed_at).map((m) => m.event_key));
+  const claimed = new Set(maps.filter((m) => m.member !== member && (!m.removed_at || FINAL_FOR_ALL.has(m.removed_reason ?? ""))).map((m) => m.event_key));
+  // A mapped meeting whose event is in the window but no longer listed was deleted or moved past the window.
+  for (const m of mine.values()) {
+    const t = Date.parse(m.start_at);
+    if (!m.removed_at && m.origin === "created" && !seen.has(m.event_key) && t >= Date.parse(ctx.timeMin) && t <= Date.parse(ctx.timeMax)) gone.set(m.event_key, "missing");
+  }
   const lo = new Date(Date.parse(ctx.timeMin) - DAY).toISOString(), hi = new Date(Date.parse(ctx.timeMax) + DAY).toISOString();
   const rows = await reader.all<MeetingRow>("meetings", ROW_FIELDS, { and: [{ mtgOwner: { eq: member } }, { mtgAt: { gte: lo } }, { mtgAt: { lte: hi } }] }, "MeetingFilterInput", 100, 2_000);
-  const mappedIds = [...mine.values()].filter((m) => !m.removed_at).map((m) => m.meeting_id).filter((id) => !rows.some((r) => r.id === id));
-  for (let i = 0; i < mappedIds.length; i += 50) rows.push(...await reader.all<MeetingRow>("meetings", ROW_FIELDS, { id: { in: mappedIds.slice(i, i + 50) } }, "MeetingFilterInput", 100, 100));
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const taken = new Set(maps.filter((m) => !m.removed_at).map((m) => m.meeting_id));
+  const wanted = (ids: string[]) => ids.filter((id) => !byId.has(id));
+  for (const r of await readIds(reader, wanted([...mine.values()].filter((m) => !m.removed_at && m.meeting_id).map((m) => m.meeting_id!)), false)) byId.set(r.id, r);
+  const fresh = wants.filter((w) => !mine.has(w.key) && !claimed.has(w.key)).map((w) => rowId(w.key));
+  for (const r of await readIds(reader, wanted(fresh), false)) byId.set(r.id, r);
+  const trashed = new Set((await readIds(reader, wanted(fresh), true)).map((r) => r.id));
+  const taken = new Set(maps.filter((m) => !m.removed_at && m.meeting_id).map((m) => m.meeting_id!));
   const stamp = ctx.now.toISOString();
-  const save = async (m: Omit<MapRow, "removed_at"> & { removed_at?: string | null }) =>
+  const save = async (m: Omit<MapRow, "removed_at" | "removed_reason"> & { removed_at?: string | null; removed_reason?: string | null }) =>
     must(await db.from("gtm_calendar_meetings").upsert({ ...m, updated_at: stamp }, { onConflict: "member,event_key" }), "save meeting map");
+  const close = (m: MapRow, reason: string) => save({ ...m, removed_at: stamp, removed_reason: reason });
+
+  // Privacy first, never behind the breaker: the row goes whoever made it and whatever its kind.
+  for (const [key, why] of gone) {
+    if (!(PRIVACY as readonly string[]).includes(why)) continue;
+    const m = mine.get(key);
+    if (!m) {
+      await save({ member, event_key: key, meeting_id: null, origin: "withheld", start_at: stamp, kind: null, removed_at: stamp, removed_reason: why });
+      result.withheld = (result.withheld ?? 0) + 1;
+      continue;
+    }
+    if (m.removed_at) continue;
+    if (m.meeting_id && byId.has(m.meeting_id)) { await withdraw(reader, m.meeting_id, true); result.removed++; }
+    await close(m, why);
+  }
+
+  // Other withdrawals: only rows this sync created, behind the ledger's breaker unless an owner released this exact set.
+  const pending = [...mine.values()].filter((m) => !m.removed_at && m.origin === "created" && gone.has(m.event_key) && !(PRIVACY as readonly string[]).includes(gone.get(m.event_key)!));
+  const toRemove: MapRow[] = [];
+  for (const m of pending) {
+    if (!m.meeting_id || !byId.has(m.meeting_id)) await close(m, "person_deleted");
+    else toRemove.push(m);
+  }
+  const liveRows = [...mine.values()].filter((m) => !m.removed_at && m.origin === "created").length;
+  const release = await getState<{ keys?: string[] }>(db, releaseKey(member));
+  const released = new Set(release?.keys ?? []);
+  if (breakerTripped(toRemove.length, liveRows) && !toRemove.every((m) => released.has(m.event_key))) {
+    result.held = toRemove.length;
+    result.error = `${toRemove.length} meetings would be withdrawn at once (cancelled or no longer in the CRM); held until applied on Pipeline > Meetings`;
+    await setState(db, heldKey(member), { keys: toRemove.map((m) => m.event_key), at: stamp }, ctx.now);
+  } else {
+    for (const m of toRemove) {
+      const row = byId.get(m.meeting_id!)!;
+      if (isManual(row)) { result.kept++; await close(m, "kept_manual"); continue; }
+      await withdraw(reader, row.id, false);
+      await close(m, gone.get(m.event_key)!);
+      result.removed++;
+    }
+    if (release) must(await db.from("gtm_sync_state").delete().eq("key", releaseKey(member)), "clear release");
+    must(await db.from("gtm_sync_state").delete().eq("key", heldKey(member)), "clear held");
+  }
 
   for (const w of wants) {
     const map = mine.get(w.key);
-    if (map?.removed_at) continue;                       // final: a row a person deleted, or one withdrawn earlier
-    if (!map && others.has(w.key)) continue;             // already counted for another member
+    if (map?.removed_at) continue;                       // final: withdrawn, withheld, or deleted by a person
+    if (!map && claimed.has(w.key)) continue;            // another member's calendar holds this meeting
+    if (holds.has(w.key)) continue;
     const want = rowFields(w, member);
     if (map) {
-      const row = byId.get(map.meeting_id);
-      if (!row) { await save({ ...map, removed_at: stamp }); continue; }   // a person deleted it: never recreated
-      if (map.origin === "adopted") continue;
-      const patch = rowChanges(row, want);
-      if (Object.keys(patch).length) {
-        await reader.read("mutation($id:UUID!,$d:MeetingUpdateInput!){ updateMeeting(id:$id, data:$d) { id } }", { id: row.id, d: patch });
-        result.updated++;
+      const row = map.meeting_id ? byId.get(map.meeting_id) : undefined;
+      if (!row) { await close(map, "person_deleted"); continue; }   // a person deleted it: never recreated
+      if (map.origin === "created") {
+        const patch = rowChanges(row, want);
+        if (Object.keys(patch).length) {
+          await reader.read("mutation($id:UUID!,$d:MeetingUpdateInput!){ updateMeeting(id:$id, data:$d) { id } }", { id: row.id, d: patch });
+          result.updated++;
+        }
       }
-      if (map.start_at !== w.start || map.kind !== w.choice.kind) await save({ ...map, start_at: w.start, kind: w.choice.kind });
+      if (Date.parse(map.start_at) !== Date.parse(w.start) || map.kind !== w.choice.kind) await save({ ...map, start_at: w.start, kind: w.choice.kind });
       continue;
     }
-    // A row this sync created whose map write was lost: recover it by its capture key instead of creating a second one.
-    const own = rows.find((r) => r.mtgCaptureKey === want.mtgCaptureKey);
-    if (own) { await save({ member, event_key: w.key, meeting_id: own.id, origin: "created", start_at: w.start, kind: w.choice.kind }); taken.add(own.id); continue; }
+    const id = rowId(w.key);
+    const record = (meetingId: string, origin: "created" | "adopted") => save({ member, event_key: w.key, meeting_id: meetingId, origin, start_at: w.start, kind: w.choice.kind });
+    if (byId.has(id)) { await record(id, "created"); taken.add(id); continue; }            // made by a run whose map write was lost
+    if (trashed.has(id)) { await save({ member, event_key: w.key, meeting_id: id, origin: "created", start_at: w.start, kind: w.choice.kind, removed_at: stamp, removed_reason: "person_deleted" }); continue; }
     const existing = adoptable(rows, member, w, taken);
-    if (existing) {
-      await save({ member, event_key: w.key, meeting_id: existing.id, origin: "adopted", start_at: w.start, kind: w.choice.kind });
-      taken.add(existing.id);
-      result.adopted++;
-      continue;
+    if (existing) { await record(existing.id, "adopted"); taken.add(existing.id); result.adopted++; continue; }
+    try {
+      await reader.read("mutation($d:MeetingCreateInput!){ createMeeting(data:$d) { id } }", { d: { id, ...want } });
+    } catch (e) {
+      // A refused create (the id exists: an earlier attempt committed) is settled by reading the id back.
+      if ((await readIds(reader, [id], false)).length) { await record(id, "created"); taken.add(id); continue; }
+      if ((await readIds(reader, [id], true)).length) { await save({ member, event_key: w.key, meeting_id: id, origin: "created", start_at: w.start, kind: w.choice.kind, removed_at: stamp, removed_reason: "person_deleted" }); continue; }
+      throw e;
     }
-    const made = await reader.read<{ createMeeting: { id: string } }>("mutation($d:MeetingCreateInput!){ createMeeting(data:$d) { id } }", { d: want });
-    await save({ member, event_key: w.key, meeting_id: made.createMeeting.id, origin: "created", start_at: w.start, kind: w.choice.kind });
-    taken.add(made.createMeeting.id);
+    await record(id, "created");
+    taken.add(id);
     result.created++;
   }
+}
 
-  // Withdrawals: only rows this sync created, only for events seen and judged gone in this listing.
-  const removals = [...mine.values()].filter((m) => !m.removed_at && m.origin === "created" && gone.has(m.event_key));
-  const liveRows = [...mine.values()].filter((m) => !m.removed_at && m.origin === "created").length;
-  if (removals.length > BREAKER_MIN && removals.length > BREAKER_SHARE * liveRows) {
-    result.held = removals.length;
-    result.error = `held ${removals.length} removals of ${liveRows} rows for review (breaker)`;
-    return;
+/** Once a day: every meeting row the member owns, of any age and whoever wrote it, against the deny-list and the CRM's
+ *  privacy state (meeting_ledger's daily checks, which retired with Granola capture). */
+async function sweep(db: SupabaseClient, reader: TwentyReader, member: string, deny: DenyList, now: Date, result: CalendarResult) {
+  const day = now.toISOString().slice(0, 10);
+  if ((await getState<{ day?: string }>(db, sweepKey(member)))?.day === day) return;
+  const rows = (await reader.all<MeetingRow>("meetings", ROW_FIELDS, { mtgOwner: { eq: member } }, "MeetingFilterInput", 100, 5_000)).filter((r) => r.name !== RETRACTED);
+  const personIds = [...new Set(rows.map((r) => r.mtgPersonId).filter((x): x is string => !!x))];
+  const companyIds = [...new Set(rows.map((r) => r.mtgCompanyId).filter((x): x is string => !!x))];
+  const people = new Map<string, CrmPerson>(), trashedPeople = new Set<string>(), companies = new Map<string, CrmCompany>();
+  for (let i = 0; i < personIds.length; i += 50) {
+    const ids = personIds.slice(i, i + 50);
+    for (const p of await reader.all<CrmPerson>("people", "id gtmQueue", { id: { in: ids } }, "PersonFilterInput", 100, 100)) people.set(p.id, p);
+    const missing = ids.filter((id) => !people.has(id));
+    if (missing.length) for (const p of await reader.all<{ id: string }>("people", "id", { and: [{ id: { in: missing } }, { deletedAt: { is: "NOT_NULL" } }] }, "PersonFilterInput", 100, 100)) trashedPeople.add(p.id);
   }
-  for (const m of removals) {
-    const row = byId.get(m.meeting_id);
-    if (row && isManual(row)) { result.kept++; await save({ ...m, removed_at: stamp }); continue; }
-    if (row) await reader.read("mutation($id:UUID!){ deleteMeeting(id:$id) { id } }", { id: row.id });
-    await save({ ...m, removed_at: stamp });
-    result.removed++;
+  for (let i = 0; i < companyIds.length; i += 50)
+    for (const c of await reader.all<CrmCompany>("companies", "id name domainName { primaryLinkUrl }", { id: { in: companyIds.slice(i, i + 50) } }, "CompanyFilterInput", 100, 100)) companies.set(c.id, c);
+  const hits: { row: MeetingRow; why: string }[] = [], erased: MeetingRow[] = [];
+  for (const r of rows) {
+    const co = r.mtgCompanyId ? companies.get(r.mtgCompanyId) : undefined;
+    if (co && companyDenied({ name: co.name, domain: hostOf(co.domainName?.primaryLinkUrl) }, deny)) { hits.push({ row: r, why: "deny_list" }); continue; }
+    if (!r.mtgPersonId) continue;
+    const p = people.get(r.mtgPersonId);
+    if (p && suppressed(p)) hits.push({ row: r, why: "suppressed" });
+    else if (!p && !trashedPeople.has(r.mtgPersonId)) erased.push(r);
   }
+  // Erasure is inferred from absence, so a bad read must not empty the ledger: the breaker holds it.
+  if (breakerTripped(erased.length, rows.length)) result.error = `${erased.length} meetings link people the CRM no longer has; held (breaker)`;
+  else hits.push(...erased.map((row) => ({ row, why: "erased" })));
+  if (hits.length) {
+    const maps = await selectAll<MapRow>((from, to) => db.from("gtm_calendar_meetings").select("member,event_key,meeting_id,origin,start_at,kind,removed_at,removed_reason").order("event_key").range(from, to), "meeting map");
+    for (const { row, why } of hits) {
+      await withdraw(reader, row.id, true);
+      for (const m of maps.filter((m) => m.meeting_id === row.id && !m.removed_at))
+        must(await db.from("gtm_calendar_meetings").upsert({ ...m, removed_at: now.toISOString(), removed_reason: why, updated_at: now.toISOString() }, { onConflict: "member,event_key" }), "save meeting map");
+    }
+  }
+  result.swept = hits.length;
+  await setState(db, sweepKey(member), { day, withdrawn: hits.length }, now);
 }

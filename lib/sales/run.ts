@@ -42,7 +42,7 @@ export function runProblems(stored: { at?: string; result?: PipelineRun } | null
   if (r.outcomes && typeof r.outcomes === "object" && r.outcomes.skipped) out.push(`Inbox outcomes: ${r.outcomes.skipped}`);
   if (r.calendar && typeof r.calendar === "object") {
     // "no calendar connected" is a state, not a failure; a missing client or deny-list is.
-    if (r.calendar.skipped && !/no calendar connected|demo mode/.test(r.calendar.skipped)) out.push(`Calendar meetings: ${r.calendar.skipped}`);
+    if (r.calendar.skipped && !/no calendar connected|demo mode|holds the lease/.test(r.calendar.skipped)) out.push(`Calendar meetings: ${r.calendar.skipped}`);
     for (const [cal, v] of Object.entries(r.calendar.calendars ?? {})) if (v.error) out.push(`Calendar ${cal.split(":")[0]}: ${v.error}`);
   }
   if (r.web && typeof r.web === "object") {

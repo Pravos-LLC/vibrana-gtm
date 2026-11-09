@@ -15,7 +15,7 @@ import { viewer } from "@/lib/team/connect";
 import { gmailConfig } from "@/lib/team/mailbox";
 import { denyList, type CalendarResult } from "@/lib/team/calendar";
 import { teamMembers } from "@/lib/team/members";
-import { connectCalendar, disconnectCalendar } from "./actions";
+import { applyHeldRemovals, connectCalendar, disconnectCalendar } from "./actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -35,6 +35,8 @@ const CALENDAR_STATUS: Record<string, string> = {
   "not-member": "Your login is not a configured team member, so there is no calendar to connect.",
   "save-failed": "The connection could not be saved. Try again.",
   "disconnect-failed": "The calendar could not be disconnected. Try again.",
+  released: "The held removals will be applied on the next hourly run.",
+  "nothing-held": "There were no held removals to apply.",
 };
 type CalendarRow = { member: string; address: string; connected_at: string; last_sync_at: string | null; last_error: string | null; last_result: CalendarResult | null };
 const when = (iso: string) => new Date(iso).toLocaleString("en-US", { timeZone: "Asia/Makassar", dateStyle: "medium", timeStyle: "short" });
@@ -96,6 +98,7 @@ export default async function Meetings({ searchParams }: { searchParams: Promise
                     <p className="text-ink-3">Connected {r.connected_at.slice(0, 10)}. {r.last_sync_at ? `Last read ${when(r.last_sync_at)} (Bali).` : "Not read yet: the pipeline job runs hourly."}
                       {r.last_result && !r.last_result.error ? ` ${r.last_result.events} events, ${r.last_result.business} with someone in the CRM; ${r.last_result.created} added, ${r.last_result.adopted} matched to existing records, ${r.last_result.removed} withdrawn.` : ""}</p>
                     {r.last_error && <p className="mt-1 text-red-strong">{r.last_error}</p>}
+                    {r.last_result?.held ? <form action={applyHeldRemovals} className="mt-3"><input type="hidden" name="member" value={r.member} /><Button type="submit" variant="secondary">Apply {r.last_result.held} held removals</Button></form> : null}
                     {v?.member?.code === m.code && <form action={disconnectCalendar} className="mt-3"><input type="hidden" name="address" value={r.address} /><Button type="submit" variant="secondary">Disconnect</Button></form>}
                   </Card>
                 )) : <p>Not connected.</p>}
@@ -112,10 +115,11 @@ export default async function Meetings({ searchParams }: { searchParams: Promise
       <Section title="What is read, and how a meeting gets its kind">
         <ul className="list-disc space-y-1 pl-5 text-sm text-ink-2">
           <li>Permission asked: Google&apos;s read-only calendar scope and your email address. It cannot create, change or delete anything.</li>
-          <li>Read for each event: its time, type, privacy setting and who is invited (address, name, response). Titles, descriptions, locations and call links are never fetched. Names are used only to check the NDA deny-list and are not kept.</li>
-          <li>An event becomes a meeting record when someone invited is in the CRM (or their company&apos;s website domain is), and it is not cancelled, declined, all-day, marked Private, internal, or a webinar of more than 15 guests. The record&apos;s name is the date and the CRM company or person, never the event title. Mark an event Private in Google Calendar to keep it out.</li>
+          <li>Read for each event: its time, type, privacy setting, its calendar identity and who is invited (address, name, response). Titles, descriptions, locations and call links are never fetched. Names are used only to check the NDA deny-list and are not kept.</li>
+          <li>An event becomes a meeting record when someone invited is in the CRM (or their company&apos;s website domain is), and it is not cancelled, declined, all-day, internal, or a webinar of more than 15 guests. The record&apos;s name is the date and the CRM company or person, never the event title.</li>
+          <li>Keep a meeting out: mark the event Private in Google Calendar. It is then never recorded, from your calendar or anyone else&apos;s, and any record already made is withdrawn. The same happens for the NDA deny-list and for anyone suppressed in the CRM. Someone who unsubscribed holds the meeting: nothing is added or removed.</li>
           <li>The company has a won deal, or a contact is a client or former client: client. An open deal or an eligible prospect: discovery. A partner contact: partner. Otherwise: other. A meeting already recorded (from Granola or by hand) at the same company within three hours is matched, not added again.</li>
-          <li>When an event is cancelled or stops qualifying, the record it created is moved to Twenty&apos;s trash, unless you changed its kind. Wrong kind? Change it in Twenty; a kind you set is never overwritten.</li>
+          <li>When an event is cancelled or stops qualifying, the record it created goes to Twenty&apos;s trash, unless you changed its kind (then it stays). If more than three would go at once, they wait for &quot;Apply held removals&quot; here. A record you deleted is never recreated. Once a day every meeting record is re-checked against the deny-list and the CRM.</li>
         </ul>
       </Section>
     </Shell>

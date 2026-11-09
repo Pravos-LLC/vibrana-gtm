@@ -19,7 +19,12 @@ export async function GET(request: Request) {
     return NextResponse.redirect(`${await origin()}${page}${status}`, { status: 303 });
   };
   const url = new URL(request.url);
-  if (url.searchParams.get("error")) return back("declined");
+  if (url.searchParams.get("error")) {
+    // Google returns the state on a refusal too: a verified one says which page the member came from.
+    const st = verifyState(url.searchParams.get("state") ?? "", (await cookies()).get(NONCE_COOKIE)?.value);
+    if (st?.purpose === "calendar") page = "/pipeline/meetings?calendar=";
+    return back("declined");
+  }
   const code = url.searchParams.get("code"), state = url.searchParams.get("state");
   if (!code || !state || code.length > 2048 || state.length > 2048) return back("invalid");
   const jar = await cookies();
