@@ -84,6 +84,7 @@ function probe(t: (typeof TABLES)[number]): { row: Record<string, unknown>; key:
     case "gtm_email_sync_ops": { const k = `probe:${id.replace(/[^a-z0-9]/g, "")}`; return { row: { op_key: k, destination: "origami", action: "exclusion_upsert", person_id: randomUUID(), reason: "PROBE", policy_version: "probe", observed_at: new Date().toISOString() }, key: ["op_key", k], patch: { attempts: 1 } }; }
     case "gtm_email_incidents": { const k = `probe:${id.replace(/[^a-z0-9]/g, "")}`; return { row: { incident_key: k, kind: "probe", severity: "warning", summary: "probe" }, key: ["incident_key", k], patch: { summary: "changed" } }; }
     case "gtm_dmarc_reports": { const k = randomUUID().replace(/-/g, "").repeat(2); return { row: { report_key: k, reporter: "probe", domain: "probe.example.com", begin_at: "2001-01-01T00:00:00Z", end_at: "2001-01-02T00:00:00Z", messages: 1, dmarc_pass: 1, dkim_aligned: 1, spf_aligned: 1 }, key: ["report_key", k], patch: { messages: 2 } }; }
+    case "gtm_crm_people": { const u = randomUUID(); return { row: { id: u, created_at: "2001-01-01T00:00:00Z", updated_at: "2001-01-01T00:00:00Z" }, key: ["id", u], patch: { has_email: true } }; }
     case "gtm_job_leases": { const j = `probe-${id.replace(/[^a-z0-9]/g, "").slice(0, 40)}`; return { row: { job: j, holder: "probe", expires_at: "2001-01-01T00:00:00Z" }, key: ["job", j], patch: { holder: "changed" } }; }
     case "gtm_web_daily": return { row: { site: "probe.example.com", day: "2001-01-01", visitors: 1, pageviews: 1 }, key: ["site", "probe.example.com"], patch: { visitors: 2 } };
     case "gtm_sync_state": { const k = id.replace(/-/g, "_"); return { row: { key: k, value: {} }, key: ["key", k], patch: { value: { x: 1 } } }; }
@@ -136,6 +137,9 @@ const SERVICE_RPCS: Record<string, { anon: boolean; authenticated: boolean; serv
   // Job overlap protection (VIB-508): the cron's service key only.
   gtm_release_lease: { anon: false, authenticated: false, service: true },
   gtm_take_lease: { anon: false, authenticated: false, service: true },
+  // The CRM mirror's team summary and lookup (VIB-516): the team cron's service key only.
+  gtm_team_people_lookup: { anon: false, authenticated: false, service: true },
+  gtm_team_people_summary: { anon: false, authenticated: false, service: true },
 };
 
 // The lists this suite iterates must match what the migrations actually create, so a re-vendored

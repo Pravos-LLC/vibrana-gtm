@@ -99,12 +99,53 @@ export class TwentyReader {
       const c = d[object];
       let fresh = 0;
       for (const e of c.edges) if (!seen.has(e.node.id)) { seen.add(e.node.id); out.push(e.node); fresh++; }
-      if (!c.pageInfo.hasNextPage || !c.pageInfo.endCursor || (!fresh && c.edges.length)) return out;
+      if (!c.pageInfo.hasNextPage || !c.pageInfo.endCursor) return out;
+      // A full page of rows already seen means the cursor did not move: stopping here would drop the rest without a word.
+      if (!fresh && c.edges.length) throw new Error(`Twenty ${object}: the cursor did not advance; refusing to return a silently truncated list`);
       if (out.length >= max) throw new Error(`Twenty ${object}: more than ${max} rows; refusing to return a silently truncated list`);
       after = c.pageInfo.endCursor;
     }
   }
 }
+
+/** Twenty's own health endpoint (the CRM runbook's pre-flight check). True only for a 200. */
+export async function twentyHealthy(fetcher: typeof fetch = fetch, timeoutMs = 10_000): Promise<boolean> {
+  if (demoMode()) return false;
+  const res = await fetcher(`${BASE}/healthz`, { signal: AbortSignal.timeout(timeoutMs) }).catch(() => null);
+  return res?.status === 200;
+}
+
+/**
+ * Every node of a connection for a page view or a light job: single requests through `gql()` (or the given runner),
+ * following the cursor until Twenty says there is no next page. `build(after)` returns the query for one page and must
+ * select `pageInfo { hasNextPage endCursor }` and `edges { node { id ... } }` on `object`. Rows are kept once by id
+ * (Twenty can repeat the boundary row). Throws rather than truncate: past `max` rows, or when the cursor stops moving.
+ */
+export async function pages<N extends { id?: string }>(object: string, build: (after: string | null) => string,
+  opts: { max?: number; run?: <T>(q: string) => Promise<T> } = {}): Promise<N[]> {
+  const run = opts.run ?? (<T>(q: string) => gql<T>(q));
+  const max = opts.max ?? 5_000;
+  const out: N[] = [];
+  const seen = new Set<string>();
+  let after: string | null = null;
+  for (;;) {
+    const d: Record<string, { pageInfo?: { hasNextPage: boolean; endCursor: string | null }; edges: { node: N }[] }> = await run(build(after));
+    const c = d[object];
+    let fresh = 0;
+    for (const e of c.edges) {
+      if (e.node.id == null) { out.push(e.node); fresh++; continue; }
+      if (!seen.has(e.node.id)) { seen.add(e.node.id); out.push(e.node); fresh++; }
+    }
+    // Every query built here selects pageInfo; an answer without it is a single page (a test double's shape).
+    if (!c.pageInfo || !c.pageInfo.hasNextPage || !c.pageInfo.endCursor) return out;
+    if (!fresh && c.edges.length) throw new Error(`Twenty ${object}: the cursor did not advance; refusing to return a silently truncated list`);
+    if (out.length >= max) throw new Error(`Twenty ${object}: more than ${max} rows; refusing to return a silently truncated list`);
+    after = c.pageInfo.endCursor;
+  }
+}
+
+/** A GraphQL string literal for an `after:` argument (cursors are base64, but never trust a value into a query). */
+export const afterArg = (after: string | null) => (after ? `, after:${JSON.stringify(after)}` : "");
 
 async function countPeople(filter?: string): Promise<number> {
   const f = filter ? `(filter:${filter})` : "";
@@ -132,11 +173,10 @@ export async function crmSnapshot() {
   metrics.companies = c.companies.totalCount;
   const m = await gql<{ messages: { totalCount: number } }>(`{ messages { totalCount } }`);
   metrics.email_messages_synced = m.messages.totalCount;
-  const o = await gql<{ opportunities: { edges: Array<{ node: { stage: string } }> } }>(
-    `{ opportunities(first: 200) { edges { node { stage } } } }`,
-  );
+  const opps = await pages<{ id?: string; stage: string }>("opportunities",
+    (after) => `{ opportunities(first:200${afterArg(after)}, orderBy:[{createdAt:AscNullsFirst},{id:AscNullsFirst}]) { pageInfo { hasNextPage endCursor } edges { node { id stage } } } }`);
   const stages: Record<string, number> = {};
-  for (const e of o.opportunities.edges) stages[e.node.stage] = (stages[e.node.stage] ?? 0) + 1;
+  for (const o of opps) stages[o.stage] = (stages[o.stage] ?? 0) + 1;
   return { metrics, opportunities: stages, meeting_capture: await captureHealth() };
 }
 

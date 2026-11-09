@@ -7,6 +7,7 @@ import type { TeamMember } from "../team/members";
 import { loadOutcomes } from "./load";
 import { bounceCheck } from "./metrics";
 import { alertRecipients, checkDomain, healthDomains, notifyIncidents, reconcileIncidents, type DomainCheck, type Incident } from "./health";
+import { loadMirrorState, mirrorProblems } from "../crm/mirror";
 
 const DNS_KEY = "email.health.dns";
 const STALE_SYNC_MS = 3 * 3_600_000;
@@ -48,6 +49,12 @@ export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], 
     const b = bounceCheck(o.events, o.attempts, now.getTime(), m.code, o.collection.complete);
     if (b.alert) observed.push({ key: `bounce:${m.code.toLowerCase()}`, kind: "bounce_rate", severity: "critical",
       summary: `${m.label}: ${b.num} of ${b.n} cold recipients in the last 7 days failed (${Math.round((b.num / b.n) * 1000) / 10}%, threshold 2%)`, detail: { num: b.num, n: b.n } });
+  }
+  // The CRM people mirror (VIB-516): a breaker stop or a stale mirror means people are not measured; say so once.
+  try {
+    for (const p of mirrorProblems(await loadMirrorState(db), now.getTime())) observed.push({ key: p.key, kind: "health_check", severity: "warning", summary: p.summary });
+  } catch (e) {
+    observed.push({ key: "health_check:crm_mirror:state", kind: "health_check", severity: "warning", summary: `CRM mirror: its state could not be read (${(e as Error).message.slice(0, 120)})` });
   }
   // DNS once a day, its own state: a lookup that cannot run is reported, never read as healthy.
   let dns: DomainCheck[] | string | undefined;

@@ -304,15 +304,16 @@ const failure = (e: unknown): string => {
   return "The sync stopped early; it resumes where it left off next hour.";
 };
 
-/** Every row of a select, 1000 at a time (PostgREST caps a response at max_rows). */
-export async function selectAll<T>(page: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>, what: string, max = 50_000): Promise<T[]> {
+/** Every row of a select, 1000 at a time (PostgREST caps a response at max_rows). Past `max` rows it throws rather than
+ *  return a silently truncated list (VIB-516). The select must be ordered by a unique key so pages neither skip nor repeat. */
+export async function selectAll<T>(page: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>, what: string, max = 200_000): Promise<T[]> {
   const out: T[] = [];
-  for (let from = 0; from < max; from += 1000) {
+  for (let from = 0; ; from += 1000) {
+    if (from >= max) throw new Error(`${what}: more than ${max} rows; refusing to return a silently truncated list`);
     const rows = must(await page(from, from + 999), what) as T[];
     out.push(...rows);
-    if (rows.length < 1000) break;
+    if (rows.length < 1000) return out;
   }
-  return out;
 }
 
 const EVENT_COLS = "id,gmail_message_id,thread_id,kind,at,mailbox,calc_version,recipient_hashes,message_key,person_ids";

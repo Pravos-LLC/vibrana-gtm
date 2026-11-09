@@ -171,7 +171,7 @@ export const TABLES = [
   "gtm_outreach_drafts", "gtm_outreach_draft_versions", "gtm_outreach_dossiers", "gtm_outreach_desk", "gtm_outreach_tracks",
   "gtm_outreach_angle_runs", "gtm_outreach_angle_edits", "gtm_outreach_lessons", "gtm_outreach_learn_runs",
   "gtm_red_flag_resolutions", "client_feedback",
-  "gtm_team_mailboxes", "gtm_team_mail_events", "gtm_team_stock_daily",
+  "gtm_team_mailboxes", "gtm_team_mail_events", "gtm_team_stock_daily", "gtm_crm_people",
   "gtm_email_attempts", "gtm_email_reply_labels", "gtm_email_sync_ops", "gtm_email_incidents", "gtm_dmarc_reports", "gtm_job_leases",
   "gtm_yt_videos", "gtm_yt_video_daily", "gtm_yt_channel_daily", "gtm_yt_dim_daily", "gtm_yt_report_files",
   "gtm_deal_milestones", "gtm_deal_stage_history", "gtm_linkedin_connections", "gtm_linkedin_threads", "gtm_web_daily",
@@ -294,6 +294,7 @@ export async function seed() {
   must(await db.from("gtm_dmarc_reports").insert({ report_key: "a".repeat(64), reporter: "fixture", domain: "example.test", begin_at: "2026-11-01T00:00:00Z", end_at: "2026-11-02T00:00:00Z", messages: 1, dmarc_pass: 1, dkim_aligned: 1, spf_aligned: 1 }), "dmarc report");
   must(await db.from("gtm_job_leases").insert({ job: "fixture", holder: "fixture", expires_at: "2026-01-01T00:00:00Z" }), "job lease");
   must(await db.from("gtm_team_stock_daily").insert({ member: "SAMPLE", date: "2026-11-04", metrics: { sendable: 0 } }), "team stock");
+  must(await db.from("gtm_crm_people").insert({ id: "00000000-0000-4000-8000-0000000000f1", created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z" }), "crm person");
   must(await db.from("gtm_yt_videos").insert({ video_id: "sampleyt001", title: "Sample video" }), "yt video");
   must(await db.from("gtm_yt_video_daily").insert({ date: "2026-11-04", video_id: "sampleyt001", views: 1 }), "yt video day");
   must(await db.from("gtm_yt_channel_daily").insert({ date: "2026-11-04", views: 1 }), "yt channel day");

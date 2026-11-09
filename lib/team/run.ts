@@ -5,7 +5,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 import { must } from "../db";
 import { TwentyReader } from "../twenty";
-import { collectActivity, loadActivity, newApiWriters, recentApiWriters, saveActivity, saveApiWriters } from "./crm";
+import { collectActivity, knownApiWriters, loadActivity, mirrorPeople, newApiWriters, recentApiWriters, saveActivity, saveApiWriters } from "./crm";
+import { loadMirrorState, mirrorReadiness } from "../crm/mirror";
 import { gmailConfig, syncMailbox, type MailboxRow, type SyncResult } from "./mailbox";
 import { stock } from "./metrics";
 import type { TeamMember } from "./members";
@@ -30,6 +31,8 @@ export async function runTeam(db: SupabaseClient, members: TeamMember[], opts: {
 
 async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?: Date; deadline: number; notify?: { to: string; from: string } }, now: Date, out: TeamRun): Promise<TeamRun> {
   const reader = new TwentyReader({ deadline: opts.deadline - 5_000 });
+  // People come from the CRM mirror (VIB-516); it is ready once its backfill finished and it synced in the last 6 hours.
+  const people = mirrorPeople(db, async () => mirrorReadiness(await loadMirrorState(db), now.getTime()));
   // Keep the last part of the budget for the API key check.
   const membersEnd = opts.deadline - 20_000;
   for (const [i, m] of members.entries()) {
@@ -38,26 +41,8 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
     const share = Math.max(0, (membersEnd - Date.now()) / (members.length - i));
     const memberDeadline = Date.now() + share;
     reader.setDeadline(memberDeadline);
-    try {
-      const a = await collectActivity(reader, m, now);
-      const failed = Object.keys(a.errors);
-      // A failed read never replaces a good one: the page keeps showing the last complete read, with its time.
-      const previous = failed.length ? await loadActivity(db, m.code).catch(() => null) : null;
-      if (failed.length && previous) {
-        r.activity = `kept the read from ${previous.capturedAt}; could not read ${failed.join(", ")}`;
-        r.stock = "skipped";
-      } else {
-        await saveActivity(db, a);
-        r.activity = failed.length ? `partial: ${failed.join(", ")}` : "ok";
-        const s = stock(a, now);
-        must(await db.from("gtm_team_stock_daily").upsert({ member: m.code, date: now.toISOString().slice(0, 10), captured_at: now.toISOString(), metrics: {
-          sendable: s.sendable, verified: s.verified, with_email: s.withEmail, people: s.total,
-          open_tasks: s.openTasks, overdue_tasks: s.overdueTasks, companies_no_owner: s.companiesNoOwner,
-        } }, { onConflict: "member,date" }), "stock snapshot");
-        r.stock = failed.length ? "partial" : "ok";
-      }
-    } catch (e) { r.activity ??= `error: ${(e as Error).message.slice(0, 200)}`; r.stock ??= "skipped"; }
-
+    // The mailbox first, so this run's sends are in the mail events the activity's "emailed by them" lookup reads
+    // (review of #36, L1). It stops 60 s before the member's share ends, leaving the CRM read at least that (review r2, R6).
     try {
       const cfg = gmailConfig();
       const boxes = must(await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext,history_id,backfill_done,last_sync_at,granted_scopes").eq("member", m.code), "mailboxes") as MailboxRow[];
@@ -65,9 +50,34 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
       else if (!cfg) r.mailbox = "TEAM_GMAIL_CLIENT_ID / TEAM_GMAIL_CLIENT_SECRET are not set";
       else {
         r.mailbox = [];
-        for (const b of boxes) r.mailbox.push(await syncMailbox(db, m, b, reader, { cfg, now, deadline: memberDeadline - 5_000 }));
+        for (const b of boxes) r.mailbox.push(await syncMailbox(db, m, b, reader, { cfg, now, deadline: memberDeadline - 60_000 }));
       }
     } catch (e) { r.mailbox = `error: ${(e as Error).message.slice(0, 200)}`; }
+
+    try {
+      const a = await collectActivity(reader, m, people, now);
+      // A failed Twenty read never replaces a good one: the page keeps showing the last complete read, with its time.
+      // People are the exception: they come from the CRM mirror, whose problems have their own reason and incident, so a
+      // mirror that is not ready must not freeze this member's companies, notes, tasks and meetings (review of #36, M4).
+      const failed = Object.keys(a.errors), blocking = failed.filter((k) => k !== "people");
+      const previous = blocking.length ? await loadActivity(db, m.code).catch(() => null) : null;
+      if (blocking.length && previous) {
+        r.activity = `kept the read from ${previous.capturedAt}; could not read ${failed.join(", ")}`;
+        r.stock = "skipped";
+      } else {
+        await saveActivity(db, a);
+        r.activity = failed.length ? `partial: ${failed.join(", ")}` : "ok";
+        const s = stock(a, now), date = now.toISOString().slice(0, 10);
+        const metrics: Record<string, number | null> = { open_tasks: s.openTasks, overdue_tasks: s.overdueTasks, companies_no_owner: s.companiesNoOwner };
+        if (!a.errors.people) Object.assign(metrics, { sendable: s.sendable, verified: s.verified, with_email: s.withEmail, people: s.total });
+        // Unmeasured people never overwrite the day's measured ones (review r2, R2): keep any people keys already saved today.
+        // A failed read of today's row must not silently drop the morning's numbers: it fails the snapshot instead.
+        const today = a.errors.people ? must(await db.from("gtm_team_stock_daily").select("metrics").eq("member", m.code).eq("date", date).maybeSingle(), "today's stock") as { metrics: unknown } | null : null;
+        const kept = Object.fromEntries(Object.entries((today?.metrics ?? {}) as Record<string, number | null>).filter(([k]) => ["sendable", "verified", "with_email", "people"].includes(k)));
+        must(await db.from("gtm_team_stock_daily").upsert({ member: m.code, date, captured_at: now.toISOString(), metrics: { ...kept, ...metrics } }, { onConflict: "member,date" }), "stock snapshot");
+        r.stock = failed.length ? "partial" : "ok";
+      }
+    } catch (e) { r.activity ??= `error: ${(e as Error).message.slice(0, 200)}`; r.stock ??= "skipped"; }
   }
   // Suppression (VIB-513): record the operations the evidence implies (pending review; Origami held), then apply approved
   // Twenty operations only when EMAIL_SUPPRESSION_APPLY=1. A failure here never fails the run.
@@ -82,7 +92,8 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
   }
   reader.setDeadline(opts.deadline - 5_000);
   try {
-    const { fresh, all } = await newApiWriters(db, await recentApiWriters(reader, now));
+    const known = await knownApiWriters(db);
+    const { fresh, all } = await newApiWriters(db, await recentApiWriters(reader, now, known ?? []));
     out._keys = { new: fresh };
     if (fresh.length && opts.notify) await alertNewKeys(fresh, opts.notify);
     await saveApiWriters(db, all, now);
