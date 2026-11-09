@@ -53,6 +53,7 @@ test("salesDeals reads every opportunity, not the first 200", async () => {
 
 test("recentApiWriters asks only for names it has not seen, a request per new name, at any volume", async () => {
   const queries: { object: string; exclude: string[] }[] = [];
+  let sentNotNull = false;
   const writers: Record<string, string[]> = { people: ["sync", "abe-cortx", "brand-new"], companies: ["sync"], notes: [], opportunities: [] };
   const reader = new TwentyReader({ pauseMs: 0, sleep: async () => {}, fetcher: (async (_u: RequestInfo | URL, init?: RequestInit) => {
     const { query, variables } = JSON.parse(String(init!.body)) as { query: string; variables: { f: { and: Record<string, { createdBy?: { name?: { in?: string[] } } }>[] } } };
@@ -60,6 +61,7 @@ test("recentApiWriters asks only for names it has not seen, a request per new na
     const not = variables.f.and.find((c) => "not" in c) as { not: { createdBy: { name: { in: string[] } } } } | undefined;
     const exclude = not?.not.createdBy.name.in ?? [];
     queries.push({ object, exclude });
+    if (variables.f.and.some((c) => (c as { createdBy?: { name?: { is?: string } } }).createdBy?.name?.is === "NOT_NULL")) sentNotNull = true;
     const name = writers[object].find((n) => !exclude.includes(n));
     return Response.json({ data: { [object]: { edges: name ? [{ node: { createdBy: { name } } }] : [] } } });
   }) as typeof fetch });
@@ -67,6 +69,7 @@ test("recentApiWriters asks only for names it has not seen, a request per new na
   assert.deepEqual(found, ["brand-new"]);
   assert.equal(queries.length, 2 + 1 + 1 + 1, "people: one hit, one empty; then one empty read per other object");
   assert.deepEqual(queries[0].exclude, ["sync", "abe-cortx"]);
+  assert.ok(sentNotNull, "rows without a key name are filtered out in Twenty, so they cannot end the search (review of #36, F3)");
 });
 
 test("a cache written before VIB-516 (every person as a row) is read as the summary", () => {

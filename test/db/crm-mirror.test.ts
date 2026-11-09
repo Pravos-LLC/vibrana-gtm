@@ -9,7 +9,7 @@ import { local } from "../support/local-supabase.ts";
 
 const l = local();
 Object.assign(process.env, { NEXT_PUBLIC_SUPABASE_URL: l.url, SUPABASE_SECRET_KEY: l.secretKey, TWENTY_API_KEY: "twenty_test", TWENTY_BASE: "https://crm.test" });
-const { runMirror, MIRROR_KEY, loadMirrorState, mirrorReadiness } = await import("../../lib/crm/mirror.ts");
+const { runMirror, MIRROR_KEY, loadMirrorState, mirrorReadiness, mirrorProblems } = await import("../../lib/crm/mirror.ts");
 const { TwentyReader } = await import("../../lib/twenty.ts");
 const { mirrorPeople, summarizePeople, collectActivity } = await import("../../lib/team/crm.ts");
 const { parseMembers } = await import("../../lib/team/members.ts");
@@ -141,6 +141,45 @@ test("the sweep's breaker: it refuses to remove most of a page's range at once, 
   const r = await runMirror(db(), reader(people));
   assert.match(r.sweep?.error ?? "", /would remove/);
   assert.equal(await live(), 200, "nothing was marked deleted");
+  const s = await loadMirrorState(db());
+  assert.match(s?.sweepError ?? "", /would remove/, "the stop is kept, not retried on its own");
+  assert.match(mirrorReadiness(s).reason ?? "", /safety limit/, "people read not measured, with why");
+  assert.deepEqual(mirrorProblems(s).map((p) => p.key), ["health_check:crm_mirror:sweep"], "an incident, once");
+  const again = await runMirror(db(), reader(people));
+  assert.match(again.sweep?.error ?? "", /would remove/); assert.equal(again.sweep?.pages, 0, "held: no sweep reads until cleared");
+  assert.equal(await live(), 200);
+});
+
+test("a cursor that stops moving fails the run loudly; three stuck runs restart the stream from its last completed point", async () => {
+  await reset();
+  const people = dataset(250);
+  await runMirror(db(), reader(people, 2));          // backfill stops after a page, with a cursor saved
+  const saved = (await loadMirrorState(db()))!.changes.after!;
+  // Twenty answers the saved cursor with the same cursor again, forever.
+  const stuck = (async () => Response.json({ data: { people: { pageInfo: { hasNextPage: true, endCursor: saved }, edges: [] } } })) as typeof fetch;
+  const stuckReader = () => new TwentyReader({ pauseMs: 0, sleep: async () => {}, fetcher: stuck });
+  for (let run = 1; run <= 2; run++) {
+    const r = await runMirror(db(), stuckReader());
+    assert.match(r.stopped ?? "", /cursor did not advance/);
+    assert.equal(r.changes.pages, 1, "one read, not a spin to the deadline");
+    assert.equal((await loadMirrorState(db()))!.stall?.runs, run);
+  }
+  await runMirror(db(), stuckReader());
+  const s = (await loadMirrorState(db()))!;
+  assert.equal(s.changes.after, null, "the third stuck run restarts from `since`");
+  assert.equal(s.stall, null);
+  const ok = await runMirror(db(), reader(people));
+  assert.deepEqual(ok.counts, { twenty: 250, mirror: 250, match: true }, "and the next healthy run finishes");
+});
+
+test("health: an unfinished backfill or a stale mirror is an incident; a healthy one is not", () => {
+  const base = { changes: { since: "x", after: null, maxSeen: null }, deletes: { since: "x", after: null, maxSeen: null }, twentyTotal: null, mirrorLive: null, countsCheckedAt: null, mismatches: 0, sweep: null };
+  const now = Date.parse("2026-11-09T12:00:00Z");
+  assert.deepEqual(mirrorProblems(null), []);
+  assert.deepEqual(mirrorProblems({ ...base, backfillDone: false, lastOkAt: null, startedAt: "2026-11-09T11:00:00Z" }, now), [], "a young backfill is expected");
+  assert.equal(mirrorProblems({ ...base, backfillDone: false, lastOkAt: null, startedAt: "2026-11-09T01:00:00Z" }, now)[0].key, "health_check:crm_mirror:stale");
+  assert.equal(mirrorProblems({ ...base, backfillDone: true, lastOkAt: "2026-11-09T02:00:00Z" }, now)[0].key, "health_check:crm_mirror:stale");
+  assert.deepEqual(mirrorProblems({ ...base, backfillDone: true, lastOkAt: "2026-11-09T11:30:00Z" }, now), []);
 });
 
 test("Twenty unhealthy: the run reads nothing", async () => {

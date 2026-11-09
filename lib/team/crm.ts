@@ -192,7 +192,8 @@ export async function recentApiWriters(reader: TwentyReader, now = new Date(), k
   for (const [object, type] of [["people", "PersonFilterInput"], ["companies", "CompanyFilterInput"], ["notes", "NoteFilterInput"], ["opportunities", "OpportunityFilterInput"]] as const) {
     for (let guard = 0; guard < 50; guard++) {
       const exclude = [...new Set([...known, ...found])];
-      const and: Record<string, unknown>[] = [{ createdAt: { gte: since } }, { createdBy: { source: { eq: "API" } } }];
+      // A row with no key name cannot be attributed and must not end the search for real names (review of #36, F3).
+      const and: Record<string, unknown>[] = [{ createdAt: { gte: since } }, { createdBy: { source: { eq: "API" } } }, { createdBy: { name: { is: "NOT_NULL" } } }];
       if (exclude.length) and.push({ not: { createdBy: { name: { in: exclude } } } });
       const d = await reader.read<Record<string, { edges: { node: { createdBy: { name: string | null } | null } }[] }>>(
         `query($f:${type}){ ${object}(filter:$f, first:1) { edges { node { createdBy { name } } } } }`, { f: { and } });

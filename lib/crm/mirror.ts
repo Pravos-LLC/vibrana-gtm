@@ -55,12 +55,19 @@ export type MirrorState = {
   mismatches: number;
   /** An id sweep in progress (after a resync starts), with its cursor and the last id it covered. */
   sweep: { after: string | null; lastId: string | null; removed: number } | null;
+  /** Why the sweep stopped (its breaker). Raised as a health incident until an operator clears it (docs/deployment.md). */
+  sweepError?: string | null;
+  /** When the mirror started (its first run), so a backfill that never finishes is noticed. */
+  startedAt?: string;
+  /** A stream whose cursor stopped moving, and on how many runs in a row (three restart that stream from its `since`). */
+  stall?: { stream: "changes" | "deletes"; cursor: string; runs: number } | null;
 };
 
 export const initialState = (): MirrorState => ({
   changes: { since: EPOCH, after: null, maxSeen: null },
   deletes: { since: new Date().toISOString(), after: null, maxSeen: null },
   backfillDone: false, lastOkAt: null, twentyTotal: null, mirrorLive: null, countsCheckedAt: null, mismatches: 0, sweep: null,
+  sweepError: null, startedAt: new Date().toISOString(), stall: null,
 });
 
 export async function loadMirrorState(db: SupabaseClient): Promise<MirrorState | null> {
@@ -77,6 +84,7 @@ async function saveState(db: SupabaseClient, s: MirrorState) {
 /** Whether the team page may count people from the mirror, and if not, why. */
 export function mirrorReadiness(s: MirrorState | null, now = Date.now()): { ready: boolean; reason: string | null } {
   if (!s || !s.backfillDone) return { ready: false, reason: "the CRM mirror is still copying the CRM; people are counted once it finishes" };
+  if (s.sweepError) return { ready: false, reason: "the CRM mirror's erasure check stopped at its safety limit; people are counted again once it is cleared" };
   const ok = Date.parse(s.lastOkAt ?? "");
   if (!Number.isFinite(ok) || now - ok > STALE_MS) return { ready: false, reason: "the CRM mirror has not completed a sync in the last 6 hours" };
   return { ready: true, reason: null };
@@ -130,6 +138,15 @@ async function stream(db: SupabaseClient, reader: TwentyReader, s: MirrorState, 
     }
     out.pages++;
     const more = d.people.pageInfo.hasNextPage && !!d.people.pageInfo.endCursor;
+    // A cursor that does not move would spin to the deadline every hour and never finish (review of #36, F1). Stop loudly;
+    // after three runs stuck on the same cursor, restart this stream from its `since` (upserts make a re-read harmless).
+    if (more && st.after && d.people.pageInfo.endCursor === st.after) {
+      const prev = s.stall?.stream === which && s.stall.cursor === st.after ? s.stall.runs : 0;
+      s.stall = { stream: which, cursor: st.after, runs: prev + 1 };
+      if (s.stall.runs >= 3) { st.after = null; st.maxSeen = null; s.stall = null; }
+      await saveState(db, s);
+      throw new Error(`Twenty people (${which}): the cursor did not advance`);
+    }
     if (more) st.after = d.people.pageInfo.endCursor;
     else {
       st.since = st.maxSeen ?? st.since;
@@ -168,6 +185,9 @@ async function sweep(db: SupabaseClient, reader: TwentyReader, s: MirrorState, o
     const gone = inRange.filter((id) => !seen.has(id));
     if (gone.length && gone.length > Math.max(5, inRange.length * SWEEP_BREAKER)) {
       out.error = `the sweep would remove ${gone.length} of ${inRange.length} people in one page; stopped (check Twenty before resyncing)`;
+      // Kept in the state so the team run raises it as an incident, and the sweep does not retry on its own.
+      s.sweepError = out.error;
+      await saveState(db, s);
       return;
     }
     if (gone.length) {
@@ -177,6 +197,7 @@ async function sweep(db: SupabaseClient, reader: TwentyReader, s: MirrorState, o
     out.pages++;
     if (more) { sw.after = d.people.pageInfo.endCursor; sw.lastId = hi; await saveState(db, s); continue; }
     s.sweep = null;
+    s.sweepError = null;
     out.done = true;
     await saveState(db, s);
     return;
@@ -191,7 +212,11 @@ export async function runMirror(db: SupabaseClient, reader: TwentyReader, opts: 
   try {
     await stream(db, reader, s, "changes", out.changes);
     await stream(db, reader, s, "deletes", out.deletes);
-    if (s.sweep) {
+    if (s.sweep && s.sweepError) {
+      // Held by the breaker until an operator checks Twenty and clears it; the streams above still run.
+      out.sweep = { pages: 0, removed: 0, done: false, error: s.sweepError };
+      return out;
+    } else if (s.sweep) {
       out.sweep = { pages: 0, removed: 0, done: false };
       await sweep(db, reader, s, out.sweep);
       if (!out.sweep.done) return out;
@@ -203,6 +228,7 @@ export async function runMirror(db: SupabaseClient, reader: TwentyReader, opts: 
     s.twentyTotal = twenty; s.mirrorLive = mirror; s.countsCheckedAt = new Date().toISOString();
     s.mismatches = out.counts.match ? 0 : s.mismatches + 1;
     s.lastOkAt = (opts.now ?? new Date()).toISOString();
+    s.stall = null;
     if (s.mismatches >= 2 && !s.sweep) {
       // A difference that survived a whole hour: re-read every person (upserts clear a stale deleted_at) and sweep ids.
       out.resync = true;
@@ -213,6 +239,27 @@ export async function runMirror(db: SupabaseClient, reader: TwentyReader, opts: 
     await saveState(db, s);
   } catch (e) {
     out.stopped = (e as Error).message.slice(0, 200);
+  }
+  return out;
+}
+
+/**
+ * The mirror's problems as health incidents (raised by the team run's email health check, emailed once, resolved when
+ * gone): a sweep stopped by its breaker, a backfill still unfinished after 6 hours, or no completed sync for 6 hours.
+ */
+export function mirrorProblems(s: MirrorState | null, now = Date.now()): { key: string; summary: string }[] {
+  if (!s) return [];
+  const out: { key: string; summary: string }[] = [];
+  if (s.sweepError) {
+    out.push({ key: "health_check:crm_mirror:sweep", summary: `CRM mirror: ${s.sweepError}. Recovery: docs/deployment.md, CRM mirror` });
+    return out;
+  }
+  const started = Date.parse(s.startedAt ?? "");
+  if (!s.backfillDone) {
+    if (Number.isFinite(started) && now - started > STALE_MS) out.push({ key: "health_check:crm_mirror:stale", summary: "CRM mirror: the first copy of the CRM has not finished after 6 hours; people are not measured" });
+  } else {
+    const ok = Date.parse(s.lastOkAt ?? "");
+    if (!Number.isFinite(ok) || now - ok > STALE_MS) out.push({ key: "health_check:crm_mirror:stale", summary: "CRM mirror: no completed sync for over 6 hours; people are not measured" });
   }
   return out;
 }
