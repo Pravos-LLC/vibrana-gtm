@@ -360,8 +360,8 @@ const replyRoutes = (extra: Route[]) => base([
   { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
   { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
   { url: "https://crm.test/graphql", body: page("companies", []), times: 1 },
-  { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("r1", T0 + 3_600_000, "Busy this quarter, check back with me in January.")] } },
-  { url: `${GM}messages/r1`, json: replyWithText("r1", T0 + 3_600_000, "Busy this quarter, check back with me in January.") },
+  { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("e1", T0 + 3_600_000, "Busy this quarter, check back with me in January.")] } },
+  { url: `${GM}messages/e1`, json: replyWithText("e1", T0 + 3_600_000, "Busy this quarter, check back with me in January.") },
   ...extra,
 ]);
 
@@ -373,7 +373,7 @@ test("with the classifier on, a reply gets a model decision beside the rule's; t
     const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
     assert.equal(r.error, undefined, why(r));
     assert.deepEqual([r.replies_checked, r.model_labeled, r.model_failed], [1, 1, 0]);
-    assert.deepEqual(await labelsOf("r1"), [
+    assert.deepEqual(await labelsOf("e1"), [
       { source: "deterministic", model: null, intent: "uncertain", opt_out: "none", person_id: P1 },
       { source: "model", model: "jev-1.13-free", intent: "not_now", opt_out: "none", person_id: P1 },
     ]);
@@ -390,20 +390,20 @@ test("the paid model answers when the free one refuses; when neither answers, th
     const first = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
     assert.equal(first.error, undefined, why(first));
     assert.deepEqual([first.model_labeled, first.model_failed], [0, 1]);
-    assert.deepEqual((await labelsOf("r1")).map((l) => l.source), ["deterministic"], "the rule decision is kept; no model row");
+    assert.deepEqual((await labelsOf("e1")).map((l) => l.source), ["deterministic"], "the rule decision is kept; no model row");
     mock.restore();
     row = { ...row, ...(await admin().from("gtm_team_mailboxes").select("history_id,backfill_done").eq("member", "TSYNC").single()).data! };
     mock = installFetchMock(base([
       { url: `${GM}history`, json: { history: [], historyId: "901" } },
-      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("r1", T0 + 3_600_000, "Busy this quarter, check back with me in January.")] } },
-      { url: `${GM}messages/r1`, json: replyWithText("r1", T0 + 3_600_000, "Busy this quarter, check back with me in January.") },
+      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("e1", T0 + 3_600_000, "Busy this quarter, check back with me in January.")] } },
+      { url: `${GM}messages/e1`, json: replyWithText("e1", T0 + 3_600_000, "Busy this quarter, check back with me in January.") },
       { url: JEV, status: 429, json: {}, times: 1 },
       { url: JEV, ...jev("not_now", 0.9, 0.01) },
     ]));
     const second = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T01:00:00Z") });
     assert.equal(second.error, undefined, why(second));
     assert.equal(second.model_labeled, 1);
-    assert.deepEqual((await labelsOf("r1")).map((l) => [l.source, l.model, l.intent]), [["deterministic", null, "uncertain"], ["model", "jev-1.13", "not_now"]]);
+    assert.deepEqual((await labelsOf("e1")).map((l) => [l.source, l.model, l.intent]), [["deterministic", null, "uncertain"], ["model", "jev-1.13", "not_now"]]);
   } finally { delete process.env.EMAIL_CLASSIFIER; delete process.env.OPENCODE_API_KEY; }
 });
 
@@ -417,22 +417,22 @@ test("a reply with nothing safe to send is recorded as skipped once and never re
       { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
       { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
       { url: "https://crm.test/graphql", body: page("companies", []), times: 1 },
-      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("r1", T0 + 3_600_000, quotedOnly)] } },
-      { url: `${GM}messages/r1`, json: replyWithText("r1", T0 + 3_600_000, quotedOnly) },
+      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("e1", T0 + 3_600_000, quotedOnly)] } },
+      { url: `${GM}messages/e1`, json: replyWithText("e1", T0 + 3_600_000, quotedOnly) },
     ]));
     const first = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
     assert.equal(first.error, undefined, why(first));
     assert.deepEqual([first.model_labeled, first.model_skipped, first.model_failed], [0, 1, 0]);
     assert.equal(mock.calls.filter((c) => c.url === JEV).length, 0, "nothing was sent to the model");
-    assert.deepEqual((await labelsOf("r1")).map((l) => [l.source, l.model, l.intent]), [["deterministic", null, "uncertain"], ["model", "none:no_text", "uncertain"]]);
+    assert.deepEqual((await labelsOf("e1")).map((l) => [l.source, l.model, l.intent]), [["deterministic", null, "uncertain"], ["model", "none:no_text", "uncertain"]]);
     mock.restore();
     row = { ...row, ...(await admin().from("gtm_team_mailboxes").select("history_id,backfill_done").eq("member", "TSYNC").single()).data! };
     mock = installFetchMock(base([
       { url: `${GM}history`, json: { history: [], historyId: "901" } },
-      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("r1", T0 + 3_600_000, quotedOnly)] } },
+      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("e1", T0 + 3_600_000, quotedOnly)] } },
     ]));
     const second = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T01:00:00Z") });
     assert.equal(second.error, undefined, why(second));
-    assert.equal(mock.calls.filter((c) => c.url.includes("messages/r1")).length, 0, "the reply is done: its text is not read again");
+    assert.equal(mock.calls.filter((c) => c.url.includes("messages/e1")).length, 0, "the reply is done: its text is not read again");
   } finally { delete process.env.EMAIL_CLASSIFIER; delete process.env.OPENCODE_API_KEY; }
 });
