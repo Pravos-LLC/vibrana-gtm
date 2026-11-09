@@ -71,7 +71,8 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
         const metrics: Record<string, number | null> = { open_tasks: s.openTasks, overdue_tasks: s.overdueTasks, companies_no_owner: s.companiesNoOwner };
         if (!a.errors.people) Object.assign(metrics, { sendable: s.sendable, verified: s.verified, with_email: s.withEmail, people: s.total });
         // Unmeasured people never overwrite the day's measured ones (review r2, R2): keep any people keys already saved today.
-        const today = a.errors.people ? (await db.from("gtm_team_stock_daily").select("metrics").eq("member", m.code).eq("date", date).maybeSingle()).data : null;
+        // A failed read of today's row must not silently drop the morning's numbers: it fails the snapshot instead.
+        const today = a.errors.people ? must(await db.from("gtm_team_stock_daily").select("metrics").eq("member", m.code).eq("date", date).maybeSingle(), "today's stock") as { metrics: unknown } | null : null;
         const kept = Object.fromEntries(Object.entries((today?.metrics ?? {}) as Record<string, number | null>).filter(([k]) => ["sendable", "verified", "with_email", "people"].includes(k)));
         must(await db.from("gtm_team_stock_daily").upsert({ member: m.code, date, captured_at: now.toISOString(), metrics: { ...kept, ...metrics } }, { onConflict: "member,date" }), "stock snapshot");
         r.stock = failed.length ? "partial" : "ok";

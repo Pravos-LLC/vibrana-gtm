@@ -55,8 +55,13 @@ type Page<N = Node> = { pageInfo: { hasNextPage: boolean; endCursor: string | nu
  */
 export type Stream = {
   since: string; from: string | null; after: string | null; maxSeen: string | null;
-  /** When the last finished pass read its last page: the overlap runs back from here, not from `since` (review r2, R3). */
+  /**
+   * How far back the next pass must reach for late commits: OVERLAP_MS before the earliest page of this pass that was
+   * reading near-real-time changes (its newest change within OVERLAP_MS of when it was read). Null when the pass only read
+   * settled history; the next pass then starts just after `since` (review r2 R3, r3 N1 and N2).
+   */
   passEndedAt: string | null;
+  overlapFrom: string | null;
   /** A millisecond being read by id after the cursor stalled, and the id cursor's place: saved, so a deadline resumes it. */
   tie: { at: string; after: string | null } | null;
 };
@@ -91,7 +96,7 @@ export type MirrorState = {
   sweepError: string | null;
 };
 
-const stream0 = (since: string): Stream => ({ since, from: null, after: null, maxSeen: null, passEndedAt: null, tie: null });
+const stream0 = (since: string): Stream => ({ since, from: null, after: null, maxSeen: null, passEndedAt: null, overlapFrom: null, tie: null });
 export const initialState = (now = new Date()): MirrorState => ({
   changes: stream0(EPOCH),
   // People soft-deleted before the mirror existed are never copied (the change stream reads live people only).
@@ -227,18 +232,29 @@ async function stream(db: SupabaseClient, reader: TwentyReader, s: MirrorState, 
     // A new pass. It reaches back OVERLAP_MS before the previous pass's last read (a write stamped then may have
     // committed after it), but never further than the last change seen: a quiet CRM re-reads almost nothing (R3).
     // Fixed for the whole pass so its cursor stays valid.
-    const back = st.passEndedAt ? Date.parse(st.passEndedAt) - OVERLAP_MS : Date.parse(st.since) - OVERLAP_MS;
-    st.from = st.since === EPOCH ? EPOCH : new Date(Math.max(0, Math.min(Date.parse(st.since), back))).toISOString();
+    // Just after the last change seen (every person at `since` was read: the pass ended with no next page), or further
+    // back to cover writes that may have committed after a near-real-time page was read.
+    const next = Date.parse(st.since) + 1, back = st.overlapFrom ? Date.parse(st.overlapFrom) : next;
+    st.from = st.since === EPOCH ? EPOCH : new Date(Math.max(0, Math.min(next, back))).toISOString();
+    st.overlapFrom = null;
     st.after = null;
     await saveState(db, s);
   }
   if (st.tie) await readTie(db, reader, s, st, field, out);
   let lastIds: Set<string> | null = null;
   for (;;) {
+    const readAt = Date.now();
     const d = await reader.read<{ people: Page }>(q, { f: { [field]: { gte: st.from } }, a: st.after });
     const nodes = d.people.edges.map((e) => e.node);
     out.rows += await upsertNodes(db, nodes, `mirror ${which} page`);
-    for (const n of nodes) st.maxSeen = later(st.maxSeen, which === "changes" ? n.updatedAt : n.deletedAt);
+    let pageMax: string | null = null;
+    for (const n of nodes) pageMax = later(pageMax, which === "changes" ? n.updatedAt : n.deletedAt);
+    st.maxSeen = later(st.maxSeen, pageMax);
+    // A page reading changes from the last OVERLAP_MS may have missed a write stamped then but committed after this read.
+    if (pageMax && Date.parse(pageMax) >= readAt - OVERLAP_MS) {
+      const back = new Date(readAt - OVERLAP_MS).toISOString();
+      if (!st.overlapFrom || back < st.overlapFrom) st.overlapFrom = back;
+    }
     out.pages++;
     const more = d.people.pageInfo.hasNextPage && !!d.people.pageInfo.endCursor;
     const stuck = more && ((st.after && d.people.pageInfo.endCursor === st.after) || (!!lastIds && nodes.length > 0 && nodes.every((n) => lastIds!.has(n.id))));

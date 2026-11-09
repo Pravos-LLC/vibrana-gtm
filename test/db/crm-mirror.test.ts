@@ -116,7 +116,7 @@ test("incremental: an hour later only changed and new people are read", async ()
   people[5] = { ...people[5], email: null, updatedAt: later };
   people.push({ ...dataset(1, 999)[0], createdAt: later, updatedAt: later });
   const r = await runMirror(db(), reader(people));
-  assert.equal(r.changes.rows, 3, "the changed person, the new one, and the last row re-read by the overlap");
+  assert.equal(r.changes.rows, 2, "the changed person and the new one; settled history is not re-read");
   assert.equal(await live(), 121);
   assert.equal((await row(people[5].id)).has_email, false);
 });
@@ -185,6 +185,32 @@ test("a whole run that moves nothing is not progress: it fails and records why",
   const r = await runMirror(db(), reader(dataset(30), 1));   // the deadline comes before the first read
   assert.equal(r.failed, true);
   assert.match((await loadMirrorState(db()))!.lastError ?? "", /without moving/);
+});
+
+test("a quiet CRM after a bulk update bigger than a page: later runs do not re-read the group (review r3, N1)", async () => {
+  await reset();
+  const people = dataset(300);
+  await runMirror(db(), reader(people));
+  const bulk = iso(Date.now() - 3 * 86_400_000);
+  for (let i = 0; i < 250; i++) people[i] = { ...people[i], updatedAt: bulk };
+  const first = await runMirror(db(), reader(people));
+  assert.equal(first.changes.ties, 1);
+  const next = await runMirror(db(), reader(people));
+  assert.equal(next.changes.rows, 0, "nothing settled is read again");
+  assert.equal(next.changes.ties, 0);
+});
+
+test("a pass that spans runs while reading recent changes still catches a late commit from before its cursor (review r3, N2)", async () => {
+  await reset();
+  const now = Date.now();
+  const people = dataset(250).map((p, i) => ({ ...p, updatedAt: iso(now - 300_000 + i * 100) }));
+  const r1 = await runMirror(db(), reader(people, 2));            // one page of recent changes, then the deadline
+  assert.match(r1.stopped ?? "", /deadline/);
+  await runMirror(db(), reader(people));                           // the pass finishes on the next run
+  // Stamped before the newest change already read, committed after it.
+  people.push({ ...dataset(1, 900)[0], updatedAt: iso(now - 250_000), notSendable: "OPTED_OUT" });
+  await runMirror(db(), reader(people));
+  assert.equal((await row(uid(900))).not_sendable, true);
 });
 
 test("a soft delete in Twenty marks the mirror row deleted, and counts still match", async () => {
