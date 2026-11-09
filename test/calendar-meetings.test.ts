@@ -214,7 +214,7 @@ function fakeDb(tables: Record<string, Row[]>, keys: Record<string, string[]> = 
 
 type Meeting = Row & { id: string };
 /** A Twenty that honors the filters the sync sends (owner, time, ids, trash), refuses a duplicate id, and soft-deletes. */
-function fakeTwenty(state: { people: Row[]; companies: Row[]; opps: Row[]; meetings: Meeting[] }, opts: { failFirstCreate?: boolean } = {}) {
+function fakeTwenty(state: { people: Row[]; companies: Row[]; opps: Row[]; meetings: Meeting[] }, opts: { failFirstCreate?: boolean; refuseDelete?: boolean } = {}) {
   const writes: { op: string; id?: string; data?: Row }[] = [];
   const trash: Meeting[] = [];
   let failNext = !!opts.failFirstCreate;
@@ -258,6 +258,7 @@ function fakeTwenty(state: { people: Row[]; companies: Row[]; opps: Row[]; meeti
     }
     if (query.includes("updateMeeting")) { Object.assign(state.meetings.find((m) => m.id === variables.id)!, variables.d); writes.push({ op: "update", id: variables.id, data: variables.d }); return reply({ updateMeeting: { id: variables.id } }); }
     if (query.includes("deleteMeeting")) {
+      if (opts.refuseDelete) return new Response(JSON.stringify({ errors: [{ message: "Forbidden", extensions: { code: "FORBIDDEN" } }] }), { status: 200 });
       const i = state.meetings.findIndex((m) => m.id === variables.id);
       trash.push(...state.meetings.splice(i, 1)); writes.push({ op: "delete", id: variables.id }); return reply({ deleteMeeting: { id: variables.id } });
     }
@@ -534,4 +535,25 @@ test("sync: marking a shared invite Private on one calendar withdraws the row th
   john = [shared("j-copy")];
   await C.syncCalendars(db, reader(twenty.fetcher), { now: NOW, fetcher: twoCalendars(() => [shared("a-copy", { visibility: "private" })], () => john) });
   assert.equal(twenty.creates().length, 1, "and it stays out");
+});
+
+test("sync: a refused delete is reported and retried, and creates still happen (review round 3)", async () => {
+  const twenty = fakeTwenty({ people: [pikl()], companies: [], opps: [], meetings: [] }, { refuseDelete: true });
+  const db = freshDb();
+  let events: unknown[] = [ev("a", "2026-11-04T16:00:00+08:00", ["rob@pikl.test"])];
+  await sync(db, twenty, () => events);
+  events = [{ ...(events[0] as object), status: "cancelled" }, ev("b", "2026-11-05T16:00:00+08:00", ["rob@pikl.test"])];
+  const r = res(await sync(db, twenty, () => events));
+  assert.match(r.error!, /could not be withdrawn: Twenty refused a request \(FORBIDDEN\)/);
+  assert.equal(r.created, 1, "the new meeting is still written");
+  assert.ok(!db.tables.gtm_calendar_meetings.find((m) => m.event_key === eventKey("a"))!.removed_at, "the map stays open for a retry");
+});
+
+test("sync: another member's row whose map write was lost still claims the meeting (review R3-1)", async () => {
+  const twenty = fakeTwenty({ people: [pikl()], companies: [], opps: [], meetings: [] });
+  const db = freshDb([conn("ABE", ABE), conn()]);
+  await C.syncCalendars(db, reader(twenty.fetcher), { now: NOW, fetcher: twoCalendars(() => [shared("a-copy")], () => []) });
+  db.tables.gtm_calendar_meetings = [];                         // Abe's map write was lost
+  await C.syncCalendars(db, reader(twenty.fetcher), { now: NOW, fetcher: twoCalendars(() => [], () => [shared("j-copy")]) });
+  assert.equal(twenty.creates().length, 1);
 });

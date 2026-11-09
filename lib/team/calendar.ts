@@ -482,9 +482,17 @@ const readIds = async (reader: TwentyReader, ids: string[], trash: boolean) => {
   }
   return out;
 };
-async function withdraw(reader: TwentyReader, id: string, privacy: boolean) {
-  if (privacy) await reader.read("mutation($id:UUID!,$d:MeetingUpdateInput!){ updateMeeting(id:$id, data:$d) { id } }", { id, d: STRIPPED });
-  await reader.read("mutation($id:UUID!){ deleteMeeting(id:$id) { id } }", { id });
+/** Strips (privacy) and trashes a row. False when Twenty refused: the map is left open so the next run retries, and the
+ *  failure is reported without stopping the creates and updates for this calendar. */
+async function withdraw(reader: TwentyReader, id: string, privacy: boolean, result: CalendarResult): Promise<boolean> {
+  try {
+    if (privacy) await reader.read("mutation($id:UUID!,$d:MeetingUpdateInput!){ updateMeeting(id:$id, data:$d) { id } }", { id, d: STRIPPED });
+    await reader.read("mutation($id:UUID!){ deleteMeeting(id:$id) { id } }", { id });
+    return true;
+  } catch (e) {
+    result.error = `a meeting could not be withdrawn: ${safeError(e)}`;
+    return false;
+  }
 }
 const getState = async <T>(db: SupabaseClient, key: string) =>
   ((must(await db.from("gtm_sync_state").select("value").eq("key", key), `read ${key}`) as { value: T }[])[0]?.value ?? null);
@@ -536,6 +544,10 @@ async function syncOne(db: SupabaseClient, reader: TwentyReader, member: string,
   for (const r of await readIds(reader, wanted([...mine.values()].filter((m) => !m.removed_at && m.meeting_id).map((m) => m.meeting_id!)), false)) byId.set(r.id, r);
   const fresh = wants.filter((w) => !mine.has(w.key) && !claimed.has(w.key)).map((w) => rowId(w.key, member));
   for (const r of await readIds(reader, wanted(fresh), false)) byId.set(r.id, r);
+  // Another member's row for the same event whose map write was lost still claims it (review R3-1).
+  const theirs = wants.filter((w) => !mine.has(w.key) && !claimed.has(w.key)).flatMap((w) => OWNER_CODES.filter((c) => c !== member).map((c) => ({ key: w.key, id: rowId(w.key, c) })));
+  const theirLive = new Set((await readIds(reader, theirs.map((t) => t.id), false)).map((r) => r.id));
+  for (const t of theirs) if (theirLive.has(t.id)) claimed.add(t.key);
   const trashed = new Set((await readIds(reader, wanted(fresh), true)).map((r) => r.id));
   const taken = new Set(maps.filter((m) => !m.removed_at && m.meeting_id).map((m) => m.meeting_id!));
   const stamp = ctx.now.toISOString();
@@ -550,7 +562,8 @@ async function syncOne(db: SupabaseClient, reader: TwentyReader, member: string,
     if (!(PRIVACY as readonly string[]).includes(why)) continue;
     for (const o of othersLive.filter((o) => o.event_key === key)) {
       const [row] = await readIds(reader, [o.meeting_id!], false);
-      if (row) { await withdraw(reader, row.id, true); result.removed++; }
+      if (row && !(await withdraw(reader, row.id, true, result))) continue;
+      if (row) result.removed++;
       await close(o, why);
       o.removed_at = stamp;
     }
@@ -561,7 +574,10 @@ async function syncOne(db: SupabaseClient, reader: TwentyReader, member: string,
       continue;
     }
     if (m.removed_at) continue;
-    if (m.meeting_id && byId.has(m.meeting_id)) { await withdraw(reader, m.meeting_id, true); result.removed++; }
+    if (m.meeting_id && byId.has(m.meeting_id)) {
+      if (!(await withdraw(reader, m.meeting_id, true, result))) continue;
+      result.removed++;
+    }
     await close(m, why);
   }
 
@@ -583,7 +599,7 @@ async function syncOne(db: SupabaseClient, reader: TwentyReader, member: string,
     for (const m of toRemove) {
       const row = byId.get(m.meeting_id!)!;
       if (isManual(row)) { result.kept++; await close(m, "kept_manual"); continue; }
-      await withdraw(reader, row.id, false);
+      if (!(await withdraw(reader, row.id, false, result))) continue;
       await close(m, gone.get(m.event_key)!);
       result.removed++;
     }
@@ -662,11 +678,12 @@ async function sweep(db: SupabaseClient, reader: TwentyReader, member: string, d
   if (hits.length) {
     const maps = await selectAll<MapRow>((from, to) => db.from("gtm_calendar_meetings").select("member,event_key,meeting_id,origin,start_at,kind,removed_at,removed_reason").order("event_key").range(from, to), "meeting map");
     for (const { row, why } of hits) {
-      await withdraw(reader, row.id, true);
+      if (!(await withdraw(reader, row.id, true, result))) continue;
       for (const m of maps.filter((m) => m.meeting_id === row.id && !m.removed_at))
         must(await db.from("gtm_calendar_meetings").upsert({ ...m, removed_at: now.toISOString(), removed_reason: why, updated_at: now.toISOString() }, { onConflict: "member,event_key" }), "save meeting map");
     }
   }
   result.swept = hits.length;
-  await setState(db, sweepKey(member), { day, withdrawn: hits.length }, now);
+  // A refused withdrawal leaves the day open, so tomorrow is not the next chance: the next hourly run sweeps again.
+  if (!result.error?.startsWith("a meeting could not be withdrawn")) await setState(db, sweepKey(member), { day, withdrawn: hits.length }, now);
 }
