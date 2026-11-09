@@ -45,24 +45,24 @@ export function parseDeliveryStatus(text: string): FailureRecipient[] {
   return out;
 }
 
-// Where quoted mail starts, in the languages mail clients write it (English, German, French, Spanish, Portuguese, Italian,
-// Dutch, Nordic). Conservative: anything from the first marker on is dropped (review of #34, finding 1).
-const SEPARATOR = /^\s*-{2,}\s*(Original Message|Forwarded message|Ursprüngliche Nachricht|Weitergeleitete Nachricht|Message d'origine|Message transféré|Mensaje original|Mensagem original|Messaggio originale|Oorspronkelijk bericht|Originalmeddelande|Opprinnelig melding|Original meddelelse|Alkuperäinen viesti)/i;
-const OUTLOOK_RULE = /^\s*_{10,}\s*$/;
-// Language-independent markers (review of #34, round 2): a dashed or ruled separator line in any language
-// ("-----Исходное сообщение-----"), an attribution line carrying an address and ending in a colon (Gmail's "On ... wrote:"
-// in every language), and a header line in any alphabet ("От: Name <a@b>") once the reply has started.
-const ANY_SEPARATOR = /^\s*(-{3,}.*-{3,}|[-_=*~]{8,})\s*$/u;
-const ADDRESS_COLON = /[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+.*[:：]\s*$/u;
-const ANY_HEADER = /^\s*\*?\p{L}[\p{L} ]{0,24}\*?\s*[:：]\s*.*(@|\d)/u;
-const HEADER = /^\s*\*?(From|Von|De|Da|Van|Från|Fra|Lähettäjä|Sent|Gesendet|Envoyé|Enviado|Inviato|Verzonden|Skickat|Sendt|Date|Datum|Fecha|Data|Subject|Betreff|Objet|Asunto|Assunto|Oggetto|Onderwerp|Ämne|Emne|To|An|À|Para|Aan|Till|Til|Cc)\*?\s*:\s*\S/i;
-const ATTRIBUTION_END = /(wrote|schrieb|a écrit|escribió|escreveu|ha scritto|schreef|skrev|kirjoitti)\s*:\s*$/i;
+// Where quoted mail starts. Only high-confidence markers, because this text also feeds the local opt-out rule: an ordinary
+// line ("Reason: 3 emails this week", a "=====" rule) must never hide a request below it (review of #34, round 3). The
+// classifier's outbound text cuts more aggressively on top of this (lib/email/classifier.ts strictText).
+export const NAMED_SEPARATOR = /^\s*-{2,}\s*(Original Message|Forwarded message|Ursprüngliche Nachricht|Weitergeleitete Nachricht|Message d'origine|Message transféré|Mensaje original|Mensagem original|Messaggio originale|Oorspronkelijk bericht|Originalmeddelande|Opprinnelig melding|Original meddelelse|Alkuperäinen viesti)/i;
+// A word framed by dashes, in any language ("-----Исходное сообщение-----").
+export const DASHED_WORDS = /^\s*-{3,}\s*\p{L}[\p{L}' ]{2,40}\s*-{3,}\s*$/u;
+export const OUTLOOK_RULE = /^\s*_{10,}\s*$/;
+// A sender header carrying an address, in the common languages ("From: Name <a@b>", "От: ...").
+export const FROM_HEADER = /^\s*\*?(From|Von|De|Da|Van|Från|Fra|Lähettäjä|Od|От|Від|Kimden|Feladó)\*?\s*[:：].*@/iu;
+// An attribution line carrying an address and ending in a colon (Gmail's attribution in any language).
+export const ADDRESS_COLON = /[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+.*[:：]\s*$/u;
+export const ATTRIBUTION_END = /(wrote|schrieb|a écrit|escribió|escreveu|ha scritto|schreef|skrev|kirjoitti)\s*:\s*$/i;
 // German and Dutch put the sender after the verb ("Am ... schrieb Sender <a@b>:").
 const ATTRIBUTION_VERB = /\b(wrote|schrieb|a écrit|escribió|escreveu|ha scritto|schreef|skrev|kirjoitti)\b.*:\s*$/i;
 const ATTRIBUTION_START = /^\s*(On|Am|Le|El|Em|Il|Op|Den|Dne)\s/i;
 
-/** The new text of a reply: no quoted lines, nothing from an attribution line ("On ... wrote:", "Am ... schrieb:"), a
- *  quoted-message separator or a mail header block on, in the common mail-client languages. */
+/** The new text of a reply: no quoted lines, nothing from a high-confidence quote marker on (an attribution line, a named
+ *  or dashed separator, Outlook's rule before a sender header, a sender header with an address). */
 export function newText(text: string): string {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
@@ -71,9 +71,9 @@ export function newText(text: string): string {
     if (/^\s*>/.test(l)) continue;
     // An attribution line, also when a mail client wraps it over up to three lines ("On Thu, ..., Sender" / "<a@b> wrote:").
     if (ATTRIBUTION_START.test(l) && lines.slice(i, i + 3).some((x) => ATTRIBUTION_END.test(x) || ATTRIBUTION_VERB.test(x))) break;
-    if (ATTRIBUTION_END.test(l)) break;
-    if (SEPARATOR.test(l) || OUTLOOK_RULE.test(l) || ANY_SEPARATOR.test(l) || ADDRESS_COLON.test(l)) break;
-    if ((HEADER.test(l) || ANY_HEADER.test(l)) && out.length > 0) break;
+    if (ADDRESS_COLON.test(l) || NAMED_SEPARATOR.test(l) || DASHED_WORDS.test(l)) break;
+    if (OUTLOOK_RULE.test(l) && lines.slice(i + 1, i + 3).some((x) => FROM_HEADER.test(x))) break;
+    if (FROM_HEADER.test(l) && out.length > 0) break;
     out.push(l);
   }
   return out.join("\n").trim();

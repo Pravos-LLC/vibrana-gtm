@@ -4,6 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classifierEnabled, classifyReply, outboundText, readAnswer, ENDPOINT, MAX_CHARS, RESERVE_MS } from "../lib/email/classifier.ts";
+import { newText, replyRule } from "../lib/email/rules.ts";
 
 const ON = { EMAIL_CLASSIFIER: "jev", OPENCODE_API_KEY: "oc_test" };
 const answer = (choice: string, confidence: number, stop: number, billing = "free") =>
@@ -119,4 +120,23 @@ test("the run's cap holds per request: a reply never makes more attempts than th
   const s = stub([json({}, 503), json(answer("neutral", 0.9, 0))]);
   assert.deepEqual(await classifyReply("Maybe later.", { env: ON, fetcher: s.fetcher, maxAttempts: 1 }), { status: "failed", attempts: 1 });
   assert.equal(s.calls.length, 1, "the paid fallback is not tried when only one request is left");
+});
+
+test("ordinary lines never hide a local opt-out: the rule reads past them even where the outbound text stops (review of #34, round 3)", () => {
+  for (const reply of ["Hello,\nReason: 3 emails this week is too much.\nPlease remove me from your list.", "Hello,\n========\nPlease remove me from your list."]) {
+    assert.match(newText(reply), /remove me/, reply);
+    assert.equal(replyRule(reply, false).opt_out, "uncertain", "held for a person");
+    assert.deepEqual(outboundText(reply), { text: "Hello," }, "the model sees less; the local rule still sees the request");
+  }
+});
+
+test("quoted footers still never count as the person's own opt-out, in any language", () => {
+  const footers = [
+    "Thanks, interested.\n\nOn Thu, Nov 5, 2026, Sender <s@example.test> wrote:\nReply unsubscribe to stop these emails.",
+    "Danke.\n\n-----Ursprüngliche Nachricht-----\nVon: Sender <s@example.test>\nReply unsubscribe to stop these emails.",
+    "Спасибо.\n\n-----Исходное сообщение-----\nОт: Sender <s@example.test>\nReply unsubscribe to stop these emails.",
+    "Sure.\n________________________________\nFrom: Sender <s@example.test>\nReply unsubscribe to stop these emails.",
+    "ありがとう。\n\n2026年11月5日(木) 10:00 Sender <s@example.test>:\nReply unsubscribe to stop these emails.",
+  ];
+  for (const f of footers) assert.equal(replyRule(f, false).opt_out, "none", f);
 });

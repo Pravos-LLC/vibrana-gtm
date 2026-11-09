@@ -9,7 +9,7 @@
 // - Only the reply's new text leaves, with addresses and phone numbers masked; when that cannot be isolated, nothing is sent.
 // - The text is sent once and kept nowhere: not stored, not logged, not in errors.
 import { providerFetch } from "../demo-safety";
-import { newText } from "./rules";
+import { ATTRIBUTION_END, newText } from "./rules";
 
 export const ENDPOINT = "https://opencode.ai/inference/systemone/v1/systemone";
 export const MODELS = ["jev-1.13-free", "jev-1.13"] as const;
@@ -55,12 +55,30 @@ const PHONE = /\+?\d[\d\s().-]{7,}\d/g;
 const HEADER_LEFT = /^\s*\*?\p{L}[\p{L} ]{1,24}\*?\s*[:：]\s*.*(@|\d{4})/mu;
 
 /**
- * What may leave for the model: the reply's new text (lib/email/rules.ts newText, quoted text in the common mail-client
- * languages removed), addresses and phone numbers masked, 4,000 characters at most. When something that looks like a mail
+ * What may leave for the model: the reply's new text cut at every quote marker, high-confidence or broad (strictText),
+ * addresses and phone numbers masked, 4,000 characters at most. When something that looks like a mail
  * header survives, nothing is sent: the boundary errs toward sending less (review of #34, finding 1).
  */
+// Broader, language-independent cut-offs for what leaves (review of #34, rounds 2-3): any ruled or dashed line, a bare
+// attribution ending, Outlook's rule, and a header-like line in any alphabet once the reply has started. They may cut real
+// text; that only means the model sees less. The local opt-out rule reads newText, which keeps such text.
+const ANY_RULE = /^\s*(-{3,}.*-{3,}|[-_=*~]{8,})\s*$/u;
+const ANY_HEADER = /^\s*\*?\p{L}[\p{L} ]{0,24}\*?\s*[:：]\s*.*(@|\d)/u;
+const LABEL_HEADER = /^\s*\*?(From|Von|De|Da|Van|Från|Fra|Lähettäjä|Sent|Gesendet|Envoyé|Enviado|Inviato|Verzonden|Skickat|Sendt|Date|Datum|Fecha|Data|Subject|Betreff|Objet|Asunto|Assunto|Oggetto|Onderwerp|Ämne|Emne|To|An|À|Para|Aan|Till|Til|Cc)\*?\s*:\s*\S/i;
+
+/** The reply's new text cut at any of the broader markers too: the most that may leave for the model. */
+export function strictText(text: string): string {
+  const out: string[] = [];
+  for (const l of newText(text).split("\n")) {
+    if (ANY_RULE.test(l) || ATTRIBUTION_END.test(l)) break;
+    if ((ANY_HEADER.test(l) || LABEL_HEADER.test(l)) && out.length > 0) break;
+    out.push(l);
+  }
+  return out.join("\n").trim();
+}
+
 export function outboundText(text: string): { text: string } | { skip: "no_text" | "quoted_header" } {
-  const fresh = newText(text);
+  const fresh = strictText(text);
   if (!fresh) return { skip: "no_text" };
   if (HEADER_LEFT.test(fresh)) return { skip: "quoted_header" };
   const masked = fresh.replace(EMAIL, "[email]").replace(PHONE, "[phone]").slice(0, MAX_CHARS).trim();
