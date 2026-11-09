@@ -123,10 +123,11 @@ test("the run's cap holds per request: a reply never makes more attempts than th
 });
 
 test("ordinary lines never hide a local opt-out: the rule reads past them even where the outbound text stops (review of #34, round 3)", () => {
-  for (const reply of ["Hello,\nReason: 3 emails this week is too much.\nPlease remove me from your list.", "Hello,\n========\nPlease remove me from your list."]) {
+  for (const reply of ["Hello,\nReason: 3 emails this week is too much.\nPlease remove me from your list.", "Hello,\n========\nPlease remove me from your list.", "Hello,\n----- Please remove me -----\nThank you."]) {
     assert.match(newText(reply), /remove me/, reply);
     assert.equal(replyRule(reply, false).opt_out, "uncertain", "held for a person");
     assert.deepEqual(outboundText(reply), { text: "Hello," }, "the model sees less; the local rule still sees the request");
+    assert.equal(replyRule(reply, false).opt_out, "uncertain");
   }
 });
 

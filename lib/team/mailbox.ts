@@ -268,8 +268,6 @@ export type SyncResult = {
   address: string; sends: number; outreach: number; other_crm: number; replies: number; bounces: number; threads_checked: number; pending: number; complete: boolean;
   attempts: number; reconciled: number; ambiguous_only: number; unattributed_failures: number;
   /** With gmail.readonly: failure reports read per recipient, replies checked by the deterministic rules. */
-  /** Set only with TEAM_SYNC_DEBUG=1 (tests): the underlying error. Never stored. */
-  debug?: string;
   reports_read: number; replies_checked: number; possible_opt_outs: number; model_labeled: number; model_skipped: number; model_failed: number;
   /** A copy of a message already counted from another mailbox (same Message-ID): an observation, not another send. */
   copies: number;
@@ -736,8 +734,6 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     must(await db.from("gtm_team_mailboxes").update({ last_sync_at: now.toISOString(), last_error: null }).eq("member", row.member).eq("address", row.address), "save mailbox status");
   } catch (e) {
     result.error = failure(e);
-    // Tests only (TEAM_SYNC_DEBUG=1): the underlying error, which last_error never carries.
-    if (process.env.TEAM_SYNC_DEBUG === "1") result.debug = String((e as Error)?.message ?? e).slice(0, 500);
     result.complete = false;
     await db.from("gtm_team_mailboxes").update({ last_error: result.error, last_sync_at: now.toISOString() }).eq("member", row.member).eq("address", row.address);
   }

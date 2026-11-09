@@ -344,8 +344,7 @@ test("a reply stored without a person before the canonical attempts existed gain
 });
 
 // On a failed sync, the test names any request the mock did not expect (the sync's own error message is generic).
-process.env.TEAM_SYNC_DEBUG = "1";
-const why = (r: { error?: string; debug?: string }) => `${r.error ?? ""} | ${r.debug ?? ""} | unmocked: ${JSON.stringify(mock?.calls.filter((c) => c.route == null).map((c) => `${c.method} ${c.url}`) ?? [])}`;
+const why = (r: { error?: string }) => `${r.error ?? ""} | unmocked: ${JSON.stringify(mock?.calls.filter((c) => c.route == null).map((c) => `${c.method} ${c.url}`) ?? [])}`;
 const READONLY = ["https://www.googleapis.com/auth/gmail.readonly"];
 const JEV = "https://opencode.ai/inference/systemone/v1/systemone";
 const jev = (choice: string, confidence: number, stop: number) => ({ json: { model: "x", answers: { intent: { type: "choice", choice, confidence }, asked_to_stop: { type: "noul", noul: stop } }, usage: { opencode: { billing_source: "free" } } } });

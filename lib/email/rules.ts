@@ -49,7 +49,8 @@ export function parseDeliveryStatus(text: string): FailureRecipient[] {
 // line ("Reason: 3 emails this week", a "=====" rule) must never hide a request below it (review of #34, round 3). The
 // classifier's outbound text cuts more aggressively on top of this (lib/email/classifier.ts strictText).
 export const NAMED_SEPARATOR = /^\s*-{2,}\s*(Original Message|Forwarded message|Ursprüngliche Nachricht|Weitergeleitete Nachricht|Message d'origine|Message transféré|Mensaje original|Mensagem original|Messaggio originale|Oorspronkelijk bericht|Originalmeddelande|Opprinnelig melding|Original meddelelse|Alkuperäinen viesti)/i;
-// A word framed by dashes, in any language ("-----Исходное сообщение-----").
+// Words framed by dashes, in any language ("-----Исходное сообщение-----"). Only a separator when a sender header follows:
+// a reply may frame its own words the same way ("----- Please remove me -----", review of #34, round 4).
 export const DASHED_WORDS = /^\s*-{3,}\s*\p{L}[\p{L}' ]{2,40}\s*-{3,}\s*$/u;
 export const OUTLOOK_RULE = /^\s*_{10,}\s*$/;
 // A sender header carrying an address, in the common languages ("From: Name <a@b>", "От: ...").
@@ -71,8 +72,8 @@ export function newText(text: string): string {
     if (/^\s*>/.test(l)) continue;
     // An attribution line, also when a mail client wraps it over up to three lines ("On Thu, ..., Sender" / "<a@b> wrote:").
     if (ATTRIBUTION_START.test(l) && lines.slice(i, i + 3).some((x) => ATTRIBUTION_END.test(x) || ATTRIBUTION_VERB.test(x))) break;
-    if (ADDRESS_COLON.test(l) || NAMED_SEPARATOR.test(l) || DASHED_WORDS.test(l)) break;
-    if (OUTLOOK_RULE.test(l) && lines.slice(i + 1, i + 3).some((x) => FROM_HEADER.test(x))) break;
+    if (ADDRESS_COLON.test(l) || NAMED_SEPARATOR.test(l)) break;
+    if ((DASHED_WORDS.test(l) || OUTLOOK_RULE.test(l)) && lines.slice(i + 1, i + 3).some((x) => FROM_HEADER.test(x))) break;
     if (FROM_HEADER.test(l) && out.length > 0) break;
     out.push(l);
   }
