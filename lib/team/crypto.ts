@@ -42,7 +42,13 @@ export const addressHash = (address: string, env?: Record<string, string | undef
 export const messageKey = (messageId: string, env?: Record<string, string | undefined>) =>
   createHmac("sha256", derive("message", env)).update(messageId.trim().replace(/^<|>$/g, "").toLowerCase()).digest("base64url").slice(0, 32);
 
-export type OAuthState = { sub: string; member: string; nonce: string; exp: number };
+/** A Google calendar event id as a keyed hash: the meeting map never stores the raw id (VIB-518). The id alone, not the
+ *  calendar's address, so one meeting on two members' calendars has one key and is counted once. */
+export const eventKey = (eventId: string, env?: Record<string, string | undefined>) =>
+  createHmac("sha256", derive("calendar-event", env)).update(eventId.trim()).digest("base64url").slice(0, 32);
+
+/** `purpose` "calendar" routes the shared callback to the calendar connection (VIB-518); absent means the mailbox. */
+export type OAuthState = { sub: string; member: string; nonce: string; exp: number; purpose?: "calendar" };
 
 export function signState(s: OAuthState, env?: Record<string, string | undefined>): string {
   const body = Buffer.from(JSON.stringify(s)).toString("base64url");

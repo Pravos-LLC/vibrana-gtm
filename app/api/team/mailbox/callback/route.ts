@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/db";
 import { exchangeCode, gmailConfig, mailboxAad, revokeToken, stateKey } from "@/lib/team/mailbox";
+import { calendarAad, exchangeCalendarCode } from "@/lib/team/calendar";
 import { sealToken, verifyState } from "@/lib/team/crypto";
 import { NONCE_COOKIE, VERIFIER_COOKIE, clearFlowCookies, origin, redirectUri, viewer } from "@/lib/team/connect";
 
@@ -11,9 +12,11 @@ import { NONCE_COOKIE, VERIFIER_COOKIE, clearFlowCookies, origin, redirectUri, v
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  // The calendar flow (VIB-518) shares this registered redirect; its state says so, and it returns to /pipeline/meetings.
+  let page = "/team/mailbox?status=";
   const back = async (status: string) => {
     await clearFlowCookies();
-    return NextResponse.redirect(`${await origin()}/team/mailbox?status=${status}`, { status: 303 });
+    return NextResponse.redirect(`${await origin()}${page}${status}`, { status: 303 });
   };
   const url = new URL(request.url);
   if (url.searchParams.get("error")) return back("declined");
@@ -23,18 +26,22 @@ export async function GET(request: Request) {
   const s = verifyState(state, jar.get(NONCE_COOKIE)?.value);
   const verifier = jar.get(VERIFIER_COOKIE)?.value;
   if (!s || !verifier) return back("expired");
+  if (s.purpose === "calendar") page = "/pipeline/meetings?calendar=";
   const v = await viewer();
   if (!v || v.sub !== s.sub || !v.member || v.member.code !== s.member) return back("wrong-user");
   const cfg = gmailConfig();
   if (!cfg) return back("not-configured");
+  if (s.purpose === "calendar") return back(await saveCalendar(cfg, code, verifier, v.member.code));
   let granted: Awaited<ReturnType<typeof exchangeCode>>;
   try { granted = await exchangeCode(cfg, code, verifier, await redirectUri()); } catch { return back("google-refused"); }
   // Google revokes per account and client, not per token: revoking would also kill a live connection of that address
   // (another member's mailbox, or this one's own reconnect). Only a grant nobody uses is revoked (review of #23, N-f).
   // A failed lookup counts as "in use": when unsure, keep the grant rather than risk killing a live connection.
+  // The calendar connection (VIB-518) uses the same client, so its grant for this address counts too.
   const inUse = async () => {
     const { data, error } = await adminDb().from("gtm_team_mailboxes").select("member").eq("address", granted.email).limit(1);
-    return !!error || !!data?.length;
+    const cal = await adminDb().from("gtm_team_calendars").select("member").eq("address", granted.email).limit(1);
+    return !!error || !!data?.length || !!cal.error || !!cal.data?.length;
   };
   if (!v.member.mailboxes.includes(granted.email)) {
     if (!(await inUse())) await revokeToken(granted.refreshToken);
@@ -56,4 +63,32 @@ export async function GET(request: Request) {
     return back("save-failed");
   }
   return back("connected");
+}
+
+/** The calendar connection: any Google account the signed-in member consents with (a calendar can live on another address
+ *  than their mailbox). The calendar scope must be granted. One client serves the mailbox and the calendar, and Google
+ *  revokes per account and client, so a grant is revoked only when neither connection uses that address. */
+async function saveCalendar(cfg: NonNullable<ReturnType<typeof gmailConfig>>, code: string, verifier: string, member: string): Promise<string> {
+  const db = adminDb();
+  const inUse = async (address: string) => {
+    const [a, b] = await Promise.all([
+      db.from("gtm_team_calendars").select("member").eq("address", address).limit(1),
+      db.from("gtm_team_mailboxes").select("member").eq("address", address).limit(1),
+    ]);
+    return !!a.error || !!b.error || !!a.data?.length || !!b.data?.length;
+  };
+  let granted: Awaited<ReturnType<typeof exchangeCalendarCode>>;
+  // A grant without the calendar scope is not revoked: it may be the same account's live mailbox grant.
+  try { granted = await exchangeCalendarCode(cfg, code, verifier, await redirectUri()); } catch (e) {
+    return (e as { scopeMissing?: boolean }).scopeMissing ? "scope-missing" : "google-refused";
+  }
+  const { error } = await db.from("gtm_team_calendars").upsert({
+    member, address: granted.email, token_ciphertext: sealToken(granted.refreshToken, calendarAad(member, granted.email)), key_version: 1,
+    granted_scopes: granted.grantedScopes, connected_at: new Date().toISOString(), last_sync_at: null, last_error: null, last_result: null,
+  }, { onConflict: "member,address" });
+  if (error) {
+    if (!(await inUse(granted.email))) await revokeToken(granted.refreshToken);
+    return "save-failed";
+  }
+  return "connected";
 }

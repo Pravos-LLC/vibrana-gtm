@@ -57,11 +57,13 @@ export class ReconnectError extends Error {}
 
 /* ------------------------------------------------------------------------------------------------ OAuth */
 
-export function authUrl(o: { clientId: string; redirectUri: string; state: string; challenge: string; loginHint: string; scopes?: string[] }) {
+export function authUrl(o: { clientId: string; redirectUri: string; state: string; challenge: string; loginHint?: string; scopes?: string[]; prompt?: string }) {
   const p = new URLSearchParams({
     client_id: o.clientId, redirect_uri: o.redirectUri, response_type: "code", scope: (o.scopes ?? requestedScopes()).join(" "), state: o.state,
-    code_challenge: o.challenge, code_challenge_method: "S256", access_type: "offline", prompt: "consent", login_hint: o.loginHint,
+    code_challenge: o.challenge, code_challenge_method: "S256", access_type: "offline", prompt: o.prompt ?? "consent",
   });
+  // No hint lets the member pick the account (a calendar may live on another address than the mailbox).
+  if (o.loginHint) p.set("login_hint", o.loginHint);
   return `https://accounts.google.com/o/oauth2/v2/auth?${p}`;
 }
 
@@ -89,7 +91,7 @@ export async function revokeToken(token: string, fetcher: typeof fetch = fetch) 
   }).catch(() => undefined);
 }
 
-async function accessToken(cfg: GmailConfig, refreshToken: string, fetcher: typeof fetch) {
+export async function accessToken(cfg: GmailConfig, refreshToken: string, fetcher: typeof fetch = fetch) {
   const res = await providerFetch(fetcher)("https://oauth2.googleapis.com/token", {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, cache: "no-store", signal: AbortSignal.timeout(15_000),
     body: new URLSearchParams({ client_id: cfg.clientId, client_secret: cfg.clientSecret, refresh_token: refreshToken, grant_type: "refresh_token" }),

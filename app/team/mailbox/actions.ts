@@ -31,6 +31,10 @@ export async function disconnectMailbox(): Promise<void> {
   const { data, error } = await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext").eq("member", v.member.code);
   if (error) redirect("/team/mailbox?status=disconnect-failed");
   for (const row of (data ?? []) as { member: string; address: string; token_ciphertext: string }[]) {
+    // One Google client serves the mailbox and the calendar (VIB-518), and Google revokes the whole grant for an account:
+    // with a calendar connected on this address, the mailbox token is deleted below but not revoked.
+    const cal = await db.from("gtm_team_calendars").select("member").eq("address", row.address).limit(1);
+    if (cal.error || cal.data?.length) continue;
     try { await revokeToken(openToken(row.token_ciphertext, mailboxAad(row.member, row.address))); } catch { /* deleted below either way */ }
   }
   // Events first: if a later step fails, a retry still finds the mailbox row and finishes the job.
