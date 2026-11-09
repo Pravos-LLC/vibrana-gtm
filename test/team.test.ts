@@ -368,9 +368,10 @@ test("the reader pages with the cursor and stops at the deadline", async () => {
 
 test("a reconnect never revokes the previous token: Google would revoke the new grant with it (review NB1)", () => {
   const src = readFileSync(new URL("../app/api/team/mailbox/callback/route.ts", import.meta.url), "utf8");
-  assert.equal((src.match(/revokeToken\(/g) ?? []).length, 2, "only the wrong-mailbox and failed-save paths revoke, both the token just granted");
+  assert.equal((src.match(/revokeToken\(/g) ?? []).length, 3, "only the wrong-mailbox and the two failed-save paths revoke, each the token just granted");
   assert.doesNotMatch(src, /openToken/);
-  assert.match(src, /return !!error \|\| !!data\?\.length/, "a failed in-use lookup keeps the grant");
+  assert.match(src, /return !!error \|\| !!data\?\.length \|\| !!cal\.error \|\| !!cal\.data\?\.length/, "a failed in-use lookup keeps the grant, and a calendar on the address counts");
+  assert.match(src, /return !!a\.error \|\| !!b\.error \|\| !!a\.data\?\.length \|\| !!b\.data\?\.length/, "the calendar save checks both connections before revoking");
 });
 
 test("the team cron is scheduled hourly in vercel.json", () => {

@@ -175,6 +175,7 @@ export const TABLES = [
   "gtm_email_attempts", "gtm_email_reply_labels", "gtm_email_sync_ops", "gtm_email_incidents", "gtm_dmarc_reports", "gtm_job_leases",
   "gtm_yt_videos", "gtm_yt_video_daily", "gtm_yt_channel_daily", "gtm_yt_dim_daily", "gtm_yt_report_files",
   "gtm_deal_milestones", "gtm_deal_stage_history", "gtm_linkedin_connections", "gtm_linkedin_threads", "gtm_web_daily",
+  "gtm_team_calendars", "gtm_calendar_meetings",
   "review_batches", "review_assets", "review_comments", "review_publications", "review_publication_cancellations",
 ] as const;
 
@@ -285,6 +286,10 @@ export async function seed() {
   must(await db.from("gtm_sync_state").insert({ key: "fixture.cursor", value: { cursor: "c0" } }), "sync state");
   // Team performance: a connected fixture mailbox (a placeholder, not a real sealed token), one counted send, one snapshot.
   must(await db.from("gtm_team_mailboxes").insert({ member: "SAMPLE", address: "teammate@example.com", token_ciphertext: "fixture-not-a-real-sealed-token-".repeat(2), backfill_done: true }), "team mailbox");
+  must(await db.from("gtm_team_calendars").insert({ member: "SAMPLE", address: "teammate@example.com", token_ciphertext: "fixture-not-a-real-sealed-token-".repeat(2),
+    granted_scopes: ["https://www.googleapis.com/auth/calendar.readonly"], last_sync_at: new Date().toISOString(),
+    last_result: { events: 12, business: 3, created: 2, updated: 0, adopted: 1, removed: 0, kept: 0 } }), "team calendar");
+  must(await db.from("gtm_calendar_meetings").insert({ member: "SAMPLE", event_key: "s".repeat(32), meeting_id: "00000000-0000-4000-8000-0000000000b1", origin: "created", start_at: new Date(Date.now() - 3 * 86400_000).toISOString(), kind: "DISCOVERY" }), "calendar meeting map");
   const fxEvent = must(await db.from("gtm_team_mail_events").insert({ member: "SAMPLE", gmail_message_id: "f1a7", thread_id: "f1a7", kind: "outreach", at: new Date().toISOString(), person_ids: ["fx-person"], recipient_hashes: ["fixture"] }).select("id").single(), "team mail event") as { id: number };
   // Email outcomes (VIB-508): one attempt, one decision, one pending restriction, one incident, one DMARC report, one lease.
   must(await db.from("gtm_email_attempts").insert({ event_id: fxEvent.id, recipient_hash: "f".repeat(32), field: "to", match: "unmatched", stream: "unknown" }), "email attempt");

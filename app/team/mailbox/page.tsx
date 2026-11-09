@@ -47,7 +47,7 @@ export default async function MailboxPage({ searchParams }: { searchParams: Prom
             <li><strong className="text-ink">What is counted:</strong> an email to someone already in the CRM as a prospect (not a client, partner or personal contact), a reply in that thread, or a bounce. Mail to anyone else is skipped and never stored.</li>
             <li><strong className="text-ink">What is stored:</strong> Gmail message and thread ids, the day and time, the CRM record ids, and a keyed hash of each recipient so a reply can be matched. No address, subject or text.</li>
             <li><strong className="text-ink">Who sees it:</strong> the cockpit owners on Analytics, Team, the same page you see, including the list of counted emails.</li>
-            <li><strong className="text-ink">Disconnecting</strong> revokes Google&apos;s access and deletes every counted email.</li>
+            <li><strong className="text-ink">Disconnecting</strong> revokes Google&apos;s access and deletes every counted email. If your calendar is connected on the same Google account (Pipeline, Meetings), the access is deleted here but not revoked, so the calendar keeps working.</li>
           </ul>
         </div>
       </Section>
