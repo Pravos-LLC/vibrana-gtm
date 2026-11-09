@@ -37,7 +37,7 @@ const base = (over: Route[] = []): Route[] => [
   DB,
 ];
 
-async function fresh(row: Partial<{ history_id: string | null; backfill_done: boolean }> = {}) {
+async function fresh(row: Partial<{ history_id: string | null; backfill_done: boolean; granted_scopes: string[] }> = {}) {
   const db = admin();
   const { data: old } = await db.from("gtm_team_mail_events").select("id").eq("member", "TSYNC");
   if (old?.length) await db.from("gtm_email_attempts").delete().in("event_id", old.map((e) => e.id));
@@ -341,4 +341,97 @@ test("a reply stored without a person before the canonical attempts existed gain
   assert.deepEqual(await replyOf(), [P1], "attributed through the repaired canonical attempt");
   await db.from("gtm_email_attempts").delete().eq("event_id", orig.id);
   await db.from("gtm_team_mail_events").delete().eq("member", "TOTHR");
+});
+
+// On a failed sync, the test names any request the mock did not expect (the sync's own error message is generic).
+const why = (r: { error?: string }) => `${r.error ?? ""} | unmocked: ${JSON.stringify(mock?.calls.filter((c) => c.route == null).map((c) => `${c.method} ${c.url}`) ?? [])}`;
+const READONLY = ["https://www.googleapis.com/auth/gmail.readonly"];
+const JEV = "https://opencode.ai/inference/systemone/v1/systemone";
+const jev = (choice: string, confidence: number, stop: number) => ({ json: { model: "x", answers: { intent: { type: "choice", choice, confidence }, asked_to_stop: { type: "noul", noul: stop } }, usage: { opencode: { billing_source: "free" } } } });
+const replyWithText = (id: string, at: number, text: string) => ({ id, threadId: "a10", internalDate: String(at), labelIds: ["INBOX"],
+  payload: { mimeType: "text/plain", headers: [{ name: "From", value: "ana@prospect.test" }], body: { data: Buffer.from(text).toString("base64url") } } });
+const labelsOf = async (gmailId: string) => {
+  const { data: e } = await admin().from("gtm_team_mail_events").select("id").eq("member", "TSYNC").eq("gmail_message_id", gmailId).single();
+  return (await admin().from("gtm_email_reply_labels").select("source,model,intent,opt_out,person_id").eq("event_id", e!.id).order("source")).data ?? [];
+};
+const replyRoutes = (extra: Route[]) => base([
+  { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+  { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
+  { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+  { url: "https://crm.test/graphql", body: page("companies", []), times: 1 },
+  { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("e1", T0 + 3_600_000, "Busy this quarter, check back with me in January.")] } },
+  { url: `${GM}messages/e1`, json: replyWithText("e1", T0 + 3_600_000, "Busy this quarter, check back with me in January.") },
+  ...extra,
+]);
+
+test("with the classifier on, a reply gets a model decision beside the rule's; the model never writes an opt-out", async () => {
+  Object.assign(process.env, { EMAIL_CLASSIFIER: "jev", OPENCODE_API_KEY: "oc_test" });
+  try {
+    const row = await fresh({ granted_scopes: READONLY });
+    mock = installFetchMock(replyRoutes([{ url: JEV, ...jev("not_now", 1, 0.02) }]));
+    const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+    assert.equal(r.error, undefined, why(r));
+    assert.deepEqual([r.replies_checked, r.model_labeled, r.model_failed], [1, 1, 0]);
+    assert.deepEqual(await labelsOf("e1"), [
+      { source: "deterministic", model: null, intent: "uncertain", opt_out: "none", person_id: P1 },
+      { source: "model", model: "jev-1.13-free", intent: "not_now", opt_out: "none", person_id: P1 },
+    ]);
+    const sentToJev = JSON.parse(mock.calls.find((c) => c.url === JEV)!.body!);
+    assert.equal(sentToJev.state, "Busy this quarter, check back with me in January.", "only the reply's new text");
+  } finally { delete process.env.EMAIL_CLASSIFIER; delete process.env.OPENCODE_API_KEY; }
+});
+
+test("the paid model answers when the free one refuses; when neither answers, the reply is read again next run", async () => {
+  Object.assign(process.env, { EMAIL_CLASSIFIER: "jev", OPENCODE_API_KEY: "oc_test" });
+  try {
+    let row = await fresh({ granted_scopes: READONLY });
+    mock = installFetchMock(replyRoutes([{ url: JEV, status: 503, json: {}, times: 2 }]));
+    const first = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+    assert.equal(first.error, undefined, why(first));
+    assert.deepEqual([first.model_labeled, first.model_failed], [0, 1]);
+    assert.deepEqual((await labelsOf("e1")).map((l) => l.source), ["deterministic"], "the rule decision is kept; no model row");
+    mock.restore();
+    row = { ...row, ...(await admin().from("gtm_team_mailboxes").select("history_id,backfill_done").eq("member", "TSYNC").single()).data! };
+    mock = installFetchMock(base([
+      { url: `${GM}history`, json: { history: [], historyId: "901" } },
+      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("e1", T0 + 3_600_000, "Busy this quarter, check back with me in January.")] } },
+      { url: `${GM}messages/e1`, json: replyWithText("e1", T0 + 3_600_000, "Busy this quarter, check back with me in January.") },
+      { url: JEV, status: 429, json: {}, times: 1 },
+      { url: JEV, ...jev("not_now", 0.9, 0.01) },
+    ]));
+    const second = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T01:00:00Z") });
+    assert.equal(second.error, undefined, why(second));
+    assert.equal(second.model_labeled, 1);
+    assert.deepEqual((await labelsOf("e1")).map((l) => [l.source, l.model, l.intent]), [["deterministic", null, "uncertain"], ["model", "jev-1.13", "not_now"]]);
+  } finally { delete process.env.EMAIL_CLASSIFIER; delete process.env.OPENCODE_API_KEY; }
+});
+
+test("a reply with nothing safe to send is recorded as skipped once and never retried; no request reaches the model", async () => {
+  Object.assign(process.env, { EMAIL_CLASSIFIER: "jev", OPENCODE_API_KEY: "oc_test" });
+  try {
+    let row = await fresh({ granted_scopes: READONLY });
+    const quotedOnly = "> Previous message quoted in full";
+    mock = installFetchMock(base([
+      { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+      { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
+      { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+      { url: "https://crm.test/graphql", body: page("companies", []), times: 1 },
+      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("e1", T0 + 3_600_000, quotedOnly)] } },
+      { url: `${GM}messages/e1`, json: replyWithText("e1", T0 + 3_600_000, quotedOnly) },
+    ]));
+    const first = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
+    assert.equal(first.error, undefined, why(first));
+    assert.deepEqual([first.model_labeled, first.model_skipped, first.model_failed], [0, 1, 0]);
+    assert.equal(mock.calls.filter((c) => c.url === JEV).length, 0, "nothing was sent to the model");
+    assert.deepEqual((await labelsOf("e1")).map((l) => [l.source, l.model, l.intent]), [["deterministic", null, "uncertain"], ["model", "none:no_text", "uncertain"]]);
+    mock.restore();
+    row = { ...row, ...(await admin().from("gtm_team_mailboxes").select("history_id,backfill_done").eq("member", "TSYNC").single()).data! };
+    mock = installFetchMock(base([
+      { url: `${GM}history`, json: { history: [], historyId: "901" } },
+      { url: `${GM}threads/a10`, json: { id: "a10", messages: [sent("a1", T0, "ana@prospect.test"), replyWithText("e1", T0 + 3_600_000, quotedOnly)] } },
+    ]));
+    const second = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T01:00:00Z") });
+    assert.equal(second.error, undefined, why(second));
+    assert.equal(mock.calls.filter((c) => c.url.includes("messages/e1")).length, 0, "the reply is done: its text is not read again");
+  } finally { delete process.env.EMAIL_CLASSIFIER; delete process.env.OPENCODE_API_KEY; }
 });

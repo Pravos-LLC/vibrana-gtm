@@ -45,7 +45,25 @@ export function parseDeliveryStatus(text: string): FailureRecipient[] {
   return out;
 }
 
-/** The new text of a reply: no quoted lines, nothing from an attribution line ("On ... wrote:") or a forwarded header on. */
+// Where quoted mail starts. Only high-confidence markers, because this text also feeds the local opt-out rule: an ordinary
+// line ("Reason: 3 emails this week", a "=====" rule) must never hide a request below it (review of #34, round 3). The
+// classifier's outbound text cuts more aggressively on top of this (lib/email/classifier.ts strictText).
+export const NAMED_SEPARATOR = /^\s*-{2,}\s*(Original Message|Forwarded message|Ursprüngliche Nachricht|Weitergeleitete Nachricht|Message d'origine|Message transféré|Mensaje original|Mensagem original|Messaggio originale|Oorspronkelijk bericht|Originalmeddelande|Opprinnelig melding|Original meddelelse|Alkuperäinen viesti)/i;
+// Words framed by dashes, in any language ("-----Исходное сообщение-----"). Only a separator when a sender header follows:
+// a reply may frame its own words the same way ("----- Please remove me -----", review of #34, round 4).
+export const DASHED_WORDS = /^\s*-{3,}\s*\p{L}[\p{L}' ]{2,40}\s*-{3,}\s*$/u;
+export const OUTLOOK_RULE = /^\s*_{10,}\s*$/;
+// A sender header carrying an address, in the common languages ("From: Name <a@b>", "От: ...").
+export const FROM_HEADER = /^\s*\*?(From|Von|De|Da|Van|Från|Fra|Lähettäjä|Od|От|Від|Kimden|Feladó)\*?\s*[:：].*@/iu;
+// An attribution line carrying an address and ending in a colon (Gmail's attribution in any language).
+export const ADDRESS_COLON = /[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+.*[:：]\s*$/u;
+export const ATTRIBUTION_END = /(wrote|schrieb|a écrit|escribió|escreveu|ha scritto|schreef|skrev|kirjoitti)\s*:\s*$/i;
+// German and Dutch put the sender after the verb ("Am ... schrieb Sender <a@b>:").
+const ATTRIBUTION_VERB = /\b(wrote|schrieb|a écrit|escribió|escreveu|ha scritto|schreef|skrev|kirjoitti)\b.*:\s*$/i;
+const ATTRIBUTION_START = /^\s*(On|Am|Le|El|Em|Il|Op|Den|Dne)\s/i;
+
+/** The new text of a reply: no quoted lines, nothing from a high-confidence quote marker on (an attribution line, a named
+ *  or dashed separator, Outlook's rule before a sender header, a sender header with an address). */
 export function newText(text: string): string {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
@@ -53,8 +71,12 @@ export function newText(text: string): string {
     const l = lines[i];
     if (/^\s*>/.test(l)) continue;
     // An attribution line, also when a mail client wraps it over up to three lines ("On Thu, ..., Sender" / "<a@b> wrote:").
-    if (/^\s*On\s/i.test(l) && lines.slice(i, i + 3).some((x) => /wrote:\s*$/i.test(x))) break;
-    if (/^\s*-{2,}\s*(Original Message|Forwarded message)/i.test(l) || (/^\s*From:\s.+$/i.test(l) && out.length > 0)) break;
+    if (ATTRIBUTION_START.test(l) && lines.slice(i, i + 3).some((x) => ATTRIBUTION_END.test(x) || ATTRIBUTION_VERB.test(x))) break;
+    if (ADDRESS_COLON.test(l) || NAMED_SEPARATOR.test(l)) break;
+    // The framed line itself stays: its words may be the person's own ("----- Please remove me -----" right above quoted
+    // mail, review of #34, round 5). A real separator carries no request; the outbound text (strictText) drops the line.
+    if ((DASHED_WORDS.test(l) || OUTLOOK_RULE.test(l)) && lines.slice(i + 1, i + 3).some((x) => FROM_HEADER.test(x))) { out.push(l); break; }
+    if (FROM_HEADER.test(l) && out.length > 0) break;
     out.push(l);
   }
   return out.join("\n").trim();

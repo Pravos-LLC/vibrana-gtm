@@ -22,6 +22,7 @@ import { addressHash, messageKey, openToken } from "./crypto";
 import type { TeamMember } from "./members";
 import { personEmails, RESTRICTIONS_FIELD } from "./restrictions";
 import { parseDeliveryStatus, replyRule } from "../email/rules";
+import { classifierEnabled, classifyReply, DECISION_VERSION as MODEL_DECISION_VERSION } from "../email/classifier";
 import { autoMessage } from "./classify";
 
 export const METADATA_SCOPE = "https://www.googleapis.com/auth/gmail.metadata";
@@ -267,7 +268,7 @@ export type SyncResult = {
   address: string; sends: number; outreach: number; other_crm: number; replies: number; bounces: number; threads_checked: number; pending: number; complete: boolean;
   attempts: number; reconciled: number; ambiguous_only: number; unattributed_failures: number;
   /** With gmail.readonly: failure reports read per recipient, replies checked by the deterministic rules. */
-  reports_read: number; replies_checked: number; possible_opt_outs: number;
+  reports_read: number; replies_checked: number; possible_opt_outs: number; model_labeled: number; model_skipped: number; model_failed: number;
   /** A copy of a message already counted from another mailbox (same Message-ID): an observation, not another send. */
   copies: number;
   /** A Gmail id another mailbox of the member already holds while the member-wide key exists (until the schema follow-up). */
@@ -381,7 +382,7 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
 }): Promise<SyncResult> {
   const now = opts.now ?? new Date(), fetcher = opts.fetcher ?? fetch, clock = opts.clock ?? Date.now;
   const result: SyncResult = { address: row.address, sends: 0, outreach: 0, other_crm: 0, replies: 0, bounces: 0, threads_checked: 0, pending: 0, complete: true,
-    attempts: 0, reconciled: 0, ambiguous_only: 0, unattributed_failures: 0, reports_read: 0, replies_checked: 0, possible_opt_outs: 0, copies: 0, id_collisions: 0 };
+    attempts: 0, reconciled: 0, ambiguous_only: 0, unattributed_failures: 0, reports_read: 0, replies_checked: 0, possible_opt_outs: 0, model_labeled: 0, model_skipped: 0, model_failed: 0, copies: 0, id_collisions: 0 };
   const bodies = canReadBodies(row.granted_scopes);
   const late = () => opts.deadline != null && clock() > opts.deadline;
   const key = stateKey(row.member, row.address);
@@ -586,15 +587,26 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     const replyEvents: Event[] = [];
     const failed: { attemptId: number; at: number; reportId: string; delivery?: string }[] = [];
     const ruled: { replyId: string; persons: string[]; intent: string; opt_out: string }[] = [];
+    const modeled: { replyId: string; persons: string[]; intent: string; opt_out: string; model: string }[] = [];
+    // The model classifier (lib/email/classifier.ts) runs only when switched on, and at most MODEL_CAP replies a run.
+    const classifierOn = bodies && classifierEnabled();
+    const MODEL_CAP = 40;
+    let modelCalls = 0;
     // A reply is done with the rules once a rule decision is stored for it (a neutral one included). An existing reply
     // event alone is not: a run that stopped early, a failed label write or an older metadata-only grant leave it to retry
     // (review of #32, F3).
     const replyRows = [...recent, ...older].filter((e) => e.kind === "reply");
-    const ruledDone = new Set<number>();
+    const ruledDone = new Set<number>(), autoRuled = new Set<number>(), modelDone = new Set<number>();
     if (bodies) for (let i = 0; i < replyRows.length; i += 200) {
-      for (const l of must(await db.from("gtm_email_reply_labels").select("event_id").eq("source", "deterministic").in("event_id", replyRows.slice(i, i + 200).map((e) => e.id)), "rule decisions") as { event_id: number }[]) ruledDone.add(l.event_id);
+      for (const l of must(await db.from("gtm_email_reply_labels").select("event_id,source,intent").in("source", ["deterministic", "model"]).is("superseded_at", null)
+        .in("event_id", replyRows.slice(i, i + 200).map((e) => e.id)), "reply decisions") as { event_id: number; source: string; intent: string }[]) {
+        if (l.source === "model") modelDone.add(l.event_id);
+        else { ruledDone.add(l.event_id); if (l.intent === "auto_reply") autoRuled.add(l.event_id); }
+      }
     }
-    const knownReplies = new Set(replyRows.filter((e) => ruledDone.has(e.id)).map((e) => e.gmail_message_id));
+    // With the classifier on, a reply is done once the model has labeled it too (an auto-reply needs no model); a model call
+    // that failed or was over the run's cap leaves the reply to be read again next run.
+    const knownReplies = new Set(replyRows.filter((e) => ruledDone.has(e.id) && (!classifierOn || modelDone.has(e.id) || autoRuled.has(e.id))).map((e) => e.gmail_message_id));
     let threadsDone = true;
     const scanned = new Set<string>();
     // Threads whose reply text or failure report still needs reading (the run ran out of time first). They stay queued,
@@ -623,6 +635,17 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
             result.replies_checked++;
             if (rule.opt_out !== "none") result.possible_opt_outs++;
             ruled.push({ replyId: r.id, persons: who, intent: rule.intent, opt_out: rule.opt_out });   // neutral too: the completion record
+            if (classifierOn && rule.intent !== "auto_reply") {
+              const res = modelCalls < MODEL_CAP && !late() ? await classifyReply(text, { deadline: opts.deadline, now: clock, maxAttempts: MODEL_CAP - modelCalls }) : null;
+              modelCalls += res?.attempts ?? 0;   // only real requests count toward the cap (review of #34, finding 2)
+              if (res?.status === "decided") {
+                modeled.push({ replyId: r.id, persons: who, intent: res.decision.intent, opt_out: res.decision.opt_out, model: res.decision.model }); result.model_labeled++;
+              } else if (res?.status === "skipped") {
+                // Nothing safe to send (no new text, HTML only, or a quoted header): recorded as done, never retried, and it
+                // says nothing (currentDecisions ignores it).
+                modeled.push({ replyId: r.id, persons: who, intent: "uncertain", opt_out: "none", model: `none:${res.reason}` }); result.model_skipped++;
+              } else { result.model_failed++; bodyPending.add(threadId); }   // read again next run
+            }
           }
         }
         replyEvents.push({ member: row.member, gmail_message_id: r.id, thread_id: threadId, kind: "reply", at: new Date(r.at).toISOString(),
@@ -682,6 +705,13 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
       if (!ev) continue;
       const { error } = await db.from("gtm_email_reply_labels").insert({ event_id: ev.id, person_id: r.persons.length === 1 ? r.persons[0] : null, source: "deterministic", intent: r.intent, opt_out: r.opt_out, decision_version: 1 });
       if (error && error.code !== "23505") throw new Error(`save reply rule: ${error.message}`);   // one current rule decision per reply
+    }
+    for (const r of modeled) {
+      const ev = outcomes.get(r.replyId);
+      if (!ev) continue;
+      const { error } = await db.from("gtm_email_reply_labels").insert({ event_id: ev.id, person_id: r.persons.length === 1 ? r.persons[0] : null, source: "model", model: r.model,
+        intent: r.intent, opt_out: r.opt_out, decision_version: MODEL_DECISION_VERSION });
+      if (error && error.code !== "23505") throw new Error(`save model decision: ${error.message}`);   // one current model decision per reply
     }
 
     // Every sent message up to now was listed and classified: this run is the watermark a history reset reads back from.
