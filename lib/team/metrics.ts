@@ -41,8 +41,12 @@ export const REPLY_MATURE_DAYS = 7;
 const t = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
 const inRange = (iso: string | null | undefined, from: number, to: number) => { const v = t(iso); return v >= from && v < to; };
 const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
-/** Creation times (epoch seconds) of the member's people added inside the window. Before `addedSince` is not known. */
-const addedIn = (p: Activity["people"], w: { from: number; to: number }) => p.added.filter((sec) => sec * 1000 >= w.from && sec * 1000 < w.to);
+/**
+ * Creation times (epoch ms) of the member's people added inside the window, or null when the window starts before the
+ * summary's `addedSince` (an old cache): a partial count is never shown as a whole one (review of #36, L2).
+ */
+const addedIn = (p: Activity["people"], w: { from: number; to: number }): number[] | null =>
+  w.from < Date.parse(p.addedSince) ? null : p.added.filter((ms) => ms >= w.from && ms < w.to);
 const median = (xs: number[]) => {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b), m = Math.floor(s.length / 2);
@@ -141,7 +145,7 @@ function period(i: Inputs, w: Window): Period {
   const days = new Set<string>();
   if (a) {
     for (const r of [...a.companies, ...a.notes, ...a.meetings]) if (inRange(r.createdAt, w.from, w.to)) days.add(r.createdAt.slice(0, 10));
-    if (!a.errors.people) for (const sec of addedIn(a.people, w)) days.add(dayOf(sec * 1000));
+    if (!a.errors.people) for (const ms of addedIn(a.people, w) ?? []) days.add(dayOf(ms));
   }
   for (const e of outreach ?? []) days.add(e.at.slice(0, 10));
   for (const d of desk ?? []) days.add(d.at.slice(0, 10));
@@ -149,7 +153,7 @@ function period(i: Inputs, w: Window): Period {
   const email = mail && o && o !== "unavailable" ? emailStats(o.events, o.attempts, o.decisions, w.from, w.to, i.now.getTime(), { member: o.member, effortDecisions: o.effortDecisions, collectionComplete: o.collection.complete }) : null;
   return {
     email,
-    contactsAdded: a && !a.errors.people ? addedIn(a.people, w).length : null,
+    contactsAdded: a && !a.errors.people ? addedIn(a.people, w)?.length ?? null : null,
     companiesAdded: count(a?.companies, (r) => r.createdAt, a?.errors.companies),
     notes: count(a?.notes, (r) => r.createdAt, a?.errors.notes),
     // One message once, however many of the member's mailboxes saw it: teamReport projects copies away (logicalMail).
@@ -160,7 +164,8 @@ function period(i: Inputs, w: Window): Period {
     reply: email ? { rate: email.replyRate.rate, replied: email.replyRate.num, n: email.replyRate.n } : v2 ? null : mail ? replyRate(mail, w.from, w.to, i.now.getTime()) : null,
     deskSent: desk ? desk.length : null,
     meetings: count(a?.meetings, (r) => r.createdAt, a?.errors.meetings),
-    activeDays: a || mail || desk ? days.size : null,
+    // Not measured when the people's creation times do not reach back over the whole window.
+    activeDays: a && !a.errors.people && addedIn(a.people, w) === null ? null : a || mail || desk ? days.size : null,
     followUp: mail ? followUpRate(mail, w.from, w.to, i.now.getTime()) : null,
   };
 }

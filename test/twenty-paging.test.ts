@@ -79,14 +79,15 @@ test("a cache written before VIB-516 (every person as a row) is read as the summ
   const a = normalizeActivity(legacy as never)!;
   assert.equal(a.people.total, 1); assert.equal(a.people.verified, 1);
   assert.deepEqual(a.people.mine, { p1: "2026-11-01T00:00:00Z" });
-  assert.deepEqual(a.people.added, [Date.parse("2026-11-01T00:00:00Z") / 1000]);
+  assert.deepEqual(a.people.added, [Date.parse("2026-11-01T00:00:00Z")], "creation times in epoch ms");
   assert.equal(normalizeActivity(a), a, "a new cache passes through");
   assert.equal(summarizePeople([], new Date()).total, 0);
 });
 
 test("mirror: readiness, rows without addresses, and Twenty health", async () => {
   assert.equal(mirrorReadiness(null).ready, false);
-  assert.equal(mirrorReadiness({ ...initialState(), backfillDone: true, lastOkAt: new Date().toISOString() }).ready, true);
+  const now = new Date().toISOString();
+  assert.equal(mirrorReadiness({ ...initialState(), backfillDone: true, lastOkAt: now, caughtUpAt: now }).ready, true);
   assert.match(mirrorReadiness({ ...initialState(), backfillDone: true, lastOkAt: "2026-01-01T00:00:00Z" }).reason ?? "", /6 hours/);
   const row = toRow({ id: "x", createdAt: "a", updatedAt: "b", deletedAt: null, createdBy: { source: "API", name: "k", workspaceMemberId: null },
     emails: { primaryEmail: "someone@example.test" }, revEmailVerification: "VERIFIED", prospectNotSendable: " ", companyId: null, lastContactedAt: null }, "now");

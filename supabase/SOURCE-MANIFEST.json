@@ -92,6 +92,6 @@
   "supabase/tests/gtm_work_items.sql": "17d580c26ec298ba65f6cebbca943a059c46de1ba7e5a735e15a619e0e37edd9",
   "supabase/migrations/20261106010000_gtm_email_outcomes.sql": "93972dd8e39683827229176e0896f50d4c28537c191bd0ee40b2cc144ddb05fa",
   "supabase/migrations/20261106020000_gtm_email_mailbox_identity.sql": "b02b397d6e19fea1287b66cc085d97d42c6bc782fe5a237534566a79150a316d",
-  "supabase/migrations/20261109010000_gtm_crm_people.sql": "7c70ebb164b68ea12d4e5e87f225cf6f3a3bbc202088c50d1aedf9d150b408f9",
-  "supabase/tests/gtm_crm_people.sql": "be6753d21b7f3267a02ccecae0eace794882aec9dc10455fab727df8997f30d1"
+  "supabase/migrations/20261109010000_gtm_crm_people.sql": "9d414e8c4ea2d81d1a495118482f63ee2944de18c7bd6e72f64df070a1b2bf99",
+  "supabase/tests/gtm_crm_people.sql": "39beb3b3490c27d7dd3ca9d99c0c7c83c242d5a4c3cb2d28c9b7e8b81b1073a3"
 }

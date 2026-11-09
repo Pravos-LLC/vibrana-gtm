@@ -1,7 +1,9 @@
 // The CRM people mirror (VIB-516) against the real LOCAL database, with Twenty played by an in-memory fake that honours
-// the filters, sorts and cursors the job sends: the backfill across a deadline and its resume, incremental changes, soft
-// deletes, an erasure caught by the count check and the id sweep, the sweep's breaker, the healthz skip, and that the
-// team summary SQL agrees with the reference summary. Synthetic data only.
+// the filters, sorts and cursors the job sends, including Twenty's millisecond cursor (a row in the boundary millisecond
+// comes back on the next page). Covers the backfill across a deadline and its resume, incremental changes, an
+// out-of-order commit, a bulk update of more people than a page in one millisecond, soft deletes, an erasure caught by
+// the count check and the id sweep, writes in flight that must not trigger a resync, the sweep's breaker, a mirror that
+// never gets going, the healthz skip, and that the team summary SQL agrees with the reference summary. Synthetic data only.
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { admin, seed } from "../support/seed.ts";
@@ -9,7 +11,7 @@ import { local } from "../support/local-supabase.ts";
 
 const l = local();
 Object.assign(process.env, { NEXT_PUBLIC_SUPABASE_URL: l.url, SUPABASE_SECRET_KEY: l.secretKey, TWENTY_API_KEY: "twenty_test", TWENTY_BASE: "https://crm.test" });
-const { runMirror, MIRROR_KEY, loadMirrorState, mirrorReadiness, mirrorProblems } = await import("../../lib/crm/mirror.ts");
+const { runMirror, MIRROR_KEY, loadMirrorState, mirrorReadiness, mirrorProblems, initialState } = await import("../../lib/crm/mirror.ts");
 const { TwentyReader } = await import("../../lib/twenty.ts");
 const { mirrorPeople, summarizePeople, collectActivity } = await import("../../lib/team/crm.ts");
 const { parseMembers } = await import("../../lib/team/members.ts");
@@ -20,40 +22,56 @@ const uid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12
 const iso = (ms: number) => new Date(ms).toISOString();
 const T0 = Date.parse("2026-09-01T00:00:00Z");
 
-function dataset(n: number): P[] {
-  return Array.from({ length: n }, (_, i) => ({
-    id: uid(i + 1), createdAt: iso(T0 + i * 3_600_000), updatedAt: iso(T0 + i * 3_600_000 + 60_000), deletedAt: null,
-    name: i % 3 === 0 ? "sync-key" : "John", wm: i % 3 === 0 ? null : WM, source: i % 3 === 0 ? "API" : "MANUAL",
-    email: i % 2 ? `p${i}@example.test` : null, verification: i % 4 === 1 ? "VERIFIED" : null, notSendable: i % 8 === 1 ? "EMAIL_BOUNCED" : null,
-  }));
+function dataset(n: number, from = 1): P[] {
+  return Array.from({ length: n }, (_, k) => {
+    const i = k + from - 1;
+    return {
+      id: uid(i + 1), createdAt: iso(T0 + i * 3_600_000), updatedAt: iso(T0 + i * 3_600_000 + 60_000), deletedAt: null,
+      name: i % 3 === 0 ? "sync-key" : "John", wm: i % 3 === 0 ? null : WM, source: i % 3 === 0 ? "API" : "MANUAL",
+      email: i % 2 ? `p${i}@example.test` : null, verification: i % 4 === 1 ? "VERIFIED" : null, notSendable: i % 8 === 1 ? "EMAIL_BOUNCED" : null,
+    };
+  });
 }
 
-/** Twenty, as the mirror sees it: page size from the query, cursor = the boundary row's index (repeated, as Twenty does). */
+type F = { gte?: string; lt?: string };
+const inRange = (v: string | null, f: F | undefined) => !f || (v != null && (!f.gte || v >= f.gte) && (!f.lt || v < f.lt));
+/** One person filter as the mirror sends it: a field range, or `and` of field ranges. */
+function matches(p: P, f: Record<string, unknown>): boolean {
+  if (Array.isArray(f.and)) return (f.and as Record<string, unknown>[]).every((c) => matches(p, c));
+  return inRange(p.updatedAt, f.updatedAt as F) && inRange(p.deletedAt, f.deletedAt as F) && inRange(p.createdAt, f.createdAt as F);
+}
+
+/**
+ * Twenty, as the mirror sees it. Under a timestamp sort the cursor carries the boundary row's millisecond, and the next
+ * page starts at the first row of that millisecond (Postgres keeps microseconds): one repeat when times are distinct,
+ * the same page forever when a page's worth of rows share it. Under an id sort the cursor is exact.
+ */
 function fakeTwenty(people: P[], seen: string[] = []) {
   return async (_url: RequestInfo | URL, init?: RequestInit) => {
-    const { query, variables } = JSON.parse(String(init!.body)) as { query: string; variables: { f?: Record<string, { gte?: string }>; a?: string | null } };
+    const { query, variables } = JSON.parse(String(init!.body)) as { query: string; variables: { f?: Record<string, unknown>; a?: string | null } };
     seen.push(query);
     const node = (p: P) => ({ id: p.id, createdAt: p.createdAt, updatedAt: p.updatedAt, deletedAt: p.deletedAt,
       createdBy: { source: p.source, name: p.name, workspaceMemberId: p.wm }, emails: { primaryEmail: p.email }, revEmailVerification: p.verification,
       prospectNotSendable: p.notSendable, companyId: null, lastContactedAt: null });
-    const live = people.filter((p) => !p.deletedAt);
-    if (/totalCount/.test(query)) return Response.json({ data: { people: { totalCount: live.length } } });
-    let rows: P[];
     const f = variables.f ?? {};
-    if (/orderBy:\[\{updatedAt/.test(query)) rows = live.filter((p) => p.updatedAt >= f.updatedAt!.gte!).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.id.localeCompare(b.id));
-    else if (/orderBy:\[\{deletedAt/.test(query)) rows = people.filter((p) => p.deletedAt && p.deletedAt >= f.deletedAt!.gte!).sort((a, b) => a.deletedAt!.localeCompare(b.deletedAt!) || a.id.localeCompare(b.id));
-    else rows = [...live].sort((a, b) => a.id.localeCompare(b.id));
+    const wantsDeleted = JSON.stringify(f).includes("deletedAt");
+    const pool = people.filter((p) => (wantsDeleted ? !!p.deletedAt : !p.deletedAt) && matches(p, f));
+    if (/totalCount/.test(query)) return Response.json({ data: { people: { totalCount: pool.length } } });
+    const key = /orderBy:\[\{updatedAt/.test(query) ? "updatedAt" : /orderBy:\[\{deletedAt/.test(query) ? "deletedAt" : "id";
+    const rows = [...pool].sort((a, b) => (key === "id" ? a.id.localeCompare(b.id) : (a[key] as string).localeCompare(b[key] as string) || a.id.localeCompare(b.id)));
     const size = Number(/first:(\d+)/.exec(query)![1]);
-    const start = variables.a ? Number(JSON.parse(Buffer.from(variables.a, "base64").toString()).i) : 0;
-    const slice = rows.slice(start, start + size);
-    const more = start + size < rows.length;
-    const endCursor = slice.length ? Buffer.from(JSON.stringify({ i: start + slice.length - 1 })).toString("base64") : null;
+    const c = variables.a ? JSON.parse(Buffer.from(variables.a, "base64").toString()) as { k: string; id: string } : null;
+    const rest = !c ? rows : key === "id" ? rows.filter((p) => p.id > c.id) : rows.filter((p) => (p[key] as string) >= c.k);
+    const slice = rest.slice(0, size);
+    const last = slice[slice.length - 1];
+    const more = rest.length > size;
+    const endCursor = last ? Buffer.from(JSON.stringify({ k: key === "id" ? "" : last[key], id: last.id })).toString("base64") : null;
     return Response.json({ data: { people: { pageInfo: { hasNextPage: more, endCursor }, edges: slice.map((p) => ({ node: /node \{ id \}/.test(query) ? { id: p.id } : node(p) })) } } });
   };
 }
 
 /** A reader that stops after `requests` Twenty calls (the deadline), with no pacing. */
-const reader = (people: P[], requests = 1_000, seen: string[] = []) => {
+const reader = (people: P[], requests = 10_000, seen: string[] = []) => {
   let n = 0;
   return new TwentyReader({ pauseMs: 0, sleep: async () => {}, now: () => n++ * 1000, deadline: requests * 1000 - 500, fetcher: fakeTwenty(people, seen) as typeof fetch });
 };
@@ -64,29 +82,30 @@ async function reset() {
   await db().from("gtm_sync_state").delete().eq("key", MIRROR_KEY);
 }
 const live = async () => (await db().from("gtm_crm_people").select("id", { count: "exact", head: true }).is("deleted_at", null)).count;
+const row = async (id: string) => (await db().from("gtm_crm_people").select("*").eq("id", id).single()).data!;
 
 before(async () => { await seed(); });
 
-test("backfill: stops at the deadline with its place saved, resumes next run, then matches Twenty's count", async () => {
+test("backfill: stops at the deadline with its place saved (progress, not failure), resumes next run, then counts match", async () => {
   await reset();
   const people = dataset(250);
   const r1 = await runMirror(db(), reader(people, 2));
-  assert.match(r1.stopped ?? "", /deadline/);
+  assert.match(r1.stopped ?? "", /deadline/); assert.equal(r1.failed, undefined);
   const s1 = await loadMirrorState(db());
   assert.equal(s1?.backfillDone, false);
   assert.ok(s1?.changes.after, "the resume point is saved after each page");
   assert.equal(mirrorReadiness(s1).ready, false, "people are not measured while the mirror is still copying");
   const r2 = await runMirror(db(), reader(people));
   assert.equal(r2.stopped, undefined);
-  assert.deepEqual(r2.counts, { twenty: 250, mirror: 250, match: true });
+  assert.equal(r2.counts?.twenty, 250); assert.equal(r2.counts?.mirror, 250); assert.equal(r2.counts?.match, true);
   const s2 = await loadMirrorState(db());
   assert.equal(s2?.backfillDone, true);
   assert.equal(mirrorReadiness(s2).ready, true);
   assert.equal(s2?.changes.since, people[249].updatedAt, "the cursor moves to the newest change seen");
-  const row = (await db().from("gtm_crm_people").select("*").eq("id", uid(2)).single()).data!;
-  assert.equal(row.has_email, true); assert.equal(row.email_verification, "VERIFIED"); assert.equal(row.not_sendable, true);
-  assert.equal(row.created_by_member, WM);
-  assert.equal(Object.keys(row).some((k) => /email$|name$/.test(k) && typeof row[k] === "string" && row[k].includes("@")), false, "no address is stored");
+  const r = await row(uid(2));
+  assert.equal(r.has_email, true); assert.equal(r.email_verification, "VERIFIED"); assert.equal(r.not_sendable, true);
+  assert.equal(r.created_by_member, WM);
+  assert.equal(JSON.stringify(r).includes("@"), false, "no address is stored");
 });
 
 test("incremental: an hour later only changed and new people are read", async () => {
@@ -95,12 +114,40 @@ test("incremental: an hour later only changed and new people are read", async ()
   await runMirror(db(), reader(people));
   const later = iso(Date.parse("2026-11-09T00:00:00Z"));
   people[5] = { ...people[5], email: null, updatedAt: later };
-  people.push({ ...dataset(121)[120], id: uid(999), createdAt: later, updatedAt: later });
-  const seen: string[] = [];
-  const r = await runMirror(db(), reader(people, 1_000, seen));
-  assert.equal(r.changes.rows, 3, "the changed person, the new one, and the boundary row read again (the cursor is inclusive)");
+  people.push({ ...dataset(1, 999)[0], createdAt: later, updatedAt: later });
+  const r = await runMirror(db(), reader(people));
+  assert.equal(r.changes.rows, 3, "the changed person, the new one, and the last row re-read by the overlap");
   assert.equal(await live(), 121);
-  assert.equal((await db().from("gtm_crm_people").select("has_email").eq("id", people[5].id).single()).data!.has_email, false);
+  assert.equal((await row(people[5].id)).has_email, false);
+});
+
+test("an update that committed out of order (stamped before a change already read) is still read: each pass overlaps", async () => {
+  await reset();
+  const people = dataset(50);
+  await runMirror(db(), reader(people));
+  const base = Date.parse(people[49].updatedAt);
+  // B commits first at t+2 min and is read; A was stamped at t+1 min but committed afterwards.
+  people[10] = { ...people[10], updatedAt: iso(base + 120_000), verification: "VERIFIED" };
+  await runMirror(db(), reader(people));
+  people[20] = { ...people[20], updatedAt: iso(base + 60_000), notSendable: "OPTED_OUT" };
+  await runMirror(db(), reader(people));
+  assert.equal((await row(people[20].id)).not_sendable, true, "the late commit is in the mirror");
+});
+
+test("a bulk update of more people than a page in one millisecond: read by id, then the stream carries on", async () => {
+  await reset();
+  const people = dataset(260);
+  await runMirror(db(), reader(people));
+  const bulk = iso(Date.parse("2026-11-09T10:00:00.123Z"));
+  for (let i = 0; i < 150; i++) people[i] = { ...people[i], updatedAt: bulk, verification: "VERIFIED" };
+  people[200] = { ...people[200], updatedAt: iso(Date.parse(bulk) + 5), email: null };
+  const r = await runMirror(db(), reader(people));
+  assert.equal(r.stopped, undefined, "no stall");
+  assert.equal(r.changes.ties, 1);
+  assert.equal(r.changes.caughtUp, true);
+  const { count } = await db().from("gtm_crm_people").select("id", { count: "exact", head: true }).in("id", people.slice(0, 150).map((p) => p.id)).eq("email_verification", "VERIFIED");
+  assert.equal(count, 150, "every person in the bulk millisecond was read");
+  assert.equal((await row(people[200].id)).has_email, false, "and the change after it");
 });
 
 test("a soft delete in Twenty marks the mirror row deleted, and counts still match", async () => {
@@ -111,10 +158,26 @@ test("a soft delete in Twenty marks the mirror row deleted, and counts still mat
   people[3].deletedAt = when; people[4].deletedAt = when;
   const r = await runMirror(db(), reader(people));
   assert.equal(r.deletes.rows, 2);
-  assert.deepEqual(r.counts, { twenty: 58, mirror: 58, match: true });
+  assert.equal(r.counts?.twenty, 58); assert.equal(r.counts?.match, true);
 });
 
-test("an erasure: two disagreeing count checks start a resync, and the id sweep marks the destroyed rows", async () => {
+test("writes in flight: a person created after the cutoff, or a one-off difference, never starts a resync", async () => {
+  await reset();
+  const people = dataset(80);
+  await runMirror(db(), reader(people));
+  // Created a minute ago in Twenty and not mirrored by the count: past the cutoff, so not compared.
+  const justNow = { ...dataset(1, 500)[0], createdAt: iso(Date.now() - 60_000), updatedAt: iso(Date.now() + 3_600_000) };
+  const r1 = await runMirror(db(), reader([...people, justNow]));
+  assert.equal(r1.counts?.match, true, "a create in flight is past the cutoff");
+  // A difference that shows once and heals does not resync.
+  const r2 = await runMirror(db(), reader(people.filter((p) => p.id !== uid(7))));
+  assert.equal(r2.counts?.match, false); assert.equal(r2.resync, undefined);
+  const r3 = await runMirror(db(), reader([...people, justNow]));
+  assert.equal(r3.counts?.match, true); assert.equal(r3.resync, undefined);
+  assert.equal((await loadMirrorState(db()))?.diffRuns, 0);
+});
+
+test("an erasure: the same difference twice starts a resync, and the id sweep marks the destroyed rows", async () => {
   await reset();
   let people = dataset(230);
   await runMirror(db(), reader(people));
@@ -126,12 +189,13 @@ test("an erasure: two disagreeing count checks start a resync, and the id sweep 
   assert.equal(r2.resync, true);
   const r3 = await runMirror(db(), reader(people));
   assert.equal(r3.sweep?.done, true); assert.equal(r3.sweep?.removed, 4);
-  assert.deepEqual(r3.counts, { twenty: 226, mirror: 226, match: true });
+  assert.equal(r3.counts?.twenty, 226); assert.equal(r3.counts?.match, true);
   const { data } = await db().from("gtm_crm_people").select("id").in("id", [...gone]).not("deleted_at", "is", null);
   assert.equal(data?.length, 4);
+  assert.equal(mirrorReadiness(await loadMirrorState(db())).ready, true, "a resync keeps people measured");
 });
 
-test("the sweep's breaker: it refuses to remove most of a page's range at once, and removes nothing", async () => {
+test("the sweep's breaker: it refuses to remove most of a page's range, removes nothing, holds, and raises one incident", async () => {
   await reset();
   let people = dataset(200);
   await runMirror(db(), reader(people));
@@ -144,50 +208,47 @@ test("the sweep's breaker: it refuses to remove most of a page's range at once, 
   const s = await loadMirrorState(db());
   assert.match(s?.sweepError ?? "", /would remove/, "the stop is kept, not retried on its own");
   assert.match(mirrorReadiness(s).reason ?? "", /safety limit/, "people read not measured, with why");
-  assert.deepEqual(mirrorProblems(s).map((p) => p.key), ["health_check:crm_mirror:sweep"], "an incident, once");
+  assert.deepEqual(mirrorProblems(s).map((p) => p.key), ["health_check:crm_mirror:sweep"]);
   const again = await runMirror(db(), reader(people));
   assert.match(again.sweep?.error ?? "", /would remove/); assert.equal(again.sweep?.pages, 0, "held: no sweep reads until cleared");
   assert.equal(await live(), 200);
 });
 
-test("a cursor that stops moving fails the run loudly; three stuck runs restart the stream from its last completed point", async () => {
+test("a mirror that never gets going (every first read fails) keeps its start and error, and raises an incident after 6 hours", async () => {
   await reset();
-  const people = dataset(250);
-  await runMirror(db(), reader(people, 2));          // backfill stops after a page, with a cursor saved
-  const saved = (await loadMirrorState(db()))!.changes.after!;
-  // Twenty answers the saved cursor with the same cursor again, forever.
-  const stuck = (async () => Response.json({ data: { people: { pageInfo: { hasNextPage: true, endCursor: saved }, edges: [] } } })) as typeof fetch;
-  const stuckReader = () => new TwentyReader({ pauseMs: 0, sleep: async () => {}, fetcher: stuck });
-  for (let run = 1; run <= 2; run++) {
-    const r = await runMirror(db(), stuckReader());
-    assert.match(r.stopped ?? "", /cursor did not advance/);
-    assert.equal(r.changes.pages, 1, "one read, not a spin to the deadline");
-    assert.equal((await loadMirrorState(db()))!.stall?.runs, run);
-  }
-  await runMirror(db(), stuckReader());
+  const broken = new TwentyReader({ pauseMs: 0, sleep: async () => {}, retries: 0, fetcher: (async () => Response.json({ errors: [{ message: 'Cannot query field "revEmailVerification"' }] })) as typeof fetch });
+  const r = await runMirror(db(), broken);
+  assert.equal(r.failed, true);
   const s = (await loadMirrorState(db()))!;
-  assert.equal(s.changes.after, null, "the third stuck run restarts from `since`");
-  assert.equal(s.stall, null);
-  const ok = await runMirror(db(), reader(people));
-  assert.deepEqual(ok.counts, { twenty: 250, mirror: 250, match: true }, "and the next healthy run finishes");
+  assert.ok(s.startedAt); assert.match(s.lastError ?? "", /revEmailVerification/);
+  assert.deepEqual(mirrorProblems(s), [], "not yet: a young mirror");
+  const p = mirrorProblems(s, Date.parse(s.startedAt) + 7 * 3_600_000);
+  assert.equal(p[0]?.key, "health_check:crm_mirror:stale"); assert.match(p[0].summary, /revEmailVerification/);
+  const again = await runMirror(db(), broken);
+  assert.equal((await loadMirrorState(db()))!.startedAt, s.startedAt, "the start time is kept across failing runs");
+  assert.equal(again.failed, true);
 });
 
-test("health: an unfinished backfill or a stale mirror is an incident; a healthy one is not", () => {
-  const base = { changes: { since: "x", after: null, maxSeen: null }, deletes: { since: "x", after: null, maxSeen: null }, twentyTotal: null, mirrorLive: null, countsCheckedAt: null, mismatches: 0, sweep: null };
-  const now = Date.parse("2026-11-09T12:00:00Z");
-  assert.deepEqual(mirrorProblems(null), []);
-  assert.deepEqual(mirrorProblems({ ...base, backfillDone: false, lastOkAt: null, startedAt: "2026-11-09T11:00:00Z" }, now), [], "a young backfill is expected");
-  assert.equal(mirrorProblems({ ...base, backfillDone: false, lastOkAt: null, startedAt: "2026-11-09T01:00:00Z" }, now)[0].key, "health_check:crm_mirror:stale");
-  assert.equal(mirrorProblems({ ...base, backfillDone: true, lastOkAt: "2026-11-09T02:00:00Z" }, now)[0].key, "health_check:crm_mirror:stale");
-  assert.deepEqual(mirrorProblems({ ...base, backfillDone: true, lastOkAt: "2026-11-09T11:30:00Z" }, now), []);
-});
-
-test("Twenty unhealthy: the run reads nothing", async () => {
+test("Twenty unhealthy: the run reads nothing and records why", async () => {
   await reset();
   const seen: string[] = [];
   const r = await runMirror(db(), reader(dataset(10), 1_000, seen), { health: async () => false });
-  assert.match(r.skipped ?? "", /healthz/);
+  assert.match(r.skipped ?? "", /healthz/); assert.equal(r.failed, true);
   assert.equal(seen.length, 0);
+  assert.match((await loadMirrorState(db()))!.lastError ?? "", /healthz/);
+});
+
+test("health: stale and never-caught-up mirrors are incidents; a healthy one is not", () => {
+  const now = Date.parse("2026-11-09T12:00:00Z");
+  const s0 = initialState(new Date("2026-11-09T11:00:00Z"));
+  assert.deepEqual(mirrorProblems(null), []);
+  assert.deepEqual(mirrorProblems(s0, now), [], "a young backfill is expected");
+  assert.equal(mirrorProblems({ ...s0, startedAt: "2026-11-09T01:00:00Z" }, now)[0].key, "health_check:crm_mirror:stale");
+  const ok = { ...s0, backfillDone: true, lastOkAt: "2026-11-09T11:30:00Z", caughtUpAt: "2026-11-09T11:30:00Z" };
+  assert.deepEqual(mirrorProblems(ok, now), []); assert.equal(mirrorReadiness(ok, now).ready, true);
+  assert.equal(mirrorProblems({ ...ok, lastOkAt: "2026-11-09T02:00:00Z" }, now)[0].key, "health_check:crm_mirror:stale");
+  const behind = { ...ok, caughtUpAt: "2026-11-07T11:00:00Z" };
+  assert.match(mirrorProblems(behind, now)[0].summary, /caught up/); assert.equal(mirrorReadiness(behind, now).ready, false);
 });
 
 test("the team summary from the mirror equals the reference summary over the same people; lookup keeps only theirs", async () => {
@@ -200,7 +261,7 @@ test("the team summary from the mirror equals the reference summary over the sam
   const fromSql = await src.summary(member, new Date(now.getTime() - 190 * 86_400_000));
   const ref = summarizePeople(people.map((p) => ({ id: p.id, createdAt: p.createdAt, hasEmail: !!p.email, verification: p.verification, notSendable: !!p.notSendable })), now);
   for (const k of ["total", "withEmail", "verified", "sendable", "unverified"] as const) assert.equal(fromSql[k], ref[k], k);
-  assert.deepEqual(fromSql.added, ref.added.filter((s) => s * 1000 >= Date.parse(fromSql.addedSince)));
+  assert.deepEqual(fromSql.added, ref.added.filter((ms) => ms >= Date.parse(fromSql.addedSince)), "creation times in ms, as the reference");
   assert.deepEqual(fromSql.latest.map((x) => x.id), ref.latest.map((x) => x.id));
   const other = parseMembers(JSON.stringify([{ code: "ABE", authEmail: "abe@team.test", apiKeyNames: ["nobody"], mailboxes: [] }]))[0];
   assert.equal((await src.summary(other, now)).total, 0);
@@ -227,5 +288,37 @@ test("collectActivity counts a 13k-person member from the mirror, with no full T
   assert.deepEqual(a.errors, {});
   assert.equal(a.people.total, 13_000);
   assert.equal(seen.some((q) => /\{ people\(/.test(q)), false, "people never read from Twenty");
-  assert.ok(JSON.stringify(a).length < 200_000, "the cache row stays small");
+  assert.ok(JSON.stringify(a).length < 300_000, "the cache row stays small");
+});
+
+test("team run: a mirror that is not ready marks people not measured, and still saves the member's other numbers (review of #36, M4)", async () => {
+  await reset();
+  const { runTeam } = await import("../../lib/team/run.ts");
+  const { loadActivity } = await import("../../lib/team/crm.ts");
+  const members = parseMembers(JSON.stringify([{ code: "TMIR", authEmail: "tmir@team.test", workspaceMemberId: WM, apiKeyNames: ["sync-key"], mailboxes: [] }]));
+  const company = { id: uid(4242), createdAt: "2026-11-01T00:00:00Z", accountOwnerId: null };
+  // Twenty: one company for the member, nothing else; the mirror has no state (not ready).
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (!url.startsWith("https://crm.test")) return original(input, init);
+    const { query } = JSON.parse(String(init!.body)) as { query: string };
+    const object = /\{ (\w+)\(/.exec(query)?.[1] ?? "people";
+    if (/totalCount/.test(query)) return Response.json({ data: { [object]: { totalCount: 0 } } });
+    const edges = object === "companies" ? [{ node: company }] : [];
+    return Response.json({ data: { [object]: { pageInfo: { hasNextPage: false, endCursor: null }, edges } } });
+  }) as typeof fetch;
+  try {
+    const out = await runTeam(db(), members, { deadline: Date.now() + 120_000 });
+    assert.match(String(out.TMIR?.activity), /partial: people/);
+    const a = await loadActivity(db(), "TMIR");
+    assert.match(a?.errors.people ?? "", /still copying/, "people say why they are not measured");
+    assert.equal(a?.companies.length, 1, "the member's companies were saved, not frozen");
+    const { data } = await db().from("gtm_team_stock_daily").select("metrics").eq("member", "TMIR");
+    assert.equal(data?.length, 1, "the day's stock snapshot is written");
+  } finally {
+    globalThis.fetch = original;
+    await db().from("gtm_sync_state").delete().like("key", "team.%tmir%");
+    await db().from("gtm_team_stock_daily").delete().eq("member", "TMIR");
+  }
 });

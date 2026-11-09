@@ -41,12 +41,27 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
     const share = Math.max(0, (membersEnd - Date.now()) / (members.length - i));
     const memberDeadline = Date.now() + share;
     reader.setDeadline(memberDeadline);
+    // The mailbox first, so this run's sends are in the mail events the activity's "emailed by them" lookup reads
+    // (review of #36, L1). It stops 45 s before the member's share ends, leaving the CRM read its time.
+    try {
+      const cfg = gmailConfig();
+      const boxes = must(await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext,history_id,backfill_done,last_sync_at,granted_scopes").eq("member", m.code), "mailboxes") as MailboxRow[];
+      if (!boxes.length) r.mailbox = "not connected";
+      else if (!cfg) r.mailbox = "TEAM_GMAIL_CLIENT_ID / TEAM_GMAIL_CLIENT_SECRET are not set";
+      else {
+        r.mailbox = [];
+        for (const b of boxes) r.mailbox.push(await syncMailbox(db, m, b, reader, { cfg, now, deadline: memberDeadline - 45_000 }));
+      }
+    } catch (e) { r.mailbox = `error: ${(e as Error).message.slice(0, 200)}`; }
+
     try {
       const a = await collectActivity(reader, m, people, now);
-      const failed = Object.keys(a.errors);
-      // A failed read never replaces a good one: the page keeps showing the last complete read, with its time.
-      const previous = failed.length ? await loadActivity(db, m.code).catch(() => null) : null;
-      if (failed.length && previous) {
+      // A failed Twenty read never replaces a good one: the page keeps showing the last complete read, with its time.
+      // People are the exception: they come from the CRM mirror, whose problems have their own reason and incident, so a
+      // mirror that is not ready must not freeze this member's companies, notes, tasks and meetings (review of #36, M4).
+      const failed = Object.keys(a.errors), blocking = failed.filter((k) => k !== "people");
+      const previous = blocking.length ? await loadActivity(db, m.code).catch(() => null) : null;
+      if (blocking.length && previous) {
         r.activity = `kept the read from ${previous.capturedAt}; could not read ${failed.join(", ")}`;
         r.stock = "skipped";
       } else {
@@ -60,17 +75,6 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
         r.stock = failed.length ? "partial" : "ok";
       }
     } catch (e) { r.activity ??= `error: ${(e as Error).message.slice(0, 200)}`; r.stock ??= "skipped"; }
-
-    try {
-      const cfg = gmailConfig();
-      const boxes = must(await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext,history_id,backfill_done,last_sync_at,granted_scopes").eq("member", m.code), "mailboxes") as MailboxRow[];
-      if (!boxes.length) r.mailbox = "not connected";
-      else if (!cfg) r.mailbox = "TEAM_GMAIL_CLIENT_ID / TEAM_GMAIL_CLIENT_SECRET are not set";
-      else {
-        r.mailbox = [];
-        for (const b of boxes) r.mailbox.push(await syncMailbox(db, m, b, reader, { cfg, now, deadline: memberDeadline - 5_000 }));
-      }
-    } catch (e) { r.mailbox = `error: ${(e as Error).message.slice(0, 200)}`; }
   }
   // Suppression (VIB-513): record the operations the evidence implies (pending review; Origami held), then apply approved
   // Twenty operations only when EMAIL_SUPPRESSION_APPLY=1. A failure here never fails the run.

@@ -19,7 +19,8 @@ export async function GET(request: Request) {
   if (lease.data !== true) return NextResponse.json({ skipped: "another mirror run holds the lease" });
   try {
     const result = await runMirror(db, new TwentyReader({ deadline: started + 250_000 }), { health: () => twentyHealthy() });
-    return NextResponse.json(result);
+    // A run that ended on an error (not its deadline) answers 500, so Vercel's cron log shows it.
+    return NextResponse.json(result, { status: result.failed ? 500 : 200 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   } finally {

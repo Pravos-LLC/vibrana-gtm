@@ -34,7 +34,7 @@ select is((public.gtm_team_people_summary('00000000-0000-0000-0000-0000000000a1'
 select is(jsonb_array_length(public.gtm_team_people_summary('00000000-0000-0000-0000-0000000000a1', array['key-a'], '2026-10-01T00:00:00Z') -> 'added'), 3,
   'added lists only the people created since the window start');
 select is((public.gtm_team_people_summary('00000000-0000-0000-0000-0000000000a1', array['key-a'], '2026-10-01T00:00:00Z') -> 'added' ->> 0)::bigint,
-  extract(epoch from timestamptz '2026-11-01T10:00:00Z')::bigint, 'added is creation time in epoch seconds, oldest first');
+  (extract(epoch from timestamptz '2026-11-01T10:00:00Z') * 1000)::bigint, 'added is creation time in epoch milliseconds, oldest first');
 select is(public.gtm_team_people_summary('00000000-0000-0000-0000-0000000000a1', array['key-a'], '2026-10-01T00:00:00Z') -> 'latest' -> 0 ->> 'id',
   '00000000-0000-0000-0000-000000000104', 'latest is newest first');
 select is((public.gtm_team_people_summary(null, array['key-b'], '2026-10-01T00:00:00Z') ->> 'total')::int, 1, 'a member with only a key name');

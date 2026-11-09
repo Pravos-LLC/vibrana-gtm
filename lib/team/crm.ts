@@ -13,7 +13,7 @@ export type ActivityPerson = { id: string; createdAt: string; hasEmail: boolean;
 /**
  * What the team page needs about the people a member created (VIB-516), read from the CRM mirror (gtm_crm_people) by
  * gtm_team_people_summary. Its size grows with a member's recent additions, never with the CRM: counts for the stock
- * tiles, one creation time (epoch seconds) per person added since `addedSince` for the period, weekly and active-day
+ * tiles, one creation time (epoch milliseconds) per person added since `addedSince` for the period, weekly and active-day
  * counts, the newest 25 adds for the timeline, and `mine`: of the people the member emailed or that are opportunity
  * contacts, the ones they created, with when (funnel "added by them", days to first touch).
  */
@@ -65,7 +65,7 @@ export function summarizePeople(rows: ActivityPerson[], now = new Date()): Peopl
     sendable: rows.filter((x) => x.hasEmail && x.verification === "VERIFIED" && !x.notSendable).length,
     unverified: rows.filter((x) => x.verification !== "VERIFIED").length,
     addedSince: since.toISOString(),
-    added: sorted.filter((x) => ms(x.createdAt) >= since.getTime()).map((x) => Math.floor(ms(x.createdAt) / 1000)),
+    added: sorted.filter((x) => ms(x.createdAt) >= since.getTime()).map((x) => ms(x.createdAt)),
     latest: [...sorted].reverse().slice(0, 25).map((x) => ({ id: x.id, createdAt: x.createdAt })),
     mine: Object.fromEntries(rows.map((x) => [x.id, x.createdAt])),
   };
@@ -188,17 +188,19 @@ export const KNOWN_KEYS = "team.api_key_names";
  */
 export async function recentApiWriters(reader: TwentyReader, now = new Date(), known: string[] = []): Promise<string[]> {
   const since = new Date(now.getTime() - 2 * 86_400_000).toISOString();
-  const found = new Set<string>();
+  const found = new Set<string>(), blank = new Set<string>();
   for (const [object, type] of [["people", "PersonFilterInput"], ["companies", "CompanyFilterInput"], ["notes", "NoteFilterInput"], ["opportunities", "OpportunityFilterInput"]] as const) {
     for (let guard = 0; guard < 50; guard++) {
-      const exclude = [...new Set([...known, ...found])];
+      const exclude = [...new Set([...known, ...found, ...blank])];
       // A row with no key name cannot be attributed and must not end the search for real names (review of #36, F3).
       const and: Record<string, unknown>[] = [{ createdAt: { gte: since } }, { createdBy: { source: { eq: "API" } } }, { createdBy: { name: { is: "NOT_NULL" } } }];
       if (exclude.length) and.push({ not: { createdBy: { name: { in: exclude } } } });
       const d = await reader.read<Record<string, { edges: { node: { createdBy: { name: string | null } | null } }[] }>>(
         `query($f:${type}){ ${object}(filter:$f, first:1) { edges { node { createdBy { name } } } } }`, { f: { and } });
       const name = d[object]?.edges[0]?.node.createdBy?.name;
-      if (!name || exclude.includes(name)) break;
+      if (name == null || exclude.includes(name)) break;
+      // An empty key name is excluded from the next ask but is not a writer anyone can configure.
+      if (name === "") { blank.add(name); continue; }
       found.add(name);
     }
   }

@@ -3,13 +3,15 @@
 -- saturated under repeated people reads on 2026-10-01; the cockpit's mirror job (vibrana-gtm lib/crm/mirror.ts, hourly at
 -- :05) reads only what changed since its cursor, paced, and upserts here.
 --
--- Ids, dates and status flags only, the same rule as the team activity read: no name, email address, phone, job title
--- or note text is ever stored. `has_email` is a flag, never the address.
+-- Ids, dates and status flags only: no person's name, email address, phone, job title or note text is ever stored.
+-- `has_email` is a flag, never the address. The creator's Twenty display name or API key name (created_by_name) is kept,
+-- because team attribution is by member or key name.
 --
 -- 1. gtm_crm_people: one row per Twenty person, soft deletes kept as deleted_at (Twenty soft-deletes; an erasure that
 --    destroys the row is caught by the job's count check and id sweep, which sets deleted_at here too).
 -- 2. gtm_team_people_summary(): what the team page needs about the people a member created, as counts plus one
---    creation time per person added since p_since. Its size grows with a member's recent additions, not the CRM.
+--    creation time (epoch milliseconds) per person added since p_since. Its size grows with a member's recent
+--    additions, not the CRM.
 -- 3. gtm_team_people_lookup(): of the given person ids, the ones the member created, with when. Called with the few
 --    people a member emailed or that are opportunity contacts, never with the whole CRM.
 --
@@ -33,7 +35,6 @@ create table public.gtm_crm_people (
 );
 create index gtm_crm_people_member_created_idx on public.gtm_crm_people (created_by_member, created_at) where deleted_at is null;
 create index gtm_crm_people_name_created_idx on public.gtm_crm_people (created_by_name, created_at) where deleted_at is null;
-create index gtm_crm_people_updated_idx on public.gtm_crm_people (updated_at, id);
 
 -- ---- access: the owner reads, the service role writes -----------------------------------------------------------
 
@@ -62,7 +63,7 @@ returns jsonb language sql stable set search_path = '' as $$
     'sendable', (select count(*) from mine where has_email and email_verification = 'VERIFIED' and not not_sendable),
     'unverified', (select count(*) from mine where email_verification is distinct from 'VERIFIED'),
     'addedSince', to_char(p_since at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-    'added', coalesce((select jsonb_agg(floor(extract(epoch from created_at))::bigint order by created_at)
+    'added', coalesce((select jsonb_agg(floor(extract(epoch from created_at) * 1000)::bigint order by created_at)
                         from mine where created_at >= p_since), '[]'::jsonb),
     'latest', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'createdAt', created_at) order by created_at desc, id)
                          from (select id, created_at from mine order by created_at desc, id limit 25) l), '[]'::jsonb)

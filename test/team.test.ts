@@ -250,6 +250,14 @@ const activity = (over: Partial<import("../lib/team/crm.ts").Activity> = {}): im
 });
 const base = { desk: [], memberEmail: "abe@team.test", stock: [], periodDays: 30, now: NOW };
 
+test("contacts added: a window older than the summary's reach reads not measured, never an undercount (review of #36, L2)", () => {
+  const a = activity();
+  const r = M.teamReport({ ...base, periodDays: 90, activity: { ...a, people: { ...a.people, addedSince: d(100) } }, mail: null });
+  assert.equal(r.cur.contactsAdded, 3, "the current 90 days are covered");
+  assert.equal(r.prev.contactsAdded, null, "the 90 days before reach past addedSince");
+  assert.equal(r.prev.activeDays, null);
+});
+
 test("not connected is not measured, never zero", () => {
   const r = M.teamReport({ ...base, activity: null, mail: null, desk: null });
   assert.equal(r.cur.emailsSent, null); assert.equal(r.cur.reply, null); assert.equal(r.cur.contactsAdded, null);
