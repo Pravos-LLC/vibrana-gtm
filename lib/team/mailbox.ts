@@ -13,7 +13,7 @@
 // `gtm team replay` re-lists from a date to reconcile rows written by the older sync.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
-import { must } from "../db";
+import { DbError, must } from "../db";
 import { header, type MailMessage, type MailThread } from "../outreach/mailbox";
 import { createHash } from "node:crypto";
 import { TwentyError, type TwentyReader } from "../twenty";
@@ -303,8 +303,25 @@ const failure = (e: unknown): string => {
   if (e instanceof TwentyError) return "The CRM rejected a lookup; the sync retries next hour.";
   const status = (e as { status?: number }).status;
   if (status) return `Gmail answered ${status}; the sync retries next hour.`;
-  return "The sync stopped early; it resumes where it left off next hour.";
+  return `The sync stopped early (${failedStep(e)}); it resumes where it left off next hour.`;
 };
+
+/**
+ * Where an unexpected failure happened, in words safe for last_error and the alert email: the fixed step label of a failed
+ * database call (lib/db.ts DbError, set in code), the violated constraint's name when there is one, else the error type.
+ * Never the database message itself (it can quote a value) and never a provider body.
+ */
+export function failedStep(e: unknown): string {
+  try {
+    if (e instanceof DbError) {
+      const label = /^[a-z][a-z ,'-]{2,60}$/.test(e.step) ? e.step : "a database step";
+      const constraint = /violates (check|unique|foreign key|not-null) constraint "([a-z0-9_]{1,80})"/.exec(e.message);
+      return constraint ? `at "${label}", ${constraint[1]} constraint ${constraint[2]}` : `at "${label}"`;
+    }
+    const type = e instanceof Error && /^[A-Za-z]{1,40}$/.test(e.name) ? e.name : "unknown error";
+    return type;
+  } catch { return "unknown error"; }
+}
 
 /** Every row of a select, 1000 at a time (PostgREST caps a response at max_rows). Past `max` rows it throws rather than
  *  return a silently truncated list (VIB-516). The select must be ordered by a unique key so pages neither skip nor repeat. */

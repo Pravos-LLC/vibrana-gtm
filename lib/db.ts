@@ -10,7 +10,12 @@ export function adminDb(): SupabaseClient {
   return createClient(url, key, { auth: { persistSession: false }, global: { fetch: demoDatabaseFetch() } });
 }
 
+/** A failed database call. `step` is the caller's fixed label (code, never data), safe to show; the message is not. */
+export class DbError extends Error {
+  constructor(readonly step: string, detail: string) { super(`${step}: ${detail}`); this.name = "DbError"; }
+}
+
 export function must<T>(r: { data: T; error: { message: string } | null }, what: string): T {
-  if (r.error) throw new Error(`${what}: ${r.error.message}`);
+  if (r.error) throw new DbError(what, r.error.message);
   return r.data;
 }
