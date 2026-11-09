@@ -10,7 +10,8 @@ export function adminDb(): SupabaseClient {
   return createClient(url, key, { auth: { persistSession: false }, global: { fetch: demoDatabaseFetch() } });
 }
 
-/** A failed database call. `step` is the caller's fixed label (code, never data), safe to show; the message is not. */
+/** A failed database call. `step` is the caller's label; the message is not safe to show. Only the mailbox sync shows a step
+ *  (lib/team/mailbox.ts failedStep), and its labels are literals; elsewhere a label may hold an id, so do not show it there. */
 export class DbError extends Error {
   constructor(readonly step: string, detail: string) { super(`${step}: ${detail}`); this.name = "DbError"; }
 }

@@ -12,6 +12,15 @@ test("a database step and its violated constraint are named; the database messag
   assert.equal((e as Error).message.startsWith("save mail events: "), true, "the message keeps its old shape for logs and tests");
   assert.equal(failedStep(e), 'at "save mail events", check constraint gtm_team_mail_events_gmail_message_id_check');
   assert.equal(failedStep(dbFail("save attempts", 'invalid input syntax for type uuid: "ana@prospect.test"')), 'at "save attempts"');
+  assert.equal(failedStep(dbFail("save mail events", 'duplicate key value violates unique constraint "gtm_team_mail_events_pkey"')), 'at "save mail events", unique constraint gtm_team_mail_events_pkey');
+  assert.equal(failedStep(dbFail("save mail events", 'null value in column "member" of relation "gtm_team_mail_events" violates not-null constraint')), 'at "save mail events", not-null constraint');
+});
+
+test("a quoted value shaped like a constraint is never shown (review of #38, B1)", () => {
+  const value = 'violates check constraint "private_value"';
+  assert.equal(failedStep(dbFail("save attempts", `invalid input syntax for type uuid: "${value}"`)), 'at "save attempts"');
+  assert.equal(failedStep(dbFail("save attempts", 'invalid input syntax for type uuid: "new row for relation "gtm_x" violates check constraint "gtm_secret""')), 'at "save attempts"');
+  assert.equal(failedStep(dbFail("save attempts", 'new row for relation "people" violates check constraint "people_check"')), 'at "save attempts"', "not this schema's table");
 });
 
 test("only a label set in code is shown; anything else is its error type, never its text", () => {
