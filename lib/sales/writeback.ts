@@ -4,6 +4,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
 import type { TwentyReader } from "../twenty";
+import { selectAll } from "../team/mailbox";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const WRITEBACK_KEY = "pipeline.contacted";
@@ -28,7 +29,9 @@ export async function writeContacted(db: SupabaseClient, reader: TwentyReader, n
   const { data: state } = await db.from("gtm_sync_state").select("value").eq("key", WRITEBACK_KEY).maybeSingle();
   // A day of overlap: a send marked late (a desk click hours after the email) is still picked up.
   const since = new Date(Date.parse((state?.value as { at?: string } | null)?.at ?? "2026-10-01T00:00:00Z") - 86_400_000).toISOString();
-  const drafts = must(await db.from("gtm_outreach_drafts").select("email_sent_at,email_bounced_at,prospect").gte("email_sent_at", since).not("email_sent_at", "is", null).limit(1000), "sent drafts") as SentDraft[];
+  // Every sent draft in the window, 1000 at a time: a single read stopped at 1000 without a word (VIB-516).
+  const drafts = await selectAll<SentDraft>((from, to) => db.from("gtm_outreach_drafts").select("email_sent_at,email_bounced_at,prospect")
+    .gte("email_sent_at", since).not("email_sent_at", "is", null).order("id").range(from, to), "sent drafts");
   const sends = latestSends(drafts, since);
   const run: WritebackRun = { checked: sends.size, updated: 0 };
   const ids = [...sends.keys()];

@@ -5,7 +5,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 import { must } from "../db";
 import { TwentyReader } from "../twenty";
-import { collectActivity, loadActivity, newApiWriters, recentApiWriters, saveActivity, saveApiWriters } from "./crm";
+import { collectActivity, knownApiWriters, loadActivity, mirrorPeople, newApiWriters, recentApiWriters, saveActivity, saveApiWriters } from "./crm";
+import { loadMirrorState, mirrorReadiness } from "../crm/mirror";
 import { gmailConfig, syncMailbox, type MailboxRow, type SyncResult } from "./mailbox";
 import { stock } from "./metrics";
 import type { TeamMember } from "./members";
@@ -30,6 +31,8 @@ export async function runTeam(db: SupabaseClient, members: TeamMember[], opts: {
 
 async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?: Date; deadline: number; notify?: { to: string; from: string } }, now: Date, out: TeamRun): Promise<TeamRun> {
   const reader = new TwentyReader({ deadline: opts.deadline - 5_000 });
+  // People come from the CRM mirror (VIB-516); it is ready once its backfill finished and it synced in the last 6 hours.
+  const people = mirrorPeople(db, async () => mirrorReadiness(await loadMirrorState(db), now.getTime()));
   // Keep the last part of the budget for the API key check.
   const membersEnd = opts.deadline - 20_000;
   for (const [i, m] of members.entries()) {
@@ -39,7 +42,7 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
     const memberDeadline = Date.now() + share;
     reader.setDeadline(memberDeadline);
     try {
-      const a = await collectActivity(reader, m, now);
+      const a = await collectActivity(reader, m, people, now);
       const failed = Object.keys(a.errors);
       // A failed read never replaces a good one: the page keeps showing the last complete read, with its time.
       const previous = failed.length ? await loadActivity(db, m.code).catch(() => null) : null;
@@ -82,7 +85,8 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
   }
   reader.setDeadline(opts.deadline - 5_000);
   try {
-    const { fresh, all } = await newApiWriters(db, await recentApiWriters(reader, now));
+    const known = await knownApiWriters(db);
+    const { fresh, all } = await newApiWriters(db, await recentApiWriters(reader, now, known ?? []));
     out._keys = { new: fresh };
     if (fresh.length && opts.notify) await alertNewKeys(fresh, opts.notify);
     await saveApiWriters(db, all, now);

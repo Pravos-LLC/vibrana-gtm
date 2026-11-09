@@ -8,6 +8,7 @@ import { installFetchMock, type Route } from "./support/fetch-mock.ts";
 
 const KEY = randomBytes(32).toString("base64");
 Object.assign(process.env, { TEAM_MAILBOX_KEY: KEY, TWENTY_API_KEY: "twenty_test", TWENTY_BASE: "https://crm.test", NEXT_PUBLIC_SUPABASE_URL: "https://db.test", SUPABASE_SECRET_KEY: "sb_secret_test" });
+const { summarizePeople, normalizeActivity, collectActivity, recentApiWriters } = await import("../lib/team/crm.ts");
 const { parseMembers, isMemberRow, createdByFilter, teamMembers } = await import("../lib/team/members.ts");
 const { classifyMessage, threadOutcome, recipients, recipientsOf, eligibleForOutreach, policyFlags, verificationOf } = await import("../lib/team/classify.ts");
 const R = await import("../lib/team/restrictions.ts");
@@ -230,13 +231,16 @@ test("recipient hashes are keyed and case-insensitive; PKCE is S256; the auth UR
 
 const NOW = new Date("2026-11-04T12:00:00Z");
 const d = (daysAgo: number) => new Date(NOW.getTime() - daysAgo * M.DAY).toISOString();
-const activity = (over: Partial<import("../lib/team/crm.ts").Activity> = {}) => ({
+// People go through summarizePeople, the same summary the mirror's SQL returns (VIB-516): every assertion below that
+// was written against full rows still holds, which is the equivalence check for the summary.
+const PEOPLE_ROWS = [
+  { id: "p1", createdAt: d(20), hasEmail: true, verification: "VERIFIED", notSendable: false },
+  { id: "p2", createdAt: d(5), hasEmail: true, verification: "VERIFIED", notSendable: true },
+  { id: "p3", createdAt: d(3), hasEmail: false, verification: "UNVERIFIED", notSendable: false },
+];
+const activity = (over: Partial<import("../lib/team/crm.ts").Activity> = {}): import("../lib/team/crm.ts").Activity => ({
   member: "ABE", capturedAt: NOW.toISOString(), errors: {}, captureRuns: 0, notes: [], opportunities: [], tasks: [], meetings: [],
-  people: [
-    { id: "p1", createdAt: d(20), hasEmail: true, verification: "VERIFIED", companyId: null, notSendable: false, lastContactedAt: null },
-    { id: "p2", createdAt: d(5), hasEmail: true, verification: "VERIFIED", companyId: null, notSendable: true, lastContactedAt: null },
-    { id: "p3", createdAt: d(3), hasEmail: false, verification: "UNVERIFIED", companyId: null, notSendable: false, lastContactedAt: null },
-  ],
+  people: summarizePeople(PEOPLE_ROWS, NOW),
   companies: [
     { id: "c1", createdAt: d(30), hasOwner: false },
     { id: "c2", createdAt: d(10), hasOwner: true },

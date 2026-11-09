@@ -53,8 +53,10 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
     // PostgREST returns at most 1000 rows a request: read every page, or past 1000 events the newest would be dropped.
     selectAll<MailEvent>((from, to) => db.from("gtm_team_mail_events").select("kind,at,thread_id,person_ids,message_key,mailbox").eq("member", member.code).order("id").range(from, to), "mail events")
       .then((data) => ({ data, error: null }), (e: Error) => ({ data: null, error: e })),
-    db.from("gtm_outreach_drafts").select("person,email_sent_at,linkedin_sent_at,email_sent_by,linkedin_sent_by")
-      .or(`email_sent_by.eq."${member.authEmail}",linkedin_sent_by.eq."${member.authEmail}"`),
+    // Every page: a single read stops at PostgREST's 1000 rows without a word (VIB-516).
+    selectAll<DeskSend>((from, to) => db.from("gtm_outreach_drafts").select("person,email_sent_at,linkedin_sent_at,email_sent_by,linkedin_sent_by")
+      .or(`email_sent_by.eq."${member.authEmail}",linkedin_sent_by.eq."${member.authEmail}"`).order("id").range(from, to), "desk sends")
+      .then((data) => ({ data, error: null }), (e: Error) => ({ data: null, error: e })),
     db.from("gtm_team_stock_daily").select("date,metrics").eq("member", member.code).order("date", { ascending: false }).limit(60),
   ]);
   const mailboxes = (boxes.data ?? []) as MailboxStatus[];
@@ -69,6 +71,8 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
   const c = r.cur, p = r.prev, s = r.stock;
   const mailMissing = !connected ? "not measured: mailbox not connected" : outcomes === "unavailable" ? "not measured: email outcomes could not be read" : "not measured: mail events could not be read";
   const crmMissing = activity ? "not measured: Twenty read failed" : "not measured: no CRM read yet (the team cron runs hourly)";
+  // People come from the CRM mirror (VIB-516): say why they are missing (still copying, stale), not just that they are.
+  const peopleMissing = activity?.errors.people ? `not measured: ${activity.errors.people}` : crmMissing;
   const spark = (k: keyof (typeof r.weekly)[number]) => r.weekly.map((w) => w[k] as number | null);
   const href = (q: Record<string, string | number>) => `/performance/team?${new URLSearchParams({ member: member.code, days: String(days), ...Object.fromEntries(Object.entries(q).map(([k, v]) => [k, String(v)])) })}`;
 
@@ -128,14 +132,14 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           note={c.reply?.rate != null ? `${c.reply.replied} of ${c.reply.n} first touches, bounces excluded` : undefined} />
         <StatTile label="Meetings" value={c.meetings == null ? null : fmt(c.meetings)} missing={crmMissing} delta={delta(c.meetings, p.meetings, days)} spark={spark("meetings")}
           note="meeting capture proposals tagged to them" />
-        <StatTile label="Sendable contacts" value={s.sendable == null ? null : fmt(s.sendable)} missing={crmMissing}
+        <StatTile label="Sendable contacts" value={s.sendable == null ? null : fmt(s.sendable)} missing={peopleMissing}
           note={s.total != null ? `of ${fmt(s.total)} they added: verified email, not marked unsendable (current state)` : undefined}
           tone={s.total && s.sendable === 0 ? "warn" : undefined} spark={r.stockSeries("sendable")} />
         <StatTile label="Active days" value={c.activeDays == null ? null : `${c.activeDays} / ${days}`} missing="not measured: no source connected"
           delta={delta(c.activeDays, p.activeDays, days)} spark={spark("activeDays")} note="days with a CRM addition, a GTM email or a desk send" />
       </div>
       <div className="mb-12 grid grid-cols-2 gap-4 md:grid-cols-5">
-        {([["Contacts added", "contactsAdded", crmMissing], ["Companies added", "companiesAdded", crmMissing], ["Research notes", "notes", crmMissing],
+        {([["Contacts added", "contactsAdded", peopleMissing], ["Companies added", "companiesAdded", crmMissing], ["Research notes", "notes", crmMissing],
           ["Other CRM mail", "otherCrmMail", mailMissing], ["Replies received", "replies", mailMissing]] as [string, keyof Period, string][]).map(([label, k, miss]) => (
           <StatTile key={k} label={label} value={c[k] == null ? null : fmt(c[k] as number)} missing={miss} delta={delta(c[k] as number | null, p[k] as number | null, days)} />
         ))}

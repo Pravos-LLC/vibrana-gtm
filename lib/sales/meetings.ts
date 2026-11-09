@@ -3,7 +3,7 @@
 // (kinds DISCOVERY, CLIENT, PARTNER, OTHER); people add calls Granola did not record, and correct kinds, in Twenty. Read live per page view. Until the object exists the page says "not installed", never 0.
 import { demoMode } from "../demo";
 import { schemaMiss } from "../meeting-capture";
-import { TwentyError } from "../twenty";
+import { afterArg, pages, TwentyError } from "../twenty";
 import type { Owner } from "./deals";
 import type { Meeting } from "./metrics";
 
@@ -30,10 +30,12 @@ export async function salesMeetings(since: Date, opts: { timeoutMs?: number; que
     return json.data;
   });
   try {
-    const d = await run(`{ meetings(first:300, filter:{mtgAt:{gte:"${since.toISOString()}"}}, orderBy:[{mtgAt:DescNullsLast}]) {
-      edges { node { id name mtgAt mtgOwner mtgKind mtgCompany { name } mtgOpportunity { id stage } } } } }`) as { meetings: { edges: { node: Node }[] } };
+    // Every meeting in the period, page by page: past one page this used to drop the rest without a word (VIB-516).
+    const nodes = await pages<Node>("meetings", (after) => `{ meetings(first:200${afterArg(after)}, filter:{mtgAt:{gte:"${since.toISOString()}"}}, orderBy:[{mtgAt:DescNullsLast},{id:AscNullsFirst}]) {
+      pageInfo { hasNextPage endCursor } edges { node { id name mtgAt mtgOwner mtgKind mtgCompany { name } mtgOpportunity { id stage } } } } }`,
+    { run: async <T>(q: string) => (await run(q)) as T });
     // A retracted row (an opt-out after it was written) waits for an admin delete; it is not a meeting.
-    const meetings = d.meetings.edges.map(({ node: n }) => n).filter((n) => n.mtgAt && n.name !== RETRACTED).map((n): Meeting => ({
+    const meetings = nodes.filter((n) => n.mtgAt && n.name !== RETRACTED).map((n): Meeting => ({
       id: n.id, name: n.name || "Meeting", at: n.mtgAt!, owner: n.mtgOwner === "JOHN" || n.mtgOwner === "ABE" ? (n.mtgOwner as Owner) : null,
       kind: n.mtgKind, company: n.mtgCompany?.name || null, opportunityId: n.mtgOpportunity?.id ?? null, opportunityStage: n.mtgOpportunity?.stage ?? null,
       url: `${base}/object/meeting/${n.id}`,

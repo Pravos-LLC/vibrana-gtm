@@ -4,7 +4,7 @@
 // never breaks on a CRM that is a step behind. Demo mode returns synthetic deals: no request leaves the process.
 import { demoMode } from "../demo";
 import { schemaMiss } from "../meeting-capture";
-import { TwentyError } from "../twenty";
+import { afterArg, pages, TwentyError } from "../twenty";
 
 export const OWNERS = ["JOHN", "ABE"] as const;
 export type Owner = (typeof OWNERS)[number];
@@ -83,14 +83,16 @@ async function post(query: string, timeoutMs: number): Promise<unknown> {
 }
 
 /**
- * Every opportunity (up to 200), newest change first. Tries the pipeline fields; when Twenty does not know one of them
+ * Every opportunity, newest change first. Tries the pipeline fields; when Twenty does not know one of them
  * yet, reads the standard fields instead and reports `fields: "standard"`.
  */
 export async function salesDeals(opts: { timeoutMs?: number; query?: Query } = {}): Promise<DealRead> {
   if (demoMode() && !opts.query) return { deals: SAMPLE_DEALS, fields: "pipeline", sample: true };
   const run = opts.query ?? ((q: string) => post(q, opts.timeoutMs ?? 8_000));
-  const q = (fields: string) => `{ opportunities(first:200, orderBy:[{updatedAt:DescNullsLast}]) { edges { node { ${fields} } } } }`;
-  const read = async (fields: string) => ((await run(q(fields))) as { opportunities: { edges: { node: Node }[] } }).opportunities.edges.map((e) => toDeal(e.node));
+  // Every opportunity, page by page: past one page this used to drop the rest without a word (VIB-516).
+  const q = (fields: string) => (after: string | null) =>
+    `{ opportunities(first:200${afterArg(after)}, orderBy:[{updatedAt:DescNullsLast},{id:AscNullsFirst}]) { pageInfo { hasNextPage endCursor } edges { node { ${fields} } } } }`;
+  const read = async (fields: string) => (await pages<Node>("opportunities", q(fields), { run: async <T>(query: string) => (await run(query)) as T })).map((n) => toDeal(n));
   try {
     return { deals: await read(PIPELINE), fields: "pipeline", sample: false };
   } catch (e) {

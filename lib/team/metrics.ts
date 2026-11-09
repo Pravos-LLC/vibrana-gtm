@@ -41,6 +41,8 @@ export const REPLY_MATURE_DAYS = 7;
 const t = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
 const inRange = (iso: string | null | undefined, from: number, to: number) => { const v = t(iso); return v >= from && v < to; };
 const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+/** Creation times (epoch seconds) of the member's people added inside the window. Before `addedSince` is not known. */
+const addedIn = (p: Activity["people"], w: { from: number; to: number }) => p.added.filter((sec) => sec * 1000 >= w.from && sec * 1000 < w.to);
 const median = (xs: number[]) => {
   if (!xs.length) return null;
   const s = [...xs].sort((a, b) => a - b), m = Math.floor(s.length / 2);
@@ -138,7 +140,8 @@ function period(i: Inputs, w: Window): Period {
   const desk = i.desk ? deskOnly(i.desk, mail, i.memberEmail).filter((d) => inRange(d.at, w.from, w.to)) : null;
   const days = new Set<string>();
   if (a) {
-    for (const r of [...a.people, ...a.companies, ...a.notes, ...a.meetings]) if (inRange(r.createdAt, w.from, w.to)) days.add(r.createdAt.slice(0, 10));
+    for (const r of [...a.companies, ...a.notes, ...a.meetings]) if (inRange(r.createdAt, w.from, w.to)) days.add(r.createdAt.slice(0, 10));
+    if (!a.errors.people) for (const sec of addedIn(a.people, w)) days.add(dayOf(sec * 1000));
   }
   for (const e of outreach ?? []) days.add(e.at.slice(0, 10));
   for (const d of desk ?? []) days.add(d.at.slice(0, 10));
@@ -146,7 +149,7 @@ function period(i: Inputs, w: Window): Period {
   const email = mail && o && o !== "unavailable" ? emailStats(o.events, o.attempts, o.decisions, w.from, w.to, i.now.getTime(), { member: o.member, effortDecisions: o.effortDecisions, collectionComplete: o.collection.complete }) : null;
   return {
     email,
-    contactsAdded: count(a?.people, (r) => r.createdAt, a?.errors.people),
+    contactsAdded: a && !a.errors.people ? addedIn(a.people, w).length : null,
     companiesAdded: count(a?.companies, (r) => r.createdAt, a?.errors.companies),
     notes: count(a?.notes, (r) => r.createdAt, a?.errors.notes),
     // One message once, however many of the member's mailboxes saw it: teamReport projects copies away (logicalMail).
@@ -170,11 +173,11 @@ export type Stock = {
 export function stock(a: Activity | null, now: Date): Stock {
   const p = a && !a.errors.people ? a.people : null, c = a && !a.errors.companies ? a.companies : null, tk = a && !a.errors.tasks ? a.tasks : null;
   return {
-    total: p ? p.length : null,
-    withEmail: p ? p.filter((x) => x.hasEmail).length : null,
-    verified: p ? p.filter((x) => x.hasEmail && x.verification === "VERIFIED").length : null,
-    sendable: p ? p.filter((x) => x.hasEmail && x.verification === "VERIFIED" && !x.notSendable).length : null,
-    unverified: p ? p.filter((x) => x.verification !== "VERIFIED").length : null,
+    total: p ? p.total : null,
+    withEmail: p ? p.withEmail : null,
+    verified: p ? p.verified : null,
+    sendable: p ? p.sendable : null,
+    unverified: p ? p.unverified : null,
     openTasks: tk ? tk.filter((x) => x.status !== "DONE").length : null,
     overdueTasks: tk ? tk.filter((x) => x.status !== "DONE" && x.dueAt && t(x.dueAt) < now.getTime()).length : null,
     companiesNoOwner: c ? c.filter((x) => !x.hasOwner).length : null,
@@ -196,7 +199,7 @@ export type Funnel = { label: string; value: number | null }[];
 /** Over all of the member's records: added, has email, verified, emailed, replied, meetings, opportunities touched. */
 export function funnel(i: Inputs): Funnel {
   const a = i.activity, s = stock(a, i.now);
-  const mine = new Set(a?.people.map((p) => p.id) ?? []);
+  const mine = a?.people.mine ?? {};
   const emailedThreads = new Map<string, string[]>();
   for (const e of i.mail ?? []) if (e.kind === "outreach") emailedThreads.set(e.thread_id, [...(emailedThreads.get(e.thread_id) ?? []), ...e.person_ids]);
   const repliedThreads = new Set((i.mail ?? []).filter((e) => e.kind === "reply").map((e) => e.thread_id));
@@ -207,7 +210,7 @@ export function funnel(i: Inputs): Funnel {
     { label: "With an email", value: s.withEmail },
     { label: "Email verified", value: s.verified },
     { label: "Emailed (any CRM person)", value: i.mail ? emailed.size : null },
-    { label: "Of those, added by them", value: i.mail && a ? [...emailed].filter((p) => mine.has(p)).length : null },
+    { label: "Of those, added by them", value: i.mail && a && !a.errors.people ? [...emailed].filter((p) => p in mine).length : null },
     { label: "Replied", value: i.mail ? replied.size : null },
     { label: "Meetings", value: a && !a.errors.meetings ? a.meetings.length : null },
     { label: "Opportunities touched", value: a && !a.errors.opportunities ? a.opportunities.length : null },
@@ -216,10 +219,10 @@ export function funnel(i: Inputs): Funnel {
 
 /** Median days from a person being added to the first outreach email to them (people the member added and emailed). */
 export function daysToFirstTouch(i: Inputs): number | null {
-  if (!i.activity || !i.mail) return null;
+  if (!i.activity || !i.mail || i.activity.errors.people) return null;
   const first = new Map<string, number>();
   for (const e of i.mail) if (e.kind === "outreach") for (const p of e.person_ids) first.set(p, Math.min(first.get(p) ?? Infinity, t(e.at)));
-  const gaps = i.activity.people.flatMap((p) => (first.has(p.id) ? [Math.max(0, (first.get(p.id)! - t(p.createdAt)) / DAY)] : []));
+  const gaps = Object.entries(i.activity.people.mine).flatMap(([id, createdAt]) => (first.has(id) ? [Math.max(0, (first.get(id)! - t(createdAt)) / DAY)] : []));
   const m = median(gaps);
   return m == null ? null : Math.round(m * 10) / 10;
 }
@@ -244,7 +247,7 @@ export function timeline(i: Inputs, limit = 25): TimelineItem[] {
   const items: (TimelineItem & { at: number })[] = [];
   for (const e of i.mail ?? []) items.push({ at: t(e.at), day: e.at.slice(0, 10), kind: { outreach: "Outreach email", other_crm: "Other CRM mail", reply: "Reply received", bounce: "Bounce" }[e.kind], personId: e.person_ids[0] ?? null, companyId: null });
   for (const d of i.desk ? deskOnly(i.desk, i.mail, i.memberEmail) : []) items.push({ at: t(d.at), day: d.at.slice(0, 10), kind: d.channel === "email" ? "Desk email marked sent" : "LinkedIn invite marked sent", personId: d.person, companyId: null });
-  for (const p of i.activity?.people ?? []) items.push({ at: t(p.createdAt), day: p.createdAt.slice(0, 10), kind: "Contact added", personId: p.id, companyId: null });
+  for (const p of i.activity?.people.latest ?? []) items.push({ at: t(p.createdAt), day: p.createdAt.slice(0, 10), kind: "Contact added", personId: p.id, companyId: null });
   for (const c of i.activity?.companies ?? []) items.push({ at: t(c.createdAt), day: c.createdAt.slice(0, 10), kind: "Company added", personId: null, companyId: c.id });
   for (const m of i.activity?.meetings ?? []) items.push({ at: t(m.createdAt), day: m.createdAt.slice(0, 10), kind: "Meeting captured", personId: null, companyId: null });
   return items.filter((x) => Number.isFinite(x.at)).sort((x, y) => y.at - x.at).slice(0, limit).map(({ at: _at, ...x }) => x);
