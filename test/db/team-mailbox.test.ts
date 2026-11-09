@@ -371,7 +371,7 @@ test("with the classifier on, a reply gets a model decision beside the rule's; t
     mock = installFetchMock(replyRoutes([{ url: JEV, ...jev("not_now", 1, 0.02) }]));
     const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
     assert.equal(r.error, undefined, why(r));
-    assert.deepEqual([r.replies_checked, r.model_labeled, r.model_failed], [1, 1, 0]);
+    assert.deepEqual([r.replies_checked, r.model_labeled, r.model_failed, r.model_waiting], [1, 1, 0, 0]);
     assert.deepEqual(await labelsOf("e1"), [
       { source: "deterministic", model: null, intent: "uncertain", opt_out: "none", person_id: P1 },
       { source: "model", model: "jev-1.13-free", intent: "not_now", opt_out: "none", person_id: P1 },
@@ -388,7 +388,7 @@ test("the paid model answers when the free one refuses; when neither answers, th
     mock = installFetchMock(replyRoutes([{ url: JEV, status: 503, json: {}, times: 2 }]));
     const first = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
     assert.equal(first.error, undefined, why(first));
-    assert.deepEqual([first.model_labeled, first.model_failed], [0, 1]);
+    assert.deepEqual([first.model_labeled, first.model_failed, first.model_waiting], [0, 1, 0], "both models asked and failed: a failure, not waiting");
     assert.deepEqual((await labelsOf("e1")).map((l) => l.source), ["deterministic"], "the rule decision is kept; no model row");
     mock.restore();
     row = { ...row, ...(await admin().from("gtm_team_mailboxes").select("history_id,backfill_done").eq("member", "TSYNC").single()).data! };
@@ -421,7 +421,7 @@ test("a reply with nothing safe to send is recorded as skipped once and never re
     ]));
     const first = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T00:00:00Z") });
     assert.equal(first.error, undefined, why(first));
-    assert.deepEqual([first.model_labeled, first.model_skipped, first.model_failed], [0, 1, 0]);
+    assert.deepEqual([first.model_labeled, first.model_skipped, first.model_failed, first.model_waiting], [0, 1, 0, 0]);
     assert.equal(mock.calls.filter((c) => c.url === JEV).length, 0, "nothing was sent to the model");
     assert.deepEqual((await labelsOf("e1")).map((l) => [l.source, l.model, l.intent]), [["deterministic", null, "uncertain"], ["model", "none:no_text", "uncertain"]]);
     mock.restore();
