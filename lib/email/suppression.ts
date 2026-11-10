@@ -36,6 +36,11 @@ const both = (o: Omit<Op, "destination" | "state" | "last_error" | "policy_versi
   { ...o, destination: "origami", action: "exclusion_upsert", state: "held", last_error: ORIGAMI_HELD, policy_version: POLICY_VERSION },
 ];
 
+/** Labels that still speak: on a reply a person has labeled, only the person's label does. Pure. */
+export function withoutOverruled<L extends { event_id: number | null; source: string }>(labels: L[], humanLabeled: Set<number>): L[] {
+  return labels.filter((l) => l.source === "human" || l.event_id == null || !humanLabeled.has(l.event_id));
+}
+
 /** The operations the evidence implies. Pure; the same evidence always gives the same op keys. */
 export function proposeOps(attempts: AttemptIn[], labels: LabelIn[], replySender: Map<number, string>): Op[] {
   const out: Op[] = [];
@@ -72,7 +77,14 @@ export async function recordProposals(db: SupabaseClient, ops: Op[]) {
 export async function detect(db: SupabaseClient) {
   type A = AttemptIn & { id: number };
   const attempts = await selectAll<A>((f, t) => db.from("gtm_email_attempts").select("id,event_id,person_id,recipient_hash,delivery,delivery_at,delivery_event_id").eq("delivery", "failed_invalid_address").order("id").range(f, t), "failed attempts");
-  const labels = await selectAll<LabelIn>((f, t) => db.from("gtm_email_reply_labels").select("id,event_id,person_id,source,opt_out,superseded_at,labeled_at").neq("opt_out", "none").is("superseded_at", null).order("id").range(f, t), "opt-out decisions");
+  const all = await selectAll<LabelIn>((f, t) => db.from("gtm_email_reply_labels").select("id,event_id,person_id,source,opt_out,superseded_at,labeled_at").neq("opt_out", "none").is("superseded_at", null).order("id").range(f, t), "opt-out decisions");
+  // A reply a person has labeled is decided: the rule's or the model's possible opt-out on it no longer opens a review (VIB-496).
+  const labeled = new Set<number>();
+  const ids = [...new Set(all.map((l) => l.event_id).filter((x): x is number => x != null))];
+  for (let i = 0; i < ids.length; i += 200) {
+    for (const h of must(await db.from("gtm_email_reply_labels").select("event_id").eq("source", "human").is("superseded_at", null).in("event_id", ids.slice(i, i + 200)), "human labels") as { event_id: number }[]) labeled.add(h.event_id);
+  }
+  const labels = withoutOverruled(all, labeled);
   const replyIds = [...new Set(labels.map((l) => l.event_id).filter((x): x is number => x != null))];
   const sender = new Map<number, string>();
   for (let i = 0; i < replyIds.length; i += 200) {

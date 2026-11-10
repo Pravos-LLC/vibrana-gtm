@@ -225,7 +225,7 @@ test.describe("owner", () => {
   test("Pipeline: the goal from paid milestones, the reverse funnel, each tab, and assumptions saved in Settings", async ({ page }) => {
     await page.goto("/pipeline");
     await expect(page.getByRole("heading", { name: "Pipeline", exact: true })).toBeVisible();
-    await expect(page.getByRole("navigation", { name: "Pipeline sections" }).getByRole("link")).toHaveCount(6);
+    await expect(page.getByRole("navigation", { name: "Pipeline sections" }).getByRole("link")).toHaveCount(7);
     // $8,000 paid today on the sample won deal.
     await expectKpi(page, "Cash collected this month", "$8,000");
     await expect(page.getByText(/Twenty could not be read/)).toBeVisible();
@@ -256,6 +256,9 @@ test.describe("owner", () => {
     await expect(page.getByText(/Twenty could not be read/)).toBeVisible();
     await page.goto("/pipeline/people");
     await expect(page.getByRole("cell", { name: "Open deals", exact: true })).toBeVisible();
+    await page.goto("/pipeline/replies");
+    await expect(page.getByRole("heading", { name: "Try the classifier" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Stop list" })).toBeVisible();
 
     await page.goto("/settings#pipeline");
     const goal = page.getByLabel("Take-home goal a month");
