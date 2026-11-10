@@ -109,6 +109,13 @@ export class OrigamiClient {
   person(campaignId: string, sequenceId: string) { return this.request<PersonDetail>("GET", `/send/campaigns/${enc(campaignId)}/people/${enc(sequenceId)}`); }
   /** Lead replies, newest first (keyset on received_at, id). `since` is an ISO timestamp. */
   replies(since?: string) { return this.all<Reply>("/send/replies", { from: "lead", since }); }
+  /** One page for the resumable poll. The caller persists a checkpoint only after recording the page. */
+  repliesPage(since?: string, cursor?: string | null) {
+    const q = new URLSearchParams({ from: "lead", limit: "100" });
+    if (since) q.set("since", since);
+    if (cursor) q.set("cursor", cursor);
+    return this.request<List<Reply>>("GET", `/send/replies?${q}`);
+  }
   /** POST .../people/{sequence_id}/stop: no further steps, history kept (docs: send-campaigns-people-stop). */
   stop(campaignId: string, sequenceId: string, idempotencyKey: string) {
     return this.request<Record<string, unknown>>("POST", `/send/campaigns/${enc(campaignId)}/people/${enc(sequenceId)}/stop`, {}, idempotencyKey);
