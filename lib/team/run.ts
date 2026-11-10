@@ -12,8 +12,9 @@ import { stock } from "./metrics";
 import type { TeamMember } from "./members";
 import { runEmailHealth, type HealthRun } from "../email/run";
 import { applyTwenty, detect } from "../email/suppression";
+import { errorText, runOrigamiOptouts } from "../origami/optouts";
 
-export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string }; _lease?: string; _health?: HealthRun | { error: string }; _suppression?: Record<string, unknown> };
+export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string }; _lease?: string; _health?: HealthRun | { error: string }; _suppression?: Record<string, unknown>; _origami?: Record<string, unknown> };
 
 const LEASE = "team.hourly";
 
@@ -33,6 +34,14 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
   const reader = new TwentyReader({ deadline: opts.deadline - 5_000 });
   // People come from the CRM mirror (VIB-516); it is ready once its backfill finished and it synced in the last 6 hours.
   const people = mirrorPeople(db, async () => mirrorReadiness(await loadMirrorState(db), now.getTime()));
+  // Origami opt-outs (VIB-521) first, with up to 100 s of the budget: compliance work goes before activity metrics, and
+  // work it cannot finish is deferred to the next run, never counted as failed. Off unless ORIGAMI_OPTOUT_APPLY=1; its
+  // Twenty operations are applied by applyTwenty below. Never fails the run.
+  try {
+    const origamiEnd = Math.min(opts.deadline - 120_000, Date.now() + 100_000);
+    reader.setDeadline(origamiEnd);
+    out._origami = await runOrigamiOptouts(db, reader, now, { deadline: origamiEnd }) as Record<string, unknown>;
+  } catch (e) { out._origami = { error: errorText(e) }; }
   // Keep the last part of the budget for the API key check.
   const membersEnd = opts.deadline - 20_000;
   for (const [i, m] of members.entries()) {

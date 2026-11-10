@@ -61,12 +61,13 @@ export class TwentyReader {
     for (let attempt = 0; ; attempt++) {
       const wait = this.last + pause - now();
       if (wait > 0) await sleep(wait);
-      if (this.opts.deadline && now() > this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
+      const started = now();
+      if (this.opts.deadline && started > this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
       this.requests.count++;
       let status = 0, json: { data?: T; errors?: unknown } | null = null, failure = "";
       try {
         const res = await (this.opts.fetcher ?? fetch)(`${BASE}/graphql`, {
-          signal: AbortSignal.timeout(this.opts.timeoutMs ?? 20_000), method: "POST",
+          signal: AbortSignal.timeout(Math.max(1, Math.min(this.opts.timeoutMs ?? 20_000, this.opts.deadline ? this.opts.deadline - started : Infinity))), method: "POST",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
           body: JSON.stringify({ query, variables }),
         });
@@ -76,9 +77,12 @@ export class TwentyReader {
       this.last = now();
       if (json?.errors) throw new TwentyError(`Twenty: ${JSON.stringify(json.errors).slice(0, 300)}`, json.errors);
       if (status >= 200 && status < 300 && json?.data) return json.data;
+      if (this.opts.deadline && this.last >= this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
       const transient = !status || status === 429 || status >= 500;
       if (!transient || attempt >= retries) throw new Error(`Twenty read failed (${status || failure || "no response"})`);
-      await sleep(Math.min(30_000, 2_000 * 2 ** attempt));
+      const delay = Math.min(30_000, 2_000 * 2 ** attempt);
+      if (this.opts.deadline && this.last + delay >= this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
+      await sleep(delay);
     }
   }
 
@@ -90,6 +94,7 @@ export class TwentyReader {
   async all<N>(object: string, fields: string, filter: Record<string, unknown> | null, filterType: string, pageSize = 100, max = 5_000): Promise<N[]> {
     const out: N[] = [];
     const seen = new Set<string>();
+    const cursors = new Set<string>();
     const select = /(^|\s)id(\s|$)/.test(fields) ? fields : `id ${fields}`;
     let after: string | null = null;
     for (;;) {
@@ -99,10 +104,12 @@ export class TwentyReader {
       const c = d[object];
       let fresh = 0;
       for (const e of c.edges) if (!seen.has(e.node.id)) { seen.add(e.node.id); out.push(e.node); fresh++; }
-      if (!c.pageInfo.hasNextPage || !c.pageInfo.endCursor) return out;
+      if (!c.pageInfo.hasNextPage) return out;
+      if (!c.pageInfo.endCursor) throw new Error(`Twenty ${object}: missing next cursor; refusing to return a silently truncated list`);
       // A full page of rows already seen means the cursor did not move: stopping here would drop the rest without a word.
-      if (!fresh && c.edges.length) throw new Error(`Twenty ${object}: the cursor did not advance; refusing to return a silently truncated list`);
+      if (!fresh || cursors.has(c.pageInfo.endCursor)) throw new Error(`Twenty ${object}: the cursor did not advance; refusing to return a silently truncated list`);
       if (out.length >= max) throw new Error(`Twenty ${object}: more than ${max} rows; refusing to return a silently truncated list`);
+      cursors.add(c.pageInfo.endCursor);
       after = c.pageInfo.endCursor;
     }
   }

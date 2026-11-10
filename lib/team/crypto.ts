@@ -47,6 +47,14 @@ export const messageKey = (messageId: string, env?: Record<string, string | unde
 export const eventKey = (eventId: string, env?: Record<string, string | undefined>) =>
   createHmac("sha256", derive("calendar-event", env)).update(eventId.trim()).digest("base64url").slice(0, 32);
 
+/** A LinkedIn profile slug as a keyed hash (VIB-521): Origami evidence never stores the profile URL. */
+export const linkedinHash = (slug: string, env?: Record<string, string | undefined>) =>
+  createHmac("sha256", derive("linkedin-slug", env)).update(slug.trim().toLowerCase()).digest("base64url").slice(0, 32);
+
+/** A keyed hash of a reply's text (VIB-521): proves which text a rule judged without keeping the text. */
+export const replyHash = (text: string, env?: Record<string, string | undefined>) =>
+  createHmac("sha256", derive("origami-reply", env)).update(text).digest("base64url").slice(0, 32);
+
 /** `purpose` "calendar" routes the shared callback to the calendar connection (VIB-518); absent means the mailbox. */
 export type OAuthState = { sub: string; member: string; nonce: string; exp: number; purpose?: "calendar" };
 

@@ -1741,6 +1741,19 @@ const commands: Record<string, () => Promise<void>> = {
     // Email suppression (VIB-513). `plan` records what the evidence implies and prints the dry-run report (counts only);
     // `approve --ids 1,2 --ref "..."` approves pending Twenty operations against that report; `apply` runs the guarded
     // writer, only with EMAIL_SUPPRESSION_APPLY=1. Origami operations stay held until its exclusion scope is verified.
+    if (rest[0] === "origami-plan") {
+      // The Origami opt-out dry run (VIB-521): what ORIGAMI_OPTOUT_APPLY=1 would do with the evidence on Origami now.
+      // Origami GETs only (and Twenty reads when TWENTY_API_KEY is set); no database, no write. Counts only.
+      const now = new Date();
+      const { OrigamiClient } = await import("../lib/origami/client");
+      const { planOrigami } = await import("../lib/origami/optouts");
+      const { TwentyReader } = await import("../lib/twenty");
+      const since = flag("--since");
+      if (since && !Number.isFinite(Date.parse(since))) throw new Error("--since is a date or timestamp, e.g. 2026-11-01");
+      const deadline = Date.now() + 20 * 60_000;
+      const report = await planOrigami(new OrigamiClient({ deadline }), process.env.TWENTY_API_KEY && process.env.TWENTY_BASE ? new TwentyReader({ deadline }) : null, now, { since: since ? new Date(since).toISOString() : undefined });
+      return out(report, () => console.log(JSON.stringify(report, null, 2)));
+    }
     const { adminDb, must } = await import("../lib/db");
     const S = await import("../lib/email/suppression");
     const db = adminDb(), sub = rest[0], now = new Date();
@@ -1763,7 +1776,18 @@ const commands: Record<string, () => Promise<void>> = {
       const r = await S.applyTwenty(db, new TwentyReader({ deadline: Date.now() + 240_000 }), now);
       return out(r, () => console.log(JSON.stringify(r)));
     }
-    throw new Error("usage: gtm suppression plan | approve --ids 1,2 --ref TEXT | apply");
+    if (sub === "origami-reviewed") {
+      // A person's decision on Origami opt-out evidence (VIB-521). Ids are gtm_origami_replies ids. --opt-out: it was an
+      // opt-out (the consent write follows, stops carry on); --not: it was not (the desk hold is released, stops not yet
+      // made are canceled); --handled: no single Twenty person matched and it was dealt with in Twenty by hand.
+      const ids = (flag("--ids") ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0), by = flag("--by") ?? "";
+      const picked = (["--opt-out", "--not", "--handled"] as const).filter((f) => argv.includes(f));
+      if (!ids.length || !by || picked.length !== 1) throw new Error('usage: gtm suppression origami-reviewed --ids 1,2 --by "<who decided>" --opt-out | --not | --handled');
+      const decision = ({ "--opt-out": "opt_out", "--not": "not_opt_out", "--handled": "handled" } as const)[picked[0]];
+      const r = await (await import("../lib/origami/optouts")).resolveOrigamiReviews(db, ids, decision, by, now);
+      return out(r, () => console.log(JSON.stringify(r, null, 2)));
+    }
+    throw new Error("usage: gtm suppression plan | approve --ids 1,2 --ref TEXT | apply | origami-plan [--since DATE] | origami-reviewed --ids 1,2 --by NAME --opt-out|--not|--handled");
   },
 
   async team() {
@@ -2037,6 +2061,10 @@ const help = `gtm <command> [--json]
                            date and re-read its outreach threads on the next hourly run (reconciles older rows; reads only)
   suppression plan|approve|apply   email suppression (VIB-513): the dry-run report (counts only), approve pending Twenty
                            operations against it (--ids, --ref), and the guarded writer (EMAIL_SUPPRESSION_APPLY=1 only)
+  suppression origami-plan [--since DATE]   the Origami opt-out dry run (VIB-521): what ORIGAMI_OPTOUT_APPLY=1 would
+                           write to Twenty and stop in Origami, as counts; Origami reads only, no database
+  suppression origami-reviewed --ids 1,2 --by NAME --opt-out|--not|--handled   a person's decision on Origami opt-out
+                           evidence: confirm (consent write) or reject (releases the desk hold), or handled in Twenty
   team reconcile [--days 30]   old thread-based email numbers next to the email contract v1 numbers, per member
                            (counts only; review before setting EMAIL_OUTCOMES_V2=1)
   sales reconcile [--days 60] [--apply]   match incoming Wise credits to unpaid payment milestones (same currency,

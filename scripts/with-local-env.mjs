@@ -27,6 +27,8 @@ const env = {
   OUTREACH_GMAIL_CLIENT_ID: "", OUTREACH_GMAIL_CLIENT_SECRET: "", OUTREACH_GMAIL_REFRESH_TOKEN: "", OUTREACH_GMAIL_ACCOUNT: "",
   // Links point at the server under test (the request origin), never a configured deployment.
   GTM_COCKPIT_URL: "",
+  // No Origami: the opt-out step and its webhook stay off (VIB-521).
+  ORIGAMI_API_KEY: "", ORIGAMI_OPTOUT_APPLY: "", ORIGAMI_WEBHOOK_SECRET: "",
   CRON_SECRET: "e2e-cron-secret", ZERNIO_WEBHOOK_SECRET: "e2e-webhook-secret", GTM_SKIP_ENV_FILES: "1",
 };
 const [cmd, ...args] = process.argv.slice(2);
