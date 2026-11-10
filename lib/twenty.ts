@@ -93,6 +93,7 @@ export class TwentyReader {
   async all<N>(object: string, fields: string, filter: Record<string, unknown> | null, filterType: string, pageSize = 100, max = 5_000): Promise<N[]> {
     const out: N[] = [];
     const seen = new Set<string>();
+    const cursors = new Set<string>();
     const select = /(^|\s)id(\s|$)/.test(fields) ? fields : `id ${fields}`;
     let after: string | null = null;
     for (;;) {
@@ -102,10 +103,12 @@ export class TwentyReader {
       const c = d[object];
       let fresh = 0;
       for (const e of c.edges) if (!seen.has(e.node.id)) { seen.add(e.node.id); out.push(e.node); fresh++; }
-      if (!c.pageInfo.hasNextPage || !c.pageInfo.endCursor) return out;
+      if (!c.pageInfo.hasNextPage) return out;
+      if (!c.pageInfo.endCursor) throw new Error(`Twenty ${object}: missing next cursor; refusing to return a silently truncated list`);
       // A full page of rows already seen means the cursor did not move: stopping here would drop the rest without a word.
-      if (!fresh && c.edges.length) throw new Error(`Twenty ${object}: the cursor did not advance; refusing to return a silently truncated list`);
+      if (!fresh || cursors.has(c.pageInfo.endCursor)) throw new Error(`Twenty ${object}: the cursor did not advance; refusing to return a silently truncated list`);
       if (out.length >= max) throw new Error(`Twenty ${object}: more than ${max} rows; refusing to return a silently truncated list`);
+      cursors.add(c.pageInfo.endCursor);
       after = c.pageInfo.endCursor;
     }
   }

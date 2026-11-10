@@ -39,6 +39,16 @@ test("TwentyReader.all: a page of nothing but repeats throws (it used to return 
   await assert.rejects(reader.all("people", "id", null, "PersonFilterInput"), /cursor did not advance/);
 });
 
+test("TwentyReader.all rejects missing cursors and empty pages that claim more results", async () => {
+  for (const page of [
+    { pageInfo: { hasNextPage: true, endCursor: null }, edges: [{ node: { id: "p1" } }] },
+    { pageInfo: { hasNextPage: true, endCursor: "c" }, edges: [] },
+  ]) {
+    const reader = new TwentyReader({ pauseMs: 0, fetcher: (async () => Response.json({ data: { people: page } })) as typeof fetch });
+    await assert.rejects(reader.all("people", "id", null, "PersonFilterInput"), /missing next cursor|cursor did not advance/);
+  }
+});
+
 test("salesDeals reads every opportunity, not the first 200", async () => {
   const node = (i: number) => ({ id: `d${i}`, name: `Deal ${i}`, stage: "PROPOSAL", closeDate: null, createdAt: "2026-11-01T00:00:00Z", updatedAt: null, amount: null, company: null, pointOfContact: null });
   const all = Array.from({ length: 230 }, (_, i) => node(i));

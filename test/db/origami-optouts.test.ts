@@ -583,7 +583,29 @@ test("Origami consent refuses changed identity, ambiguous identity, and later CR
     const op = (await ops()).find((o) => o.destination === "twenty")!;
     assert.match(String(op.last_error), /review required/);
     assert.equal(mock.calls.some((c) => /updatePeople/.test(c.body ?? "")), false);
+    if (scenario === "ambiguous") {
+      const search = mock.calls.find((c) => c.body?.includes("additionalEmails") && c.body.includes("ilike"));
+      assert.ok(search, "additional addresses are queried case-insensitively");
+    }
   }
+});
+
+test("status-only evidence observed after a re-consent cannot write without human confirmation", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+  const now = new Date("2026-11-10T12:00:00Z");
+  const recorded = await O.ingest(admin(), client(), [{ kind: "unsubscribed_status", source: "status_scan", sequence_id: A1, campaign_id: C1, channel: null, received_at: now.toISOString(), origami_reply_id: null }]);
+  await O.processPending(admin(), client(), reader(), now);
+  mock.restore();
+  const live = { data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: P, updatedAt: "2026-11-10T10:00:00Z",
+    emails: { primaryEmail: ANA, additionalEmails: [] }, gtmMarketingConsent: "SUBSCRIBED", gtmConsentEvidence: "later re-consent", gtmEmailRestrictions: null } }] } } };
+  mock = installFetchMock([{ url: "https://crm.test/graphql", json: live, times: 1 }, twentyPeople(P), DB]);
+  const result = await S.applyTwenty(admin(), reader(), now);
+  assert.ok("failed" in result && result.failed === 1);
+  assert.match(String((await ops()).find((o) => o.destination === "twenty")!.last_error), /status has no refusal timestamp/);
+  assert.equal(mock.calls.some((c) => /updatePeople/.test(c.body ?? "")), false);
+  assert.equal((await O.resolveOrigamiReviews(admin(), recorded.ids, "opt_out", "Reviewer Test", new Date("2026-11-10T13:00:00Z"))).resolved, 1);
 });
 
 test("Origami consent errors never persist CRM error bodies", async () => {

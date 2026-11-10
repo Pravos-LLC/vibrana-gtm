@@ -17,7 +17,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
 import type { TwentyReader } from "../twenty";
 import { addressHash, linkedinHash } from "../team/crypto";
-import { lookupPeople, selectAll } from "../team/mailbox";
+import { selectAll } from "../team/mailbox";
 import { emailRefusals, personEmails, readRestrictions, RESTRICTIONS_FIELD, UNREADABLE } from "../team/restrictions";
 import { RULE_VERSION as ORIGAMI_RULE } from "../origami/rule";
 import { linkedinSlug, origamiApplyEnabled } from "../origami/client";
@@ -157,7 +157,7 @@ class OrigamiSafetyError extends Error {}
 /** Re-resolve the privacy-preserving identity binding and reject any later CRM change before a consent write. */
 async function validateOrigamiTarget(db: SupabaseClient, reader: TwentyReader, op: StoredOp, live: Live) {
   const label = must(await db.from("gtm_email_reply_labels").select("origami_reply_id,source,labeled_at").eq("id", op.label_id).single(), "origami decision") as { origami_reply_id: number; source: string; labeled_at: string };
-  const evidence = must(await db.from("gtm_origami_replies").select("recipient_hash,linkedin_hash").eq("id", label.origami_reply_id).single(), "origami identity") as { recipient_hash: string | null; linkedin_hash: string | null };
+  const evidence = must(await db.from("gtm_origami_replies").select("recipient_hash,linkedin_hash,kind").eq("id", label.origami_reply_id).single(), "origami identity") as { recipient_hash: string | null; linkedin_hash: string | null; kind: string };
   const email = evidence.recipient_hash ? personEmails(live).find((e) => addressHash(e) === evidence.recipient_hash) : undefined;
   const slug = linkedinSlug(live.linkedinLink?.primaryLinkUrl);
   let unique = false;
@@ -165,8 +165,14 @@ async function validateOrigamiTarget(db: SupabaseClient, reader: TwentyReader, o
   // one-way hash. Do not fall back to the profile and guess whether that email was reassigned.
   if (evidence.recipient_hash && !email) throw new OrigamiSafetyError("Origami identity no longer uniquely matches the CRM person; review required");
   if (email) {
-    const found = (await lookupPeople(reader, [email])).get(email);
-    unique = !!found && !("ambiguous" in found) && found.person.id === op.person_id;
+    type Row = { id: string; emails: Live["emails"] };
+    // Case-insensitive predicates are required for both fields. If this Twenty version cannot filter its additional
+    // address array case-insensitively the query fails closed instead of pretending that an incomplete match is unique.
+    const rows = await reader.all<Row>("people", "id emails { primaryEmail additionalEmails }", { or: [
+      { emails: { primaryEmail: { ilike: email } } }, { emails: { additionalEmails: { ilike: `%${email}%` } } },
+    ] }, "PersonFilterInput", 100, 10000);
+    const hits = rows.filter((r) => personEmails(r).includes(email));
+    unique = hits.length === 1 && hits[0].id === op.person_id;
   } else if (slug && evidence.linkedin_hash === linkedinHash(slug)) {
     type Row = { id: string; linkedinLink: { primaryLinkUrl: string | null } | null };
     const rows = await reader.all<Row>("people", "id linkedinLink { primaryLinkUrl }", { linkedinLink: { primaryLinkUrl: { ilike: `%/in/${slug}%` } } }, "PersonFilterInput", 20, 200);
@@ -174,6 +180,9 @@ async function validateOrigamiTarget(db: SupabaseClient, reader: TwentyReader, o
     unique = hits.length === 1 && hits[0].id === op.person_id;
   }
   if (!unique) throw new OrigamiSafetyError("Origami identity no longer uniquely matches the CRM person; review required");
+  if (evidence.kind === "unsubscribed_status" && label.source !== "human" && live.gtmMarketingConsent !== "UNSUBSCRIBED") {
+    throw new OrigamiSafetyError("Origami status has no refusal timestamp; review required before writing consent");
+  }
   // A generic updatedAt cannot prove which field changed. Conservatively hold any later edit, except when the desired
   // consent is already present; an explicit human confirmation supplies a newer decision time.
   const decisionAt = label.source === "human" ? label.labeled_at : op.observed_at;
