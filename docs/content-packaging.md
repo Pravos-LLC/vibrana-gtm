@@ -27,9 +27,9 @@ The staging gate accepts a frame cover only when its source video is one of the 
 
 ### Owner-supplied covers
 
-When the owner (or an agent working for them) made the cover outside the toolkit (a Riverside thumbnail, a generated image), `owner` records it as is: no brief, brand or render. It copies the image next to a `manifest.json` (`kind: "owner"`) that holds who supplied it (`--by`), where it came from (`--origin`), the hash, size and shape. The image must be a publishable JPEG or PNG (under 5 MB, sRGB) in a registered shape. Point the Story's cover asset at both, as with any render (`source:` the image, `packaging:` the manifest).
+When the owner (or an agent working for them) made the cover outside the toolkit (a Riverside thumbnail, a generated image), `owner` records it as is: no brief, brand or render. It copies the image next to a `manifest.json` (`kind: "owner"`) that holds who supplied it (`--by`), where it came from (`--origin`), the hash, size and shape. The image must be a publishable JPEG or PNG (under 5 MB, RGB profile, at least 540 px wide) in a registered shape. `--by` and `--origin` are self-asserted: the gate records them, it does not verify them. Staging copies them onto the asset's metadata (`owner_cover`). Point the Story's cover asset at both, as with any render (`source:` the image, `packaging:` the manifest).
 
-The staging gate accepts an owner cover only when the staged file still has the recorded bytes, the manifest belongs to this Story, supplier and origin are recorded, and the cover's shape matches the staged video's display shape (needs `ffprobe`). It attests provenance and byte identity, not quality or brand: approval still decides whether the cover ships.
+The staging gate accepts an owner cover only when the staged file still has the recorded bytes, the manifest belongs to this Story, supplier and origin are recorded, and the cover's shape matches a staged video's display shape. It needs `ffprobe`: a video it cannot measure, or that is not a registered shape, refuses the cover. It attests provenance and byte identity, not quality or brand: approval still decides whether the cover ships.
 
 ## Licensed fonts and marks
 

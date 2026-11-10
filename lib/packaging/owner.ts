@@ -20,6 +20,8 @@ export type OwnerManifest = {
   assets: Array<{ path: string; sha256: string; width: number; height: number; role: "cover"; shape: Shape }>;
 };
 
+/** Registered shapes are 1080 wide or more; a thumbnail below this is not a cover. */
+const MIN_COVER_WIDTH = 540;
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 const text = (v: unknown) => typeof v === "string" && !!v.trim();
 
@@ -32,17 +34,21 @@ export function renderOwnerCover(story: string, image: string, outDir: string, o
   const bytes = readFileSync(src);
   const check = imageProblems(bytes, bytes.length, bytes, IMAGE_TYPES[sniffImage(bytes)], PUBLISH_IMAGE_BYTES);
   if (check.problems.length) throw new Error(`${basename(src)} is not a publishable image: ${check.problems.join(", ")} (a JPEG or PNG under 5 MB, sRGB)`);
+  const format = sniffImage(bytes);
+  if (format !== "jpeg" && format !== "png") throw new Error(`${basename(src)} is ${format}; an owner cover must be a JPEG or PNG`);
   const width = check.width!, height = check.height!;
+  if (width < MIN_COVER_WIDTH) throw new Error(`${basename(src)} is ${width}px wide; a cover needs at least ${MIN_COVER_WIDTH}px`);
   const shape = shapeFor(width, height);
   if (!shape) throw new Error(`${basename(src)} is ${width}x${height}; a cover needs a registered shape (${Object.keys(SIZES).join(", ")})`);
   const digest = sha(bytes);
   const dir = resolve(outDir, `owner-${sha(Buffer.from(`${story}|${digest}`)).slice(0, 20)}`);
   const manifestPath = join(dir, "manifest.json");
-  const name = `${shape}${extname(src).toLowerCase() === ".png" ? ".png" : ".jpg"}`;
+  const name = `${shape}${format === "png" ? ".png" : ".jpg"}`;
   const coverPath = join(dir, name);
   if (existsSync(manifestPath) && existsSync(coverPath)) {
     const m = JSON.parse(readFileSync(manifestPath, "utf8")) as OwnerManifest;
-    if (checkOwnerManifest(manifestPath, m, { story, assetPath: coverPath, sha256: digest }).length === 0) return { manifest: manifestPath, cover: coverPath, cached: true };
+    if (m.suppliedBy === opts.by.trim() && m.origin === opts.origin.trim() && (m.note ?? "") === (opts.note?.trim() ?? "")
+      && checkOwnerManifest(manifestPath, m, { story, assetPath: coverPath, sha256: digest }).length === 0) return { manifest: manifestPath, cover: coverPath, cached: true };
   }
   mkdirSync(dir, { recursive: true });
   copyFileSync(src, coverPath);
@@ -79,14 +85,33 @@ export function checkOwnerManifest(path: string, m: OwnerManifest, expected?: { 
     if (check.problems.length) errors.push(`invalid image ${a.path}: ${check.problems.join(", ")}`);
     else if (check.width !== a.width || check.height !== a.height) errors.push(`export dimensions do not match manifest: ${a.path}`);
     else if (shapeFor(a.width, a.height) !== a.shape) errors.push(`export shape does not match manifest: ${a.path}`);
+    else if (a.width < MIN_COVER_WIDTH) errors.push(`export is only ${a.width}px wide: ${a.path}`);
+    else if (!["jpeg", "png"].includes(sniffImage(bytes)) || extname(p).toLowerCase() !== (sniffImage(bytes) === "png" ? ".png" : ".jpg")) errors.push(`export is ${sniffImage(bytes)} but named ${extname(p)}: ${a.path}`);
   }
   if (expected) {
     const bound = m.assets.find(a => a.role === "cover" && resolve(root, a.path) === resolve(expected.assetPath) && a.sha256 === expected.sha256);
     if (!bound) errors.push("cover is not bound to this owner manifest");
-    else for (const v of expected.videos ?? []) {
-      const shape = (() => { try { const d = probeVideo(v.abs); return shapeFor(d.width, d.height); } catch { return null; } })();
-      if (shape && shape !== bound.shape) errors.push(`cover is ${bound.shape} but the staged video is ${shape}`);
+    else if ((expected.videos ?? []).length) {
+      // Fail closed: a video whose shape cannot be measured (no ffprobe, unreadable) or is not a registered shape refuses the cover.
+      const shapes: Array<Shape | null> = [];
+      for (const v of expected.videos!) {
+        try { const d = probeVideo(v.abs); shapes.push(shapeFor(d.width, d.height)); }
+        catch (e) { errors.push(`cannot read the staged video's shape: ${(e as Error).message}`); shapes.push(null); }
+      }
+      if (!errors.length) {
+        if (shapes.some((x) => x === null)) errors.push("a staged video is not a registered cover shape");
+        else if (!shapes.includes(bound.shape)) errors.push(`cover is ${bound.shape} but the staged video is ${[...new Set(shapes)].join("/")}`);
+      }
     }
   }
   return errors;
+}
+
+/** What staging records beside an owner cover so /content and the audit trail can show who supplied it (self-asserted, like any `--by`). */
+export function ownerCoverMeta(manifestPath: string): Record<string, unknown> | undefined {
+  try {
+    const m = JSON.parse(readFileSync(manifestPath, "utf8")) as OwnerManifest;
+    if (m?.kind !== "owner") return undefined;
+    return { owner_cover: { supplied_by: m.suppliedBy, origin: m.origin, ...(m.note ? { note: m.note } : {}), supplied_at: m.suppliedAt } };
+  } catch { return undefined; }
 }

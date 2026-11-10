@@ -20,6 +20,7 @@ import { FINAL_STAGE, STAGE_PATTERN, nonFinal } from "./stage";
 import { isFormat, pipelineOf, stageOf, type Format } from "./pipelines";
 import { finalState, pipelineView, stagedStages, type StageRow } from "./pipeline-state";
 import { planStageRows } from "./stage-progress";
+import { ownerCoverMeta } from "./packaging/owner";
 import { packagingGate, legacyPackagingRecord, type ExistingPackagingAsset } from "./packaging/model";
 
 export type StoryAssetKind = "video" | "image" | "copy" | "link";
@@ -68,6 +69,8 @@ const mediaKinds = new Set(["video", "image"]);
 const mime: Record<string, string> = { ".mp4": "video/mp4", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
 
 export const digest = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
+
+const ownerMeta = (a: { packaging?: string }) => (a.packaging ? ownerCoverMeta(a.packaging) : undefined);
 
 /** The manifest stores paths relative to calendar.yaml, matching each calendar item. */
 export function planStory(manifestPath: string, cal: Calendar, stage?: string, opts: StageOptions = {}): { story: Manifest; assets: PlannedAsset[] } {
@@ -123,7 +126,7 @@ export function planStory(manifestPath: string, cal: Calendar, stage?: string, o
     }
     if (mediaKinds.has(a.kind) && isLargeSize(size)) throw new Error(`${a.id}: an image over 50 MiB; export it smaller`);
     const bytes = readFileSync(abs);
-    return { ...a, abs, sha256: digest(bytes), bytes: bytes.length, content: bytes, body: a.kind === "copy" ? bytes.toString("utf8") : null, url: null, ...(stageExplicit ? { stageExplicit } : {}), ...(meta ? { metadata: meta } : {}) };
+    return { ...a, abs, sha256: digest(bytes), bytes: bytes.length, content: bytes, body: a.kind === "copy" ? bytes.toString("utf8") : null, url: null, ...(stageExplicit ? { stageExplicit } : {}), ...((meta || ownerMeta(a)) ? { metadata: { ...(meta ?? {}), ...(ownerMeta(a) ?? {}) } } : {}) };
   });
   return { story, assets };
 }
