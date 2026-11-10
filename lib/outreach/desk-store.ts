@@ -343,7 +343,11 @@ export async function markDeskReplied(db: SupabaseClient, personId: string, trac
   return rows[0];
 }
 
-/** Undo a mistaken "Mark replied". An email goes back to sent; a reply the mailbox sync finds again is recorded again. */
+/**
+ * "Not replied": undo a mistaken mark, or dismiss a reply the mailbox sync recorded that is not one. An email goes back to
+ * sent and records when he cleared it (email_reply_dismissed_at), so the hourly sync never stamps that reply, or any earlier
+ * one, again; a reply that arrives later still counts.
+ */
 export async function unmarkDeskReplied(db: SupabaseClient, personId: string, track?: Track): Promise<Draft> {
   const row = await dossierRow(db, personId, track);
   if (!isWarmTrack(row.track)) throw new Error("Mark replied is for the guest and network streams.");
@@ -352,7 +356,7 @@ export async function unmarkDeskReplied(db: SupabaseClient, personId: string, tr
   if (!d || !(linkedin ? d.linkedin_replied_at : d.email_status === "replied")) throw new Error("No reply is marked.");
   const q = linkedin
     ? db.from(DRAFTS).update({ linkedin_replied_at: null }).eq("id", d.id)
-    : db.from(DRAFTS).update({ email_status: "sent", email_replied_at: null }).eq("id", d.id).eq("email_status", "replied");
+    : db.from(DRAFTS).update({ email_status: "sent", email_replied_at: null, email_reply_dismissed_at: now() }).eq("id", d.id).eq("email_status", "replied");
   const rows = must(await q.select(DESK_DRAFT_COLUMNS), "undo replied") as unknown as Draft[];
   if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
   return rows[0];

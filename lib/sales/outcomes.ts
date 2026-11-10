@@ -7,6 +7,9 @@
 //   attributed to the mailbox address.
 // - A reply (not automated, from the prospect) stamps email_replied_at and moves email_status to "replied".
 // - A delivery failure with no reply stamps email_bounced_at.
+// Nothing older than the draft counts (the network mailbox holds each contact's earlier conversations, often under the same
+// subject): a send only from a message at or after the draft was created, a reply or a failure only from after the send.
+// A reply John cleared with "Not replied" (email_reply_dismissed_at) is never stamped again; a later one still is.
 // A reply date only ever moves earlier, a status only forward, and no address, subject or body is stored. Matching is lib/outreach/mailbox.ts.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
@@ -16,21 +19,34 @@ import { GmailReader, hqAddress, mailboxConfig, networkMailboxConfig, trackAddre
 export type OutcomeDraft = OutreachMail & {
   email_status: "none" | "queued" | "sent" | "replied"; email_sent_by: string | null;
   email_replied_at: string | null; email_bounced_at: string | null;
+  /** When John last clicked "Not replied": a reply at or before it is his call, not the mailbox's. */
+  email_reply_dismissed_at?: string | null;
 };
 export type OutcomePatch = Partial<Pick<OutcomeDraft, "email_status" | "email_sent_at" | "email_sent_by" | "email_replied_at" | "email_bounced_at">>;
 
 /** The changes one conversation implies for its draft; empty when the draft already says all of it. */
 export function outcomePatch(c: Conversation, d: OutcomeDraft, mailbox: string): OutcomePatch {
   const p: OutcomePatch = {};
-  if (c.sentAt && !d.email_sent_at && (d.email_status === "none" || d.email_status === "queued")) {
-    p.email_sent_at = c.sentAt; p.email_sent_by = mailbox.toLowerCase(); p.email_status = "sent";
+  const at = (v: string | null | undefined) => (v ? Date.parse(v) : NaN);
+  // A thread's send counts only at or after the draft was created (an unknown time on either side is not a reason to refuse).
+  const threadSent = c.sentAt && !(at(c.sentAt) < at(d.created_at)) ? c.sentAt : undefined;
+  if (threadSent && !d.email_sent_at && (d.email_status === "none" || d.email_status === "queued")) {
+    p.email_sent_at = threadSent; p.email_sent_by = mailbox.toLowerCase(); p.email_status = "sent";
   }
-  if (c.status === "reply" && c.replyAt) {
+  // The send a reply or a failure must follow: the thread's own send when it qualifies (Mark sent may be clicked minutes
+  // after Gmail sent it), else the send the desk recorded.
+  const sends = [at(threadSent), at(d.email_sent_at ?? p.email_sent_at)].filter(Number.isFinite);
+  const since = sends.length ? Math.min(...sends) : NaN;
+  // With no send at all (an old thread on a draft never sent) nothing that follows one can count.
+  const sent = !!(threadSent || d.email_sent_at || p.email_sent_at);
+  const afterSend = (v: string) => sent && !(at(v) < since);
+  const dismissed = (v: string) => at(v) <= at(d.email_reply_dismissed_at);
+  if (c.status === "reply" && c.replyAt && afterSend(c.replyAt) && !dismissed(c.replyAt)) {
     // Gmail's reply time wins over a label-time date (John may label before the sync, or long after the reply).
     if (!d.email_replied_at || Date.parse(c.replyAt) < Date.parse(d.email_replied_at)) p.email_replied_at = c.replyAt;
     if (d.email_status !== "replied" && (d.email_status === "sent" || p.email_status === "sent")) p.email_status = "replied";
   }
-  if (c.status === "delivery-failure" && c.failedAt && !d.email_bounced_at && !d.email_replied_at) p.email_bounced_at = c.failedAt;
+  if (c.status === "delivery-failure" && c.failedAt && afterSend(c.failedAt) && !d.email_bounced_at && !d.email_replied_at) p.email_bounced_at = c.failedAt;
   return p;
 }
 
@@ -57,9 +73,9 @@ export async function syncOutcomes(db: SupabaseClient, opts: { deadline: number;
   // and the network sends from an alias of the account it connects as.
   const mailbox = opts.mailbox ?? (track === "network" ? await trackAddress(db, "network") : await hqAddress(db));
   if (!mailbox) return { ...run, complete: false, skipped: "the network stream has no sending address (gtm_outreach_tracks)" };
-  const reader = opts.reader ?? (await GmailReader.connect(cfg!));
+  const reader = opts.reader ?? (await GmailReader.connect(cfg!, fetch, track === "network" ? "network mailbox" : "HQ inbox"));
   const drafts = (await readPages<OutcomeDraft>((from, to) => db.from("gtm_outreach_drafts")
-    .select("id,subject,prospect,email_status,email_sent_at,email_sent_by,email_replied_at,email_bounced_at", { count: "exact" })
+    .select("id,created_at,subject,prospect,email_status,email_sent_at,email_sent_by,email_replied_at,email_bounced_at,email_reply_dismissed_at", { count: "exact" })
     // One stream's drafts: each mailbox only ever sees its own stream's mail (guests go from yet another mailbox).
     .eq("status", "accepted").eq("track", track).order("id").range(from, to), "outreach drafts"))
     // A draft with no subject is a LinkedIn note: it can never match an email thread, and must not match a subjectless one.
@@ -86,7 +102,9 @@ export async function syncOutcomes(db: SupabaseClient, opts: { deadline: number;
     // Guarded on the values being written, so a desk action between the read and the write is never overwritten.
     let q = db.from("gtm_outreach_drafts").update(p).eq("id", id);
     if (p.email_sent_at) q = q.is("email_sent_at", null);
-    if (p.email_replied_at) q = q.or(`email_replied_at.is.null,email_replied_at.gt.${p.email_replied_at}`);
+    if (p.email_replied_at) q = q.or(`email_replied_at.is.null,email_replied_at.gt.${p.email_replied_at}`)
+      // "Not replied" clicked meanwhile wins over this run's read.
+      .or(`email_reply_dismissed_at.is.null,email_reply_dismissed_at.lt.${p.email_replied_at}`);
     if (p.email_bounced_at) q = q.is("email_bounced_at", null);
     must(await q, "save outreach outcome");
     if (p.email_sent_at) run.sent++;

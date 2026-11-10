@@ -436,7 +436,7 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
     const r = await (undo ? actions.undoReplied : actions.markReplied)(person.row.twenty_person_id, track);
     if (!r.ok) { setError(r.error); return; }
     setDraft(r.value); patchQueue(person.row.twenty_person_id, r.value); setError(null);
-    toast(undo ? "Marked not replied." : "Marked replied. No follow-up is due.");
+    toast(undo ? "Marked not replied. The mailbox sync will not bring this reply back." : "Marked replied. No follow-up is due.");
   };
 
   const skip = async () => {

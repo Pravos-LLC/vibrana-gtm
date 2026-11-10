@@ -427,3 +427,40 @@ test("network Mark replied: a LinkedIn note's reply (no API) and an email's; the
   await assert.rejects(store.markDeskReplied(db, DESK_IDS.top), /for the guest and network streams/);
   await resetNetwork();
 });
+
+test("network Not replied sticks: the mailbox sync never re-stamps a reply John cleared, even one read before he cleared it", async () => {
+  const db = admin();
+  await resetNetwork();
+  const { syncOutcomes } = await import("../../lib/sales/outcomes.ts");
+  const d = await store.markDeskSent(db, NETWORK_IDS.followup, gedit({ to: "noa@noa.example", subject: "Long time", body: "Hey Noa,\n\nMine." }), actor, NETWORK_PROFILE, "network");
+  // Sent an hour ago, so her reply and his clearing it are both in the past.
+  const sentAt = new Date(Date.now() - 3_600_000).toISOString();
+  await db.from("gtm_outreach_drafts").update({ email_sent_at: sentAt }).eq("id", d.id);
+  const later = (ms: number) => new Date(Date.parse(sentAt) + ms).toISOString();
+  const conv = (replyAt: string) => ({ id: "t", draftId: d.id, company: "", subject: "Long time", status: "reply" as const, unread: false, lastAt: replyAt, snippet: "", sentAt, replyAt });
+  const run = (replyAt: string, during?: () => PromiseLike<unknown>) => syncOutcomes(db, { track: "network", deadline: Date.now() + 10_000, mailbox: "user-f538cb95fc21@example.com",
+    reader: { list: async () => { await during?.(); return { conversations: [conv(replyAt)], nextPageToken: "", scanned: 1 }; } } as never });
+  const row = async () => (await db.from("gtm_outreach_drafts").select("email_status,email_replied_at,email_reply_dismissed_at").eq("id", d.id).single()).data!;
+
+  const first = later(60_000);
+  await run(first);
+  assert.deepEqual([(await row()).email_status, Date.parse((await row()).email_replied_at!)], ["replied", Date.parse(first)], "the sync records the reply");
+  const cleared = await store.unmarkDeskReplied(db, NETWORK_IDS.followup, "network");
+  assert.deepEqual([cleared.email_status, cleared.email_replied_at ?? null], ["sent", null]);
+  assert.ok((await row()).email_reply_dismissed_at, "and remembers when he cleared it");
+  await run(first);
+  assert.deepEqual([(await row()).email_status, (await row()).email_replied_at], ["sent", null], "the next hourly run leaves his call alone");
+
+  // He clears it while a run is between its read and its write: the write is refused on the database side.
+  await store.markDeskReplied(db, NETWORK_IDS.followup, "network");
+  await db.from("gtm_outreach_drafts").update({ email_replied_at: null, email_status: "sent", email_reply_dismissed_at: null }).eq("id", d.id);
+  const racing = later(120_000);
+  await run(racing, () => db.from("gtm_outreach_drafts").update({ email_reply_dismissed_at: later(180_000) }).eq("id", d.id));
+  assert.deepEqual([(await row()).email_status, (await row()).email_replied_at], ["sent", null], "a dismissal that lands mid-run wins");
+
+  // A reply that arrives after he cleared it is a new reply.
+  const fresh = new Date(Date.now() + 60_000).toISOString();
+  await run(fresh);
+  assert.deepEqual([(await row()).email_status, Date.parse((await row()).email_replied_at!)], ["replied", Date.parse(fresh)]);
+  await resetNetwork();
+});

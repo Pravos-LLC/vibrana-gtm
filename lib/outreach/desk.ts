@@ -122,18 +122,21 @@ export function warmLine(w: NetworkWarm | null | undefined): string | null {
 }
 
 /**
- * The one link to a last conversation the desk opens: https, no credentials or port, and the host exactly www.linkedin.com
- * with a /messaging/thread/ path, or exactly mail.google.com. Null for anything else (another host, a lookalike, a profile
- * page, javascript:). Checked at import and again at render. Gmail's thread id is in the fragment, so a query string and a
- * fragment are kept.
+ * The one link to a last conversation the desk opens: https, no credentials or port, and either the host exactly
+ * www.linkedin.com with the path /messaging/thread/<id>/, or exactly mail.google.com with the path /mail/ (or /mail/u/N/)
+ * and a thread id in the fragment. Null for anything else (another host or path, a lookalike, a profile page, an empty
+ * thread id, javascript:). Checked at import and again at render. The query string is kept (Gmail's authuser).
  */
 export function threadUrl(v: unknown): string | null {
   if (typeof v !== "string" || !v.trim() || v.length > 2048 || /\s/.test(v.trim())) return null;
   let u: URL;
   try { u = new URL(v.trim()); } catch { return null; }
   if (u.protocol !== "https:" || u.username || u.password || u.port) return null;
-  if (u.hostname === "www.linkedin.com" && u.pathname.startsWith("/messaging/thread/")) return u.href;
-  if (u.hostname === "mail.google.com") return u.href;
+  // One thread: /messaging/thread/<id>/ with a non-empty id, nothing deeper.
+  if (u.hostname === "www.linkedin.com" && /^\/messaging\/thread\/[^/]+\/?$/.test(u.pathname)) return u.href;
+  // Gmail's web app (/mail/, or /mail/u/N/ for a second account) with a thread id at the end of the fragment
+  // (#all/<id>, #inbox/<id>, #label/<name>/<id>): never another path on that host (/url?q= redirects anywhere).
+  if (u.hostname === "mail.google.com" && /^\/mail\/(u\/\d+\/)?$/.test(u.pathname) && /^#[A-Za-z0-9_%+.-]+(\/[A-Za-z0-9_%+.-]+)*\/[A-Za-z0-9_-]{6,}$/.test(u.hash)) return u.href;
   return null;
 }
 /** The guest block of a podcast-guest dossier (vibrana-crm guest exporter). Every field may be missing. */
@@ -308,6 +311,12 @@ export function dossierProblems(d: DossierImport, raw: Record<string, unknown>):
   return out;
 }
 
+/** A real calendar day as YYYY-MM-DD: 2026-02-30 is refused (Date would roll it over to March 2). */
+const isCalendarDay = (v: unknown) => {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const t = Date.parse(`${v}T00:00:00Z`);
+  return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === v;
+};
 const isCount = (v: unknown) => Number.isInteger(v) && (v as number) >= 0;
 /** The optional warm, history, channel and connection keys of a network block (old rows have none of them). */
 function networkExtraProblems(n: Record<string, unknown>): string[] {
@@ -331,7 +340,7 @@ function networkExtraProblems(n: Record<string, unknown>): string[] {
       if (!isObject(c) || (c.sent != null && !isCount(c.sent)) || (c.received != null && !isCount(c.received))) out.push(`network.history.${k} must be {sent, received} counts`);
     }
   }
-  if (n.connected_on != null && !(typeof n.connected_on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(n.connected_on) && !Number.isNaN(Date.parse(`${n.connected_on}T00:00:00Z`)))) out.push("network.connected_on must be YYYY-MM-DD or null");
+  if (n.connected_on != null && !isCalendarDay(n.connected_on)) out.push("network.connected_on must be YYYY-MM-DD or null");
   return out;
 }
 
