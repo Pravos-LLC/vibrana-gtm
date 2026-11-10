@@ -61,12 +61,13 @@ export class TwentyReader {
     for (let attempt = 0; ; attempt++) {
       const wait = this.last + pause - now();
       if (wait > 0) await sleep(wait);
-      if (this.opts.deadline && now() > this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
+      const started = now();
+      if (this.opts.deadline && started > this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
       this.requests.count++;
       let status = 0, json: { data?: T; errors?: unknown } | null = null, failure = "";
       try {
         const res = await (this.opts.fetcher ?? fetch)(`${BASE}/graphql`, {
-          signal: AbortSignal.timeout(Math.max(1, Math.min(this.opts.timeoutMs ?? 20_000, this.opts.deadline ? this.opts.deadline - now() : Infinity))), method: "POST",
+          signal: AbortSignal.timeout(Math.max(1, Math.min(this.opts.timeoutMs ?? 20_000, this.opts.deadline ? this.opts.deadline - started : Infinity))), method: "POST",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
           body: JSON.stringify({ query, variables }),
         });
@@ -74,13 +75,13 @@ export class TwentyReader {
         json = await res.json().catch(() => null);
       } catch (e) { failure = (e as Error).message; }
       this.last = now();
-      if (this.opts.deadline && now() >= this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
       if (json?.errors) throw new TwentyError(`Twenty: ${JSON.stringify(json.errors).slice(0, 300)}`, json.errors);
       if (status >= 200 && status < 300 && json?.data) return json.data;
+      if (this.opts.deadline && this.last >= this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
       const transient = !status || status === 429 || status >= 500;
       if (!transient || attempt >= retries) throw new Error(`Twenty read failed (${status || failure || "no response"})`);
       const delay = Math.min(30_000, 2_000 * 2 ** attempt);
-      if (this.opts.deadline && now() + delay >= this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
+      if (this.opts.deadline && this.last + delay >= this.opts.deadline) throw new Error("Twenty read stopped at the run deadline");
       await sleep(delay);
     }
   }

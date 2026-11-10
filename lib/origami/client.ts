@@ -65,20 +65,21 @@ export class OrigamiClient {
     for (let attempt = 0; ; attempt++) {
       const wait = this.last + pause - now();
       if (wait > 0) await sleep(wait);
-      if (this.opts.deadline && now() > this.opts.deadline) throw new DeadlineError(`Origami: stopped at the run deadline (${what})`);
+      const started = now();
+      if (this.opts.deadline && started > this.opts.deadline) throw new DeadlineError(`Origami: stopped at the run deadline (${what})`);
       this.requests.count++;
       if (method === "POST") this.requests.writes++;
       let res: Response | null = null, failure = "";
       try {
         res = await (this.opts.fetcher ?? globalThis.fetch)(`${ORIGAMI_BASE}${path}`, {
-          method, signal: AbortSignal.timeout(Math.max(1, Math.min(this.opts.timeoutMs ?? 20_000, this.opts.deadline ? this.opts.deadline - now() : Infinity))),
+          method, signal: AbortSignal.timeout(Math.max(1, Math.min(this.opts.timeoutMs ?? 20_000, this.opts.deadline ? this.opts.deadline - started : Infinity))),
           headers: { authorization: `Bearer ${key}`, accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}), ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}) },
           ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         });
       } catch (e) { failure = (e as Error).message.slice(0, 80); }
       this.last = now();
-      if (this.opts.deadline && now() >= this.opts.deadline) throw new DeadlineError(`Origami: stopped at the run deadline (${what})`);
       if (res && res.ok) return (await res.json().catch(() => ({}))) as T;
+      if (this.opts.deadline && this.last >= this.opts.deadline) throw new DeadlineError(`Origami: stopped at the run deadline (${what})`);
       const status = res?.status ?? 0;
       const json = res ? await res.json().catch(() => null) as { code?: string } | null : null;
       const code = typeof json?.code === "string" ? json.code.slice(0, 60) : null;
