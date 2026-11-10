@@ -359,6 +359,7 @@ test("a multi-run reply backfill persists each page and eventually advances the 
   const seen: Array<string | null> = [];
   const c = client();
   c.repliesPage = async (_since, cursor) => {
+    if (_since) return { items: [], next_cursor: null };
     const page = cursor ? Number(cursor) : 0;
     seen.push(cursor ?? null);
     return { items: [{ id: `00000000-0000-4000-8000-${String(page + 1).padStart(12, "0")}`, from: "lead", channel: "email", campaign_id: C1,
@@ -387,6 +388,7 @@ test("a failed page is retried from its checkpoint without advancing past unsave
   let fail = true;
   const cursors: Array<string | null> = [];
   c.repliesPage = async (_since, cursor) => {
+    if (_since) return { items: [], next_cursor: null };
     cursors.push(cursor ?? null);
     if (cursor && fail) { fail = false; throw new Error("synthetic page failure"); }
     return { items: [{ id: cursor ? R1 : A2, from: "lead", channel: "email", campaign_id: C1, sequence_id: A1,
@@ -413,4 +415,110 @@ test("a review waits for an active suppression writer", async () => {
     await db.rpc("gtm_release_lease", { p_job: "origami.stop.apply", p_holder: "test-writer" });
     await db.rpc("gtm_release_lease", { p_job: "origami.optouts.process", p_holder: "test-next" });
   }
+});
+
+test("new replies are ingested while an older backfill is still in progress", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([{ method: "GET", url: `^${B}/send/campaigns\\?`, regex: true, json: list([]) }, DB]);
+  const c = client();
+  let run = 0;
+  c.repliesPage = async (since, cursor) => {
+    if (since) return { items: run > 0 ? [{ id: R1, from: "lead", channel: "email", campaign_id: null, sequence_id: A2,
+      body: "Not interested, we built our own.", received_at: "2026-11-10T11:30:00Z" }] : [], next_cursor: null };
+    const page = cursor ? Number(cursor) : 0;
+    return { items: [], next_cursor: String(page + 1) };
+  };
+  await O.runOrigamiOptouts(admin(), reader(), new Date("2026-11-10T11:00:00Z"), { deadline: Date.now() + 60_000, client: c });
+  run++;
+  await O.runOrigamiOptouts(admin(), reader(), new Date("2026-11-10T12:00:00Z"), { deadline: Date.now() + 60_000, client: c });
+  assert.equal((await evidence()).filter((r) => r.sequence_id === A2).length, 1);
+  assert.equal((await admin().from("gtm_sync_state").select("value").eq("key", O.CURSOR_KEY).single()).data!.value.nextCursor, "6");
+});
+
+test("a large unsubscribe status scan records pages across runs", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([DB]);
+  const c = client();
+  c.repliesPage = async () => ({ items: [], next_cursor: null });
+  c.campaignsPage = async () => ({ items: [{ id: C1, status: "active" }], next_cursor: null });
+  c.person = async () => { throw new Error("synthetic unavailable person"); };
+  c.peoplePage = async (_campaign, _filter, cursor) => {
+    const page = cursor ? Number(cursor) : 0;
+    return { items: [{ sequence_id: `00000000-0000-4000-8000-${String(800 + page).padStart(12, "0")}`, status: "replied", stop_reason: "unsubscribed" }], next_cursor: page < 6 ? String(page + 1) : null };
+  };
+  for (let i = 0; i < 3; i++) {
+    await O.runOrigamiOptouts(admin(), reader(), new Date(), { deadline: Date.now() + 60_000, client: c });
+    const rows = await admin().from("gtm_origami_replies").select("id").eq("source", "status_scan");
+    assert.equal(rows.data!.length, Math.min((i + 1) * 3, 7));
+  }
+});
+
+test("large sequence discovery records stops across runs before completing the CRM match", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+  await O.ingest(admin(), client(), [webhookEvidence("no")]);
+  const c = client();
+  c.person = async (_campaign, seq) => ({ ...detail(seq, ANA, seq === A1 ? "replied" : "scheduled", seq === A1 ? "replied" : null, ["scheduled"]), replies: undefined });
+  c.peoplePage = async (_campaign, _filter, cursor) => {
+    const page = cursor ? Number(cursor) : 0;
+    return { items: [{ sequence_id: `00000000-0000-4000-8000-${String(900 + page).padStart(12, "0")}`, status: "scheduled", stop_reason: null }], next_cursor: page < 6 ? String(page + 1) : null };
+  };
+  for (let i = 0; i < 3; i++) {
+    const result = await O.processPending(admin(), c, reader(), new Date(), { campaigns: [{ id: C1, status: "active" }] });
+    assert.equal((await ops()).filter((o) => o.destination === "origami").length, Math.min((i + 1) * 3, 7));
+    assert.equal(result.processed, i === 2 ? 1 : 0);
+  }
+});
+
+test("stops and consent writes recover after more than five provider failures", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+  await O.ingest(admin(), client(), [webhookEvidence("no")]);
+  await O.processPending(admin(), client(), reader(), new Date());
+  assert.equal((await admin().from("gtm_email_sync_ops").update({ state: "failed", attempts: 8 }).eq("policy_version", O.RULE_VERSION)).error, null);
+  mock.restore();
+  const live = (consent: string) => ({ data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: P, updatedAt: "2026-11-01T00:00:00Z",
+    emails: { primaryEmail: ANA, additionalEmails: [] }, gtmMarketingConsent: consent, gtmConsentEvidence: null, gtmEmailRestrictions: null } }] } } });
+  mock = installFetchMock([
+    { method: "GET", url: `^${B}/send/campaigns/${C2}/people/${A2}$`, regex: true, json: detail(A2, ANA, "stopped", "manual", ["stopped"]) },
+    { url: "https://crm.test/graphql", json: live("UNSUBSCRIBED") }, DB,
+  ]);
+  const stopped = await O.applyOrigamiStops(admin(), client(), new Date());
+  assert.ok("unchanged" in stopped && stopped.unchanged === 1);
+  const consent = await S.applyTwenty(admin(), reader(), new Date());
+  assert.ok("unchanged" in consent && consent.unchanged === 1);
+  assert.deepEqual((await ops()).map((o) => o.state), ["confirmed", "confirmed"]);
+});
+
+test("malformed reply evidence never advances its page checkpoint", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([{ method: "GET", url: `^${B}/send/campaigns\\?`, regex: true, json: list([]) }, DB]);
+  const c = client();
+  c.repliesPage = async () => ({ items: [{ id: R1, from: "lead", channel: "email", campaign_id: C1, sequence_id: A1, body: null as unknown as string, received_at: T }], next_cursor: "next" });
+  const run = await O.runOrigamiOptouts(admin(), reader(), new Date(), { deadline: Date.now() + 60_000, client: c });
+  assert.ok("error" in run && /malformed lead evidence/.test(run.error ?? ""));
+  assert.equal((await admin().from("gtm_sync_state").select("key").eq("key", O.CURSOR_KEY).maybeSingle()).data, null);
+});
+
+test("repeated CRM deadlines do not starve fresh reply and status collection", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([...origami(), DB]);
+  await O.ingest(admin(), client(), [webhookEvidence("no")]);
+  const c = client();
+  c.repliesPage = async () => ({ items: [{ id: R1, from: "lead", channel: "email", campaign_id: C1, sequence_id: A2, body: "Hello there", received_at: "2026-11-10T11:30:00Z" }], next_cursor: null });
+  c.campaignsPage = async () => ({ items: [{ id: C1, status: "active" }], next_cursor: null });
+  c.peoplePage = async (_campaign, filter) => filter?.search ? { items: [], next_cursor: null } :
+    { items: [{ sequence_id: A3, status: "replied", stop_reason: "unsubscribed" }], next_cursor: null };
+  const slow = reader();
+  slow.all = async () => { throw new Error("Twenty read stopped at the run deadline"); };
+  for (let i = 0; i < 2; i++) await O.runOrigamiOptouts(admin(), slow, new Date(), { deadline: Date.now() + 60_000, client: c });
+  const rows = await evidence();
+  assert.ok(rows.some((r) => r.sequence_id === A2 && r.kind === "reply"));
+  assert.ok(rows.some((r) => r.sequence_id === A3 && r.kind === "unsubscribed_status"));
 });

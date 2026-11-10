@@ -44,6 +44,16 @@ test("lists follow next_cursor; a person search never appears in an error", asyn
   await assert.rejects(c.people(C, { search: "ana@prospect.test" }), (e: Error) => e instanceof OrigamiError && e.status === 400 && e.code === "VALIDATION_ERROR" && !/ana|prospect/.test(e.message));
 });
 
+test("a repeated cursor or malformed list is a visible failure, never a complete scan", async () => {
+  mock = installFetchMock([
+    { url: `${B}/send/campaigns`, json: { items: [], next_cursor: "again" }, times: 2 },
+    { url: `${B}/send/campaigns`, json: {} },
+  ]);
+  const { c } = client();
+  await assert.rejects(c.campaigns(), /pagination cursor repeated/);
+  await assert.rejects(c.campaigns(), /malformed list response/);
+});
+
 test("stop POSTs an empty body to .../people/{sequence_id}/stop with an idempotency key, and counts the write", async () => {
   mock = installFetchMock([{ method: "POST", url: `${B}/send/campaigns/${C}/people/${S}/stop`, json: { object: "sequence", status: "stopped" } }]);
   const { c } = client();

@@ -78,7 +78,8 @@ function replyEvidence(rows: Reply[]): { evidence: Evidence[]; newest: string | 
   let newest: string | null = null;
   for (const r of rows) {
     const seq = uuid(r.sequence_id);
-    if (r.from !== "lead" || !seq || typeof r.body !== "string" || !Number.isFinite(Date.parse(r.received_at))) continue;
+    if (typeof r.from === "string" && r.from !== "lead") continue;
+    if (r.from !== "lead" || !seq || typeof r.body !== "string" || !Number.isFinite(Date.parse(r.received_at))) throw new Error("Origami replies: malformed lead evidence; page was not acknowledged");
     const at = iso(r.received_at);
     evidence.push({ kind: "reply", source: "poll", sequence_id: seq, campaign_id: uuid(r.campaign_id), channel: r.channel === "email" || r.channel === "linkedin" ? r.channel : null,
       received_at: at, origami_reply_id: uuid(r.id), body: r.body });
@@ -295,6 +296,49 @@ async function recordOps(db: SupabaseClient, ops: OpRow[]) {
   must(await db.from("gtm_email_sync_ops").upsert(ops, { onConflict: "op_key,destination", ignoreDuplicates: true }), "record origami operations");
 }
 
+type SequenceScan = { campaigns: string[]; campaign: number; term: number; cursor: string | null; found: string[]; done: boolean; seen?: string[] };
+
+/** Save each stop as it is found and checkpoint only after an entire search page has been recorded. */
+async function scanSequences(db: SupabaseClient, client: OrigamiClient, r: EvidenceRow, id: Identity, detail: PersonDetail,
+  campaigns: Campaign[], labelId: number, now: Date): Promise<{ done: boolean; count: number; proposed: number }> {
+  const key = `origami.sequence.scan.${r.id}`;
+  const state = await readState<SequenceScan>(db, key) ?? { campaigns: campaigns.map((c) => c.id.toLowerCase()), campaign: 0, term: 0, cursor: null, found: [], done: false };
+  const unknown: Match = { match: "unmatched", person_id: null };
+  let proposed = 0;
+  const record = async (campaign: string, sequence: string, live: boolean) => {
+    const k = `${campaign}:${sequence}`;
+    if (!state.found.includes(k)) state.found.push(k);
+    const ops = proposeOrigamiOps(r, unknown, [{ campaign_id: campaign, sequence_id: sequence, live }], labelId, now);
+    await recordOps(db, ops);
+    proposed += ops.length;
+  };
+  if (r.campaign_id) await record(r.campaign_id, r.sequence_id, !settled(detail));
+  const terms = [id.email, id.slug].filter((v): v is string => !!v);
+  for (let pages = 0; !state.done && pages < 3; pages++) {
+    if (state.campaign >= state.campaigns.length || !terms.length) { state.done = true; break; }
+    const campaign = state.campaigns[state.campaign];
+    const page = await client.peoplePage(campaign, { search: terms[state.term] }, state.cursor);
+    if (page.next_cursor && (page.next_cursor === state.cursor || state.seen?.includes(page.next_cursor))) throw new Error("Origami people: pagination cursor repeated");
+    for (const row of page.items ?? []) {
+      const seq = uuid(row.sequence_id);
+      if (!seq || settledRow(row)) continue;
+      const person = campaign === r.campaign_id && seq === r.sequence_id ? detail : await client.person(campaign, seq);
+      if (sameIdentity(person, id)) await record(campaign, seq, !settled(person));
+    }
+    state.cursor = page.next_cursor || null;
+    if (state.cursor) state.seen = [...(state.seen ?? []), state.cursor];
+    if (!state.cursor) {
+      state.seen = [];
+      state.term++;
+      if (state.term >= terms.length) { state.term = 0; state.campaign++; }
+      if (state.campaign >= state.campaigns.length) state.done = true;
+    }
+    await saveState(db, key, state, now);
+  }
+  if (state.done) await saveState(db, key, state, now);
+  return { done: state.done, count: state.found.length, proposed };
+}
+
 async function takeLease(db: SupabaseClient, job: string, holder: string, waitMs = 0) {
   const until = Date.now() + waitMs;
   for (;;) {
@@ -330,24 +374,30 @@ export async function processPending(db: SupabaseClient, client: OrigamiClient, 
       try {
         campaigns ??= await client.campaigns();
         if (!r.campaign_id) throw new Error("the sequence's campaign is not known yet (the hourly poll fills it in)");
-        const id = await identityOf(client, { campaign_id: r.campaign_id, sequence_id: r.sequence_id });
+        const detail = await client.person(r.campaign_id, r.sequence_id);
+        const id = await identityOf(client, { campaign_id: r.campaign_id, sequence_id: r.sequence_id }, detail);
         if (!id.email && !id.slug) throw new Error("Origami has no address or LinkedIn profile for the sequence");
-        const seqs = await findSequences(client, id, { campaign_id: r.campaign_id, sequence_id: r.sequence_id }, campaigns);
-        // Record the stops before any CRM call, including calls that time out at the deadline.
         const unknown: Match = { match: "unmatched", person_id: null };
         const labelId = await ensureLabel(db, r, unknown, now);
-        const stops = proposeOrigamiOps(r, unknown, seqs, labelId, now);
-        await recordOps(db, stops);
+        const scan = await scanSequences(db, client, r, id, detail, campaigns, labelId, now);
         out.labels.push(labelId);
-        out.stopsProposed += stops.length;
+        out.stopsProposed += scan.proposed;
+        if (!scan.done) {
+          must(await db.from("gtm_origami_replies").update({ updated_at: new Date().toISOString() }).eq("id", r.id), "defer sequence scan");
+          out.deferred++;
+          continue;
+        }
         const m = await matchTwenty(reader, id);
-        const ops = proposeOrigamiOps(r, m, seqs, labelId, now);
+        const ops = proposeOrigamiOps(r, m, [], labelId, now);
         await recordOps(db, ops);
-        must(await db.from("gtm_origami_replies").update({ processed_at: now.toISOString(), match: m.match, person_id: m.person_id, sequences_found: seqs.length,
+        must(await db.from("gtm_origami_replies").update({ processed_at: now.toISOString(), match: m.match, person_id: m.person_id, sequences_found: scan.count,
           recipient_hash: id.email ? addressHash(id.email) : null, linkedin_hash: id.slug ? linkedinHash(id.slug) : null, last_error: null, updated_at: now.toISOString() }).eq("id", r.id), "origami evidence processed");
         out.processed++; out[m.match]++;
       } catch (e) {
-        if (isDeadline(e)) { out.deferred += rows.length - i; break; }
+        if (isDeadline(e)) {
+          must(await db.from("gtm_origami_replies").update({ updated_at: new Date().toISOString() }).eq("id", r.id), "defer processing");
+          out.deferred += rows.length - i; break;
+        }
         out.failed++;
         must(await db.from("gtm_origami_replies").update({ attempts: Math.min(r.attempts + 1, 2147483647), last_error: errorText(e), updated_at: new Date().toISOString() }).eq("id", r.id), "record processing failure");
       }
@@ -372,9 +422,9 @@ export async function applyOrigamiStops(db: SupabaseClient, client: OrigamiClien
   if (!(await takeLease(db, "origami.stop.apply", holder))) return { skipped: "another apply holds the lease, or it could not be taken" };
   try {
     const open = () => db.from("gtm_email_sync_ops").select("id,state,attempts,label_id,origami_campaign_id,origami_sequence_id,applied_at").eq("destination", "origami").eq("action", "sequence_stop")
-      .in("state", ["approved", "failed", "queued", "applied"]).not("approved_at", "is", null).lt("attempts", 5);
+      .in("state", ["approved", "failed", "queued", "applied"]).not("approved_at", "is", null);
     const first = opts.firstLabels?.length ? must(await open().in("label_id", opts.firstLabels).order("id"), "this delivery's stops") as StopOp[] : [];
-    const rest = must(await open().order("id").limit(opts.limit ?? 50), "approved stops") as StopOp[];
+    const rest = must(await open().order("updated_at").order("id").limit(opts.limit ?? 50), "approved stops") as StopOp[];
     const ops = [...first, ...rest.filter((o) => !first.some((f) => f.id === o.id))];
     const out = { stopped: 0, unchanged: 0, failed: 0, canceled: 0, lost: 0, deferred: 0 };
     for (const [i, op] of ops.entries()) {
@@ -417,7 +467,7 @@ export async function applyOrigamiStops(db: SupabaseClient, client: OrigamiClien
           break;
         }
         out.failed++;
-        await move(["queued", "applied"], { state: "failed", attempts: op.attempts + 1, last_error: errorText(e) }).catch(() => false);
+        await move(["queued", "applied"], { state: "failed", attempts: Math.min(op.attempts + 1, 2147483647), last_error: errorText(e) }).catch(() => false);
       }
     }
     return out;
@@ -495,10 +545,89 @@ export async function resolveOrigamiReviews(db: SupabaseClient, ids: number[], d
 /* ------------------------------------------------------------------------------------------------ the hourly step */
 
 type RunState = { at: string; ok: boolean; error: string | null; lastOkAt: string | null; deferred?: boolean };
-type ReplyCursor = { since?: string; scanSince?: string | null; nextCursor?: string | null; newest?: string | null };
+type ReplyCursor = { since?: string; scanSince?: string | null; nextCursor?: string | null; newest?: string | null; seen?: string[] };
 const readState = async <T>(db: SupabaseClient, key: string) => (must(await db.from("gtm_sync_state").select("value").eq("key", key).maybeSingle(), `read ${key}`) as { value: T } | null)?.value ?? null;
 const saveState = async (db: SupabaseClient, key: string, value: unknown, now: Date) =>
   must(await db.from("gtm_sync_state").upsert({ key, value, updated_at: now.toISOString() }, { onConflict: "key" }), `save ${key}`);
+
+async function pollPages(db: SupabaseClient, client: OrigamiClient, key: string, now: Date, initialSince?: string) {
+  const cursor = await readState<ReplyCursor>(db, key);
+  const since = cursor?.nextCursor ? cursor.scanSince ?? undefined : cursor?.since ? new Date(Date.parse(cursor.since) - LOOKBACK_MS).toISOString() : initialSince;
+  let pageCursor = cursor?.nextCursor ?? null, newest = cursor?.nextCursor ? cursor.newest ?? null : null;
+  const seen = new Set(cursor?.nextCursor ? cursor.seen ?? [cursor.nextCursor] : []);
+  let read = 0, recorded = 0;
+  for (let page = 0; page < 3; page++) {
+    const result = await client.repliesPage(since, pageCursor);
+    if (result.next_cursor && (result.next_cursor === pageCursor || seen.has(result.next_cursor))) throw new Error("Origami replies: pagination cursor repeated");
+    const parsed = replyEvidence(result.items ?? []);
+    const saved = await ingest(db, client, parsed.evidence);
+    read += parsed.evidence.length; recorded += saved.recorded;
+    if (saved.failed) throw new Error("Origami replies: evidence could not be recorded; page will be retried");
+    if (saved.deferred) return { read, recorded, deferred: 1 };
+    if (parsed.newest && (!newest || parsed.newest > newest)) newest = parsed.newest;
+    pageCursor = result.next_cursor || null;
+    if (pageCursor) { seen.add(pageCursor); await saveState(db, key, { since: cursor?.since, scanSince: since ?? null, nextCursor: pageCursor, newest, seen: [...seen] }, now); }
+    else {
+      const next = [cursor?.since, newest].filter((x): x is string => !!x).sort().pop();
+      await saveState(db, key, { since: next ?? null }, now);
+      return { read, recorded, deferred: 0 };
+    }
+  }
+  return { read, recorded, deferred: 1 };
+}
+
+type StatusScan = { campaigns: string[]; full: boolean; campaign: number; filter: number; cursor: string | null; seen?: string[] };
+async function scanCampaignPages(db: SupabaseClient, client: OrigamiClient, now: Date) {
+  const key = "origami.campaigns.scan";
+  const state = await readState<{ cursor: string | null; campaigns: Campaign[]; seen?: string[] }>(db, key) ?? { cursor: null, campaigns: [], seen: [] as string[] };
+  for (let i = 0; i < 3; i++) {
+    const page = await client.campaignsPage(state.cursor);
+    if (page.next_cursor && (page.next_cursor === state.cursor || state.seen?.includes(page.next_cursor))) throw new Error("Origami campaigns: pagination cursor repeated");
+    for (const c of page.items ?? []) {
+      if (!uuid(c.id)) throw new Error("Origami campaigns: malformed campaign; page was not acknowledged");
+      if (!state.campaigns.some((x) => x.id === c.id)) state.campaigns.push({ id: c.id.toLowerCase(), status: c.status });
+    }
+    state.cursor = page.next_cursor || null;
+    if (state.cursor) state.seen = [...(state.seen ?? []), state.cursor];
+    if (!state.cursor) {
+      must(await db.from("gtm_sync_state").delete().eq("key", key), "finish campaigns scan");
+      return { campaigns: state.campaigns, deferred: 0 };
+    }
+    await saveState(db, key, state, now);
+  }
+  return { campaigns: [] as Campaign[], deferred: 1 };
+}
+async function scanStatusPages(db: SupabaseClient, client: OrigamiClient, campaigns: Campaign[], now: Date) {
+  const key = "origami.status.scan";
+  const prior = await readState<StatusScan>(db, key);
+  const full = await readState<{ at?: string }>(db, STATUS_FULL_KEY);
+  const state: StatusScan = prior ?? { campaigns: campaigns.map((c) => c.id.toLowerCase()), full: !full?.at || now.getTime() - Date.parse(full.at) > 20 * 3_600_000, campaign: 0, filter: 0, cursor: null };
+  let recorded = 0;
+  for (let pages = 0; pages < 3 && state.campaign < state.campaigns.length; pages++) {
+    const campaign = state.campaigns[state.campaign];
+    const filter = state.full ? {} : { status: ["replied", "unsubscribed"][state.filter] };
+    const page = await client.peoplePage(campaign, filter, state.cursor);
+    if (page.next_cursor && (page.next_cursor === state.cursor || state.seen?.includes(page.next_cursor))) throw new Error("Origami statuses: pagination cursor repeated");
+    const evidence: Evidence[] = [];
+    for (const p of page.items ?? []) {
+      if (!uuid(p.sequence_id)) throw new Error("Origami statuses: malformed sequence; page was not acknowledged");
+      if (unsubscribedStatus(p)) evidence.push({ kind: "unsubscribed_status", source: "status_scan", sequence_id: p.sequence_id.toLowerCase(), campaign_id: campaign, channel: null, received_at: now.toISOString(), origami_reply_id: null });
+    }
+    const saved = await ingest(db, client, evidence);
+    recorded += saved.recorded;
+    if (saved.failed) throw new Error("Origami statuses: evidence could not be recorded; page will be retried");
+    if (saved.deferred) return { recorded, deferred: 1 };
+    state.cursor = page.next_cursor || null;
+    if (state.cursor) state.seen = [...(state.seen ?? []), state.cursor];
+    else state.seen = [];
+    if (!state.cursor && (state.full || ++state.filter >= 2)) { state.filter = 0; state.campaign++; }
+    await saveState(db, key, state, now);
+  }
+  if (state.campaign < state.campaigns.length) return { recorded, deferred: 1 };
+  if (state.full) await saveState(db, STATUS_FULL_KEY, { at: now.toISOString() }, now);
+  must(await db.from("gtm_sync_state").delete().eq("key", key), "finish status scan");
+  return { recorded, deferred: 0 };
+}
 
 /**
  * The team cron's Origami step, off unless ORIGAMI_OPTOUT_APPLY=1. In order: stops already approved; replies (the last 72
@@ -511,56 +640,43 @@ export async function runOrigamiOptouts(db: SupabaseClient, reader: TwentyReader
   if (!origamiApplyEnabled()) return { skipped: "ORIGAMI_OPTOUT_APPLY is not 1 (dry run: gtm suppression origami-plan)" };
   const client = opts.client ?? new OrigamiClient({ deadline: opts.deadline });
   const out: Record<string, unknown> = {};
-  let error: string | null = null, deferred = false;
-  try {
-    out.stopsFirst = await applyOrigamiStops(db, client, now);
-    const campaigns = await client.campaigns();
-    out.processed = { ...await processPending(db, client, reader, now, { campaigns }), labels: undefined };
-    out.stops = await applyOrigamiStops(db, client, now);
-    const cursor = await readState<ReplyCursor>(db, CURSOR_KEY);
-    const since = cursor?.nextCursor ? cursor.scanSince ?? undefined : cursor?.since ? new Date(Date.parse(cursor.since) - LOOKBACK_MS).toISOString() : undefined;
-    let pageCursor = cursor?.nextCursor ?? null, newest = cursor?.nextCursor ? cursor.newest ?? null : null;
-    let read = 0, recordedReplies = 0, complete = false;
-    // Bound collection so backfills cannot starve pending evidence, stops, or the status scan.
-    for (let page = 0; page < 3; page++) {
-      const result = await client.repliesPage(since, pageCursor);
-      if (result.next_cursor && result.next_cursor === pageCursor) throw new Error("Origami replies: pagination cursor did not advance");
-      const parsed = replyEvidence(result.items ?? []);
-      const saved = await ingest(db, client, parsed.evidence);
-      read += parsed.evidence.length; recordedReplies += saved.recorded;
-      if (saved.failed) throw new Error("Origami replies: evidence could not be recorded; page will be retried");
-      if (saved.deferred) { deferred = true; break; }
-      if (parsed.newest && (!newest || parsed.newest > newest)) newest = parsed.newest;
-      pageCursor = result.next_cursor || null;
-      if (pageCursor) {
-        await saveState(db, CURSOR_KEY, { since: cursor?.since, scanSince: since ?? null, nextCursor: pageCursor, newest }, now);
-      } else {
-        const next = [cursor?.since, newest].filter((x): x is string => !!x).sort().pop();
-        await saveState(db, CURSOR_KEY, { since: next ?? null }, now);
-        complete = true;
-        break;
-      }
+  const errors: string[] = [];
+  let deferred = false;
+  // Each stage has a separate time slice, so a slow provider cannot consume the whole hourly run.
+  const phase = async <T>(name: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    if (Date.now() >= opts.deadline) { deferred = true; return undefined; }
+    const end = Math.min(opts.deadline, Date.now() + 12_000);
+    client.setDeadline(end); reader.setDeadline(end);
+    try {
+      const result = await fn();
+      out[name] = result;
+      if (result && typeof result === "object" && Number((result as { deferred?: number }).deferred ?? 0) > 0) deferred = true;
+      return result;
+    } catch (e) {
+      if (isDeadline(e)) deferred = true; else errors.push(`${name}: ${errorText(e)}`);
+      return undefined;
     }
-    if (!complete) deferred = true;
-    out.replies = { read, recorded: recordedReplies, deferred: complete ? 0 : 1 };
-    if (recordedReplies) {
-      out.processedReplies = { ...await processPending(db, client, reader, now, { campaigns }), labels: undefined };
-      out.stopsReplies = await applyOrigamiStops(db, client, now);
-    }
-    const full = await readState<{ at?: string }>(db, STATUS_FULL_KEY);
-    const fullScan = !full?.at || now.getTime() - Date.parse(full.at) > 20 * 3_600_000;
-    const statuses = await collectStatuses(client, campaigns, now, fullScan);
-    const recorded = await ingest(db, client, statuses);
-    if (fullScan && !recorded.failed && !recorded.deferred) await saveState(db, STATUS_FULL_KEY, { at: now.toISOString() }, now);
-    out.statuses = { read: statuses.length, full: fullScan, ...recorded, ids: undefined };
-    if (recorded.recorded) {
-      out.processedStatuses = { ...await processPending(db, client, reader, now, { campaigns }), labels: undefined };
-      out.stopsStatuses = await applyOrigamiStops(db, client, now);
-    }
-    deferred ||= Object.values(out).some((v) => !!v && typeof v === "object" && Number((v as { deferred?: number }).deferred ?? 0) > 0);
-  } catch (e) {
-    if (isDeadline(e)) deferred = true; else error = errorText(e);
+  };
+  await phase("stopsFirst", () => applyOrigamiStops(db, client, now));
+  // Always inspect the newest page, even while either checkpointed scan is working through an older backlog.
+  await phase("freshHead", async () => {
+    const page = await client.repliesPage(new Date(now.getTime() - LOOKBACK_MS).toISOString());
+    const parsed = replyEvidence(page.items ?? []);
+    const saved = await ingest(db, client, parsed.evidence);
+    if (saved.failed) throw new Error("fresh reply evidence could not be recorded");
+    return { read: parsed.evidence.length, recorded: saved.recorded, deferred: saved.deferred };
+  });
+  await phase("freshReplies", () => pollPages(db, client, "origami.replies.fresh", now, new Date(now.getTime() - LOOKBACK_MS).toISOString()));
+  await phase("replies", () => pollPages(db, client, CURSOR_KEY, now));
+  const campaignScan = await phase("campaigns", () => scanCampaignPages(db, client, now));
+  if (campaignScan && !campaignScan.deferred) {
+    await phase("statuses", () => scanStatusPages(db, client, campaignScan.campaigns, now));
+    await phase("processed", async () => ({ ...await processPending(db, client, reader, now, { campaigns: campaignScan.campaigns }), labels: undefined }));
   }
+  delete out.campaigns;
+  await phase("stops", () => applyOrigamiStops(db, client, now));
+  client.setDeadline(opts.deadline); reader.setDeadline(opts.deadline);
+  const error = errors.length ? errors.join("; ").slice(0, 280) : null;
   const prev = await readState<RunState>(db, RUN_KEY).catch(() => null);
   const state: RunState = { at: now.toISOString(), ok: !error && !deferred, error, lastOkAt: error || deferred ? prev?.lastOkAt ?? null : now.toISOString(), deferred };
   await saveState(db, RUN_KEY, state, now).catch(() => undefined);

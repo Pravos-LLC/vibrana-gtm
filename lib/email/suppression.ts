@@ -201,10 +201,11 @@ export async function applyTwenty(db: SupabaseClient, reader: TwentyReader, now:
   if (lease.error || lease.data !== true) return { skipped: "another apply holds the lease, or it could not be taken" };
   try {
     // `queued` is only ever left by a crashed apply (this lease is exclusive), so it is resumed like `applied`.
-    let q = db.from("gtm_email_sync_ops").select("*").eq("destination", "twenty").in("state", ["approved", "failed", "queued", "applied"]).not("approved_at", "is", null).lt("attempts", 5);
+    let q = db.from("gtm_email_sync_ops").select("*").eq("destination", "twenty").in("state", ["approved", "failed", "queued", "applied"]).not("approved_at", "is", null);
     if (!email) q = q.eq("policy_version", ORIGAMI_RULE);
-    if (!origami) q = q.neq("policy_version", ORIGAMI_RULE);
-    const ops = must(await q.order("id").limit(limit), "approved operations") as StoredOp[];
+    if (!origami) q = q.neq("policy_version", ORIGAMI_RULE).lt("attempts", 5);
+    if (email && origami) q = q.or(`policy_version.eq.${ORIGAMI_RULE},attempts.lt.5`);
+    const ops = must(await q.order("updated_at").order("id").limit(limit), "approved operations") as StoredOp[];
     const out = { confirmed: 0, unchanged: 0, failed: 0, canceled: 0, lost: 0 };
     const person = async (id: string) => (await reader.all<Live>("people", READ, { id: { eq: id } }, "PersonFilterInput", 1, 1))[0] ?? null;
     for (const op of ops) {
@@ -240,7 +241,7 @@ export async function applyTwenty(db: SupabaseClient, reader: TwentyReader, now:
         if (c) out.confirmed++; else out.unchanged++;
       } catch (e) {
         out.failed++;
-        await move(["queued", "applied"], { state: "failed", attempts: op.attempts + 1, last_error: (e as Error).message.slice(0, 300).replace(/[^\s@]+@[^\s@]+/g, "[address]") }).catch(() => false);
+        await move(["queued", "applied"], { state: "failed", attempts: Math.min(op.attempts + 1, 2147483647), last_error: (e as Error).message.slice(0, 300).replace(/[^\s@]+@[^\s@]+/g, "[address]") }).catch(() => false);
       }
     }
     return out;

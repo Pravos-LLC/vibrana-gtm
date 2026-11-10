@@ -71,12 +71,13 @@ export class OrigamiClient {
       let res: Response | null = null, failure = "";
       try {
         res = await (this.opts.fetcher ?? globalThis.fetch)(`${ORIGAMI_BASE}${path}`, {
-          method, signal: AbortSignal.timeout(this.opts.timeoutMs ?? 20_000),
+          method, signal: AbortSignal.timeout(Math.max(1, Math.min(this.opts.timeoutMs ?? 20_000, this.opts.deadline ? this.opts.deadline - now() : Infinity))),
           headers: { authorization: `Bearer ${key}`, accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}), ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}) },
           ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         });
       } catch (e) { failure = (e as Error).message.slice(0, 80); }
       this.last = now();
+      if (this.opts.deadline && now() >= this.opts.deadline) throw new DeadlineError(`Origami: stopped at the run deadline (${what})`);
       if (res && res.ok) return (await res.json().catch(() => ({}))) as T;
       const status = res?.status ?? 0;
       const json = res ? await res.json().catch(() => null) as { code?: string } | null : null;
@@ -94,18 +95,41 @@ export class OrigamiClient {
   async all<T>(path: string, params: Record<string, string | undefined> = {}, maxPages = 100): Promise<T[]> {
     const out: T[] = [];
     let cursor: string | null = null;
+    const seen = new Set<string>();
     for (let page = 0; ; page++) {
       if (page >= maxPages) throw new Error(`Origami ${path.split("?")[0]}: more than ${maxPages} pages; refusing to return a truncated list`);
       const q = new URLSearchParams(Object.entries({ ...params, limit: "100", cursor: cursor ?? undefined }).filter((e): e is [string, string] => e[1] != null));
-      const r: List<T> = await this.request<List<T>>("GET", `${path}?${q}`);
+      const r = await this.listPage<T>(`${path}?${q}`);
       out.push(...(r.items ?? []));
-      if (!r.next_cursor || r.next_cursor === cursor) return out;
+      if (!r.next_cursor) return out;
+      if (r.next_cursor === cursor || seen.has(r.next_cursor)) throw new Error(`Origami ${path.split("?")[0]}: pagination cursor repeated`);
+      seen.add(r.next_cursor);
       cursor = r.next_cursor;
     }
   }
 
+  private async listPage<T>(path: string): Promise<List<T>> {
+    const result = await this.request<List<T>>("GET", path);
+    if (!result || !Array.isArray(result.items) || (result.next_cursor !== null && typeof result.next_cursor !== "string")) {
+      throw new Error(`Origami ${path.split("?")[0]}: malformed list response`);
+    }
+    return result;
+  }
+
   campaigns() { return this.all<Campaign>("/send/campaigns"); }
+  campaignsPage(cursor?: string | null) {
+    const q = new URLSearchParams({ limit: "100" });
+    if (cursor) q.set("cursor", cursor);
+    return this.listPage<Campaign>(`/send/campaigns?${q}`);
+  }
   people(campaignId: string, filter: { search?: string; status?: string } = {}) { return this.all<PersonRow>(`/send/campaigns/${enc(campaignId)}/people`, filter); }
+  peoplePage(campaignId: string, filter: { search?: string; status?: string } = {}, cursor?: string | null) {
+    const q = new URLSearchParams({ limit: "100" });
+    if (filter.search) q.set("search", filter.search);
+    if (filter.status) q.set("status", filter.status);
+    if (cursor) q.set("cursor", cursor);
+    return this.listPage<PersonRow>(`/send/campaigns/${enc(campaignId)}/people?${q}`);
+  }
   person(campaignId: string, sequenceId: string) { return this.request<PersonDetail>("GET", `/send/campaigns/${enc(campaignId)}/people/${enc(sequenceId)}`); }
   /** Lead replies, newest first (keyset on received_at, id). `since` is an ISO timestamp. */
   replies(since?: string) { return this.all<Reply>("/send/replies", { from: "lead", since }); }
@@ -114,7 +138,7 @@ export class OrigamiClient {
     const q = new URLSearchParams({ from: "lead", limit: "100" });
     if (since) q.set("since", since);
     if (cursor) q.set("cursor", cursor);
-    return this.request<List<Reply>>("GET", `/send/replies?${q}`);
+    return this.listPage<Reply>(`/send/replies?${q}`);
   }
   /** POST .../people/{sequence_id}/stop: no further steps, history kept (docs: send-campaigns-people-stop). */
   stop(campaignId: string, sequenceId: string, idempotencyKey: string) {
