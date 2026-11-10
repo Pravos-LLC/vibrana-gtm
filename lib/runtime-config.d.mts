@@ -7,7 +7,7 @@ export type RuntimeConfig = {
   candidates: typeof import('../config/candidates.json');
   brand: { websiteUrl: string; authorLabel: string; podcastName: string; personalFrontDoorId: string };
   packaging: { personalBrandId: string; profiles: Record<string, import('./packaging/catalog').Profile> };
-  mail: { from: string; notify: string; engageFrom: string; outreachFrom: string; mailbox: string; trackFrom: { client: string; guest: string } };
+  mail: { from: string; notify: string; engageFrom: string; outreachFrom: string; mailbox: string; trackFrom: { client: string; guest: string; network?: string } };
 };
 export function validateRuntimeConfig(value: unknown): RuntimeConfig;
 export function readPrivateRuntimeConfig(root: string, env?: Record<string, string | undefined>): { config: RuntimeConfig; bytes: Buffer };

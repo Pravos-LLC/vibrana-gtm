@@ -65,6 +65,18 @@ test("queueRows: a guest's desk draft never reaches the client email or LinkedIn
   assert.deepEqual(queueRows(rows, "linkedin").map((r) => r.domain), ["a.example"]);
 });
 
+test("queueRows: a network desk draft (VIB-522) never reaches a cold send queue, and an unknown track is never sent", () => {
+  const rows = [
+    draft({ domain: "a.example", status: "accepted" }),
+    draft({ domain: "nia.example", status: "accepted", track: "network" } as never),
+    draft({ domain: "ned.network.invalid", status: "accepted", track: "network", linkedin_status: "queued" } as never),
+    draft({ domain: "z.example", status: "accepted", track: "someday" } as never),
+    draft({ domain: "c.example", status: "accepted", track: "client" } as never),
+  ];
+  assert.deepEqual(queueRows(rows, "email").map((r) => r.domain), ["a.example", "c.example"]);
+  assert.deepEqual(queueRows(rows, "linkedin").map((r) => r.domain), ["a.example", "c.example"]);
+});
+
 test("queueRows: only accepted drafts not yet acted on, with what the channel needs", () => {
   const rows = [
     draft({ domain: "a.example", status: "accepted" }),

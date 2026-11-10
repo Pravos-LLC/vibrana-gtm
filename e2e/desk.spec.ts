@@ -6,9 +6,11 @@
 // switch (G), both meters (clients 1/5, guests 1/2) and their targets, each stream's sender, the route-aware composer
 // (email, LinkedIn note, intermediary), a LinkedIn-route Mark sent, the template and its slots, advisory guest hints, the
 // follow-up due chip and Mark follow-up sent (which does not count), and that a guest never appears in the client queue.
+// A third covers the network stream (VIB-522): its tab, meter (0/15) and sender, no AI angles, the network dossier block,
+// Mark sent by email and by LinkedIn note (both count), the follow-up, and three-way queue isolation.
 // Synthetic fixtures only (test/support/seed.ts).
 import { test, expect, type Page } from "@playwright/test";
-import { admin, DESK_IDS, DOSSIER_FIXTURE, dossierRow, GUEST_IDS, PASSWORD, seedDesk, USERS } from "../test/support/seed.ts";
+import { admin, DESK_IDS, DOSSIER_FIXTURE, dossierRow, GUEST_IDS, NETWORK_IDS, PASSWORD, seedDesk, USERS } from "../test/support/seed.ts";
 
 async function login(page: Page) {
   await page.goto("/login");
@@ -298,4 +300,82 @@ test("drafting endpoint preserves owner, origin, stream and client-exclusion gat
   expect(await blocked.json()).toMatchObject({ ok: false, error: expect.stringContaining("client check has not passed") });
   const wrongStream = await page.request.post(endpoint, { data: { personId: DESK_IDS.top, track: "guest" } });
   expect(await wrongStream.json()).toMatchObject({ ok: false });
+  const network = await page.request.post(endpoint, { data: { personId: NETWORK_IDS.email, track: "network" } });
+  expect(await network.json()).toMatchObject({ ok: false, error: expect.stringContaining("Network notes are yours to write") });
+});
+
+test("Writing desk, the network stream: its own tab, meter and sender, no AI angles, the relationship block, email and LinkedIn sends, the follow-up", async ({ page }) => {
+  const db = admin();
+  const eightDays = new Date(Date.now() - 8 * 86_400_000).toISOString();
+  // Noa was written to 8 days ago and has not replied: her follow-up is due.
+  await db.from("gtm_outreach_drafts").insert({ batch: "desk", domain: "noa.example", variant: "john", person: NETWORK_IDS.followup, track: "network", route: "email", status: "accepted", decided_by: "owner@gtm.test", decided_at: eightDays,
+    email_status: "sent", email_sent_at: eightDays, subject: "Catching up", body: "Hey Noa,\n\nFixture first message.", prospect: { first_name: "Noa", twenty_person_id: NETWORK_IDS.followup, email: "noa@noa.example" } });
+  try {
+    await login(page);
+    await page.goto("/outreach/write");
+    const queue = page.getByTestId("desk-queue");
+    const network = page.getByTestId("desk-meter-network");
+    await expect(network).toContainText("Network 0/15");
+    await expect(queue.getByRole("button", { name: /Nia Fixture/ })).toHaveCount(0); // never in the client queue
+    await page.getByRole("tab", { name: "Network" }).click();
+    await expect(page).toHaveURL(/t=network/);
+    await expect(page.getByTestId("desk-name")).toHaveText("Nia Fixture");
+    await expect(queue.getByRole("button")).toHaveCount(2); // Nia and Ned to write (Noa is sent)
+    await expect(queue.getByRole("button", { name: /Gia Fixture|Topa Fixture/ })).toHaveCount(0);
+    await expect(page.getByTestId("desk-from")).toHaveText("user-f538cb95fc21@example.com");
+    expect(new URL((await page.getByTestId("desk-gmail").getAttribute("href"))!).searchParams.get("authuser")).toBe("user-f538cb95fc21@example.com");
+    await expect(page.getByTestId("desk-ai-angles")).toHaveCount(0); // he writes these himself
+    await expect(page.getByTestId("desk-template")).toHaveCount(0); // no podcast templates
+    const dossier = page.getByTestId("desk-dossier");
+    await expect(dossier.getByTestId("desk-network")).toContainText("T1, prior conversation");
+    await expect(dossier.getByTestId("desk-network-origins")).toHaveText("LinkedIn, Gmail");
+    await expect(dossier.getByTestId("desk-network-exchanged")).toContainText("email");
+    await expect(dossier.getByTestId("desk-network-context")).toHaveText("Fixture: met Nia at a fixture meetup");
+
+    // Nia by email: the network meter moves, the others do not.
+    const body = page.getByLabel("Email body");
+    await expect(body).toHaveValue("Hey Nia,\n\n\n\nJo\nfixture.example");
+    await page.getByLabel("Subject", { exact: true }).fill("Catching up");
+    await body.fill("Hey Nia,\n\nIt has been a while.\n\nJo\nfixture.example");
+    await page.getByRole("button", { name: "Mark sent" }).click();
+    await expect(network).toContainText("Network 1/15");
+    await expect(page.getByTestId("desk-meter-client")).toContainText("Clients 0/5");
+    await expect(page.getByTestId("desk-meter-guest")).toContainText("Guests 0/2");
+    await expect.poll(async () => (await db.from("gtm_outreach_drafts").select("email_status,route,track").eq("person", NETWORK_IDS.email).single()).data).toEqual({ email_status: "sent", route: "email", track: "network" });
+
+    // On to Ned, reached by a LinkedIn note: it counts too.
+    await expect(page.getByTestId("desk-name")).toHaveText("Ned Fixture");
+    await expect(page.getByTestId("desk-route")).toHaveText("LinkedIn");
+    await expect(page.getByLabel("Email body")).toHaveCount(0);
+    await expect(dossier.getByTestId("desk-network-exchanged")).toHaveText("No two-way exchange on record");
+    await page.getByLabel("LinkedIn note").fill("Hi Ned, good to see your news.");
+    await page.getByRole("button", { name: "Mark sent" }).click();
+    await expect(network).toContainText("Network 2/15");
+    await expect.poll(async () => (await db.from("gtm_outreach_drafts").select("linkedin_status,email_status,route").eq("person", NETWORK_IDS.linkedin).single()).data).toEqual({ linkedin_status: "sent", email_status: "none", route: "linkedin" });
+
+    // The follow-up due chip: Noa, 8 days, no reply. Marking it counts nothing.
+    await page.getByRole("button", { name: /^Follow-up due/ }).click();
+    await queue.getByRole("button", { name: /Noa Fixture/ }).click();
+    await expect(page.getByTestId("desk-followup-due")).toBeVisible();
+    await page.getByTestId("desk-followup").click();
+    await expect(page.getByTestId("desk-followup-sent")).toBeVisible();
+    await expect(network).toContainText("Network 2/15");
+
+    // G cycles the streams: network, then clients.
+    await page.locator("body").click({ position: { x: 600, y: 8 } });
+    await page.keyboard.press("g");
+    await expect(page.getByRole("tab", { name: "Clients" })).toHaveAttribute("aria-selected", "true");
+    await page.goto(`/outreach/write?p=${NETWORK_IDS.linkedin}`);
+    await expect(page.getByRole("tab", { name: "Network" })).toHaveAttribute("aria-selected", "true"); // the person's stream, from the link
+
+    // Its target is its own to set.
+    await page.getByRole("button", { name: "Network target 15" }).click();
+    await page.getByLabel("Network daily target").fill("10");
+    await page.getByLabel("Network daily target").press("Enter");
+    await expect(network).toContainText("Network 2/10");
+    await expect.poll(async () => (await db.from("gtm_outreach_tracks").select("daily_target").eq("track", "network").single()).data?.daily_target).toBe(10);
+  } finally {
+    await db.from("gtm_outreach_drafts").delete().eq("batch", "desk");
+    await seedDesk();
+  }
 });

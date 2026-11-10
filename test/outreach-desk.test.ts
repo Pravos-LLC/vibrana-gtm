@@ -1,7 +1,9 @@
 // The writing desk (/outreach/write): the dossier contract and its validation, John's profile, desk states and the
 // queue, "sent today" in his time zone, the composer's prefill, advisory hints (never his dashes), the Gmail link, and
 // which pipeline drafts are about a person, and the second stream (podcast guests, VIB-463): track-aware counting and queues,
-// the follow-up due day arithmetic, per-track sender, guest dossiers and templates. Pure functions only; the database paths
+// the follow-up due day arithmetic, per-track sender, guest dossiers and templates, and the third (John's own network,
+// VIB-522): the network dossier contract, the warm-stream rules it shares with guests, and three-way queue isolation.
+// Pure functions only; the database paths
 // are in test/db/outreach-desk.test.ts.
 // Synthetic data only: .example domains and made-up people.
 import { test } from "node:test";
@@ -426,4 +428,110 @@ test("prefill resign: P.S. after the sign-off, CRLF, link-only signature lines a
   const linked = `${john}\nvibrana.ai`;
   assert.equal(row(`Hey Gia,\n\nNote.\n\n${john}`, linked), `Hey Gia,\n\nNote.\n\n${abe}`, "formatted body drops the link-only line");
   assert.equal(row(`Hey Gia,\n\nI am ${john} on a call.\n\nThanks`), `Hey Gia,\n\nI am ${john} on a call.\n\nThanks`, "a mid-body mention is not a signature");
+});
+
+// ---- the network stream (VIB-522) --------------------------------------------------------------------------------------
+
+const networkDossier = (over: Record<string, unknown> = {}) => ({
+  twenty_person_id: "00000000-0000-4000-8000-00000000d001", domain: "nia-example.network.invalid", built_at: "2026-11-10T08:00:00Z", track: "network",
+  score: 72, route: "linkedin", not_in_twenty: false,
+  prospect: { first_name: "Nia", last_name: "Example", title: "Partner", company: "Nia Co", email: null, linkedin_url: "https://www.linkedin.com/in/nia-example", country: "PT", city: null, lane: null },
+  signal: { text: "LinkedIn connection; last two-way email 2026-03-04", url: null, date: "2026-03-04", type: "network_context" },
+  client_check: { ok: true, reason: "not a client", checked_at: "2026-11-10T08:00:00Z" },
+  network: { tier: "T1", relationship: "PRIOR_CONVERSATION", origins: ["LINKEDIN", "WHATSAPP"], last_exchanged_at: "2026-03-04T10:00:00Z", last_channel: "email", last_contacted_at: null, owners: ["JOHN"], context: "LinkedIn connection; last two-way email 2026-03-04" },
+  ...over,
+});
+const wrongWay = (file: unknown[], track: import("../lib/outreach/desk.ts").Track) => { try { desk.parseDossiers(JSON.stringify(file), track); return ""; } catch (e) { return (e as Error).message; } };
+
+test("the network track: parsed, labeled, warm, 15 a day from its own sender, and no AI angles", () => {
+  assert.deepEqual(desk.TRACKS, ["client", "guest", "network"]);
+  assert.deepEqual([desk.isTrack("network"), desk.isTrack("Network"), desk.isTrack("cold"), desk.isTrack(null)], [true, false, false, false]);
+  assert.equal(desk.TRACK_LABEL.network, "Network");
+  assert.deepEqual(desk.TRACK_DEFAULTS.network, { daily_target: 15, from_address: "user-f538cb95fc21@example.com" });
+  assert.deepEqual(desk.TRACKS.map(desk.isWarmTrack), [false, true, true], "guests and the network are warm, clients are cold");
+  assert.equal(desk.isWarmTrack(undefined), false, "a row with no track is a client");
+  assert.deepEqual(desk.TRACKS.map(desk.hasAngles), [true, true, false], "John writes every network note himself");
+  assert.deepEqual(desk.FILTERS.network, desk.FILTERS.guest, "the network queue has the guest chips: follow-up due and needs route");
+});
+
+test("normalizeDossier and parseDossiers: a network row keeps its block, takes the top-level score and its synthetic domain", () => {
+  const n = desk.normalizeDossier(networkDossier(), "network");
+  assert.deepEqual([n.track, n.score, n.domain, n.name, n.company, n.title], ["network", 72, "nia-example.network.invalid", "Nia Example", "Nia Co", "Partner"]);
+  assert.deepEqual(desk.dossierProblems(n, networkDossier()), []);
+  assert.deepEqual(n.dossier.network?.origins, ["LINKEDIN", "WHATSAPP"]);
+  const [p] = desk.parseDossiers(JSON.stringify([networkDossier({ unknown_key: { kept: true }, network: { ...networkDossier().network, future_field: 1 } })]), "network");
+  assert.deepEqual([(p.dossier as Record<string, unknown>).unknown_key, (p.dossier.network as Record<string, unknown>).future_field], [{ kept: true }, 1], "unknown keys are tolerated and kept");
+  const [bare] = desk.parseDossiers(JSON.stringify([networkDossier({ network: null, route: undefined, score: "40", prospect: { first_name: "Nia" } })]), "network");
+  assert.deepEqual([bare.score, bare.name, bare.dossier.network, desk.guestRoute(bare.dossier)], [40, "Nia", null, "email"], "a missing block and route are fine; no route means email");
+  const [empty] = desk.parseDossiers(JSON.stringify([networkDossier({ network: { tier: null, relationship: null, origins: null, owners: null } })]), "network");
+  assert.equal(empty.track, "network", "every network field may be null");
+});
+
+test("dossierProblems for a network file: the block is an object, the tier T1 or T2, origins and owners arrays of strings; tracks never mix", () => {
+  assert.match(wrongWay([networkDossier({ network: "T1" })], "network"), /network must be an object or null/);
+  assert.match(wrongWay([networkDossier({ network: { tier: "T3" } })], "network"), /network\.tier "T3" is not T1 or T2/);
+  assert.match(wrongWay([networkDossier({ network: { origins: "LINKEDIN" } })], "network"), /network\.origins must be an array of strings/);
+  assert.match(wrongWay([networkDossier({ network: { origins: ["LINKEDIN", 4] } })], "network"), /network\.origins must be an array of strings/);
+  assert.match(wrongWay([networkDossier({ network: { owners: [{ code: "JOHN" }] } })], "network"), /network\.owners must be an array of strings/);
+  assert.match(wrongWay([networkDossier({ route: "pigeon" })], "network"), /route "pigeon" is not email, linkedin or intermediary/);
+  assert.match(wrongWay([networkDossier({ signal: "x" })], "network"), /signal must be an object or null/);
+  assert.match(wrongWay([networkDossier()], "guest"), /is a network, but this is a guest import \(--track guest\)/);
+  assert.match(wrongWay([networkDossier()], "client"), /is a network, but this is a client import/);
+  assert.match(wrongWay([guestDossier()], "network"), /is a guest, but this is a network import \(--track network\)/);
+  assert.match(wrongWay([dossier()], "network"), /is a row with no track, but this is a network import/);
+  assert.equal(wrongWay([guestDossier({ network: "not checked on a guest" })], "guest"), "", "the network block is only checked on a network import");
+  assert.equal(wrongWay([networkDossier({ guest: { template: "09" } })], "network"), "", "a stray guest block on a network row is not podcast data and is not checked");
+});
+
+test("buildQueue across three tracks: a network row never shows in the client or guest queue, and the reverse", () => {
+  const row = (id: string, score: number, track: import("../lib/outreach/desk.ts").Track) => ({ twenty_person_id: id, track, domain: "a.example", name: id, company: "Co", title: "", score, skipped_at: null, skip_reason: "", email: null, client_ok: null });
+  const rows = [row("c1", 50, "client"), row("g1", 60, "guest"), row("n1", 90, "network"), row("n2", 70, "network")];
+  const drafts = [
+    { id: "dn", person: "n1", track: "network" as const, status: "accepted" as const, email_status: "none" as const, linkedin_status: "sent" as const, linkedin_sent_at: "2026-11-10T01:00:00Z" },
+    // A draft filed under another track for the same person id is never read into this queue.
+    { id: "dx", person: "n2", track: "client" as const, status: "accepted" as const, email_status: "sent" as const, linkedin_status: "none" as const, email_sent_at: "2026-11-10T01:00:00Z" },
+  ];
+  assert.deepEqual(desk.buildQueue(rows, drafts, "network").map((i) => [i.twenty_person_id, i.state, i.track]), [["n1", "sent", "network"], ["n2", "to_write", "network"]], "a LinkedIn note is sent for the network");
+  assert.deepEqual(desk.buildQueue(rows, drafts, "client").map((i) => i.twenty_person_id), ["c1"]);
+  assert.deepEqual(desk.buildQueue(rows, drafts, "guest").map((i) => i.twenty_person_id), ["g1"]);
+  assert.equal(desk.deskState({ skipped_at: null }, drafts[0], "network"), "sent");
+  assert.equal(desk.deskState({ skipped_at: null }, drafts[0], "client"), "written", "the same draft on the client stream is not sent: a LinkedIn invite alone is not the email");
+});
+
+test("sentToday on the network counts the email or the LinkedIn note; a follow-up never counts", () => {
+  const now = new Date("2026-11-10T04:00:00Z"); // 12:00 in Bali
+  const items = [
+    { email_sent_at: "2026-11-10T01:00:00Z", linkedin_sent_at: null },
+    { email_sent_at: null, linkedin_sent_at: "2026-11-10T02:00:00Z" },
+    { email_sent_at: "2026-11-02T01:00:00Z", linkedin_sent_at: null, follow_up_sent_at: "2026-11-10T03:00:00Z" },
+    { email_sent_at: null, linkedin_sent_at: "2026-11-09T15:00:00Z" }, // 23:00 on 11-09 in Bali: yesterday
+  ];
+  assert.equal(desk.sentToday(items, "Asia/Makassar", "network", now), 2);
+  assert.equal(desk.sentToday(items, "Asia/Makassar", "client", now), 1, "the same rows as a client count the email only");
+});
+
+test("the network follow-up: due 7 calendar days after the first touch by either route, no reply, one only; needs route like guests", () => {
+  const now = new Date("2026-11-10T04:00:00Z");
+  const base = { twenty_person_id: "n", track: "network" as const, domain: null, name: "N", company: "", title: "", score: 1, skipped_at: null, skip_reason: "", email: null, client_ok: null };
+  const item = (over: Record<string, unknown>) => ({ ...base, state: "sent", draft_id: "d", status: "accepted", email_status: "none", linkedin_status: "sent", email_sent_at: null, linkedin_sent_at: "2026-11-03T00:00:00Z", follow_up_status: "none", follow_up_sent_at: null, ...over }) as unknown as import("../lib/outreach/desk.ts").QueueItem;
+  assert.ok(desk.matchesFilter(item({}), "followup_due", "Asia/Makassar", now), "a LinkedIn note 7 days ago is due");
+  assert.ok(!desk.matchesFilter(item({ linkedin_sent_at: "2026-11-04T00:00:00Z" }), "followup_due", "Asia/Makassar", now), "6 days is not");
+  assert.ok(!desk.matchesFilter(item({ follow_up_status: "sent", follow_up_sent_at: "2026-11-10T01:00:00Z" }), "followup_due", "Asia/Makassar", now), "one follow-up only");
+  assert.ok(!desk.matchesFilter(item({ email_status: "replied", email_sent_at: "2026-11-01T00:00:00Z" }), "followup_due", "Asia/Makassar", now), "a reply ends it");
+  assert.ok(desk.matchesFilter(item({ state: "to_write", linkedin_status: null, linkedin_sent_at: null, not_in_twenty: "true" }), "needs_route", "UTC", now));
+  assert.ok(!desk.matchesFilter(item({ state: "to_write", linkedin_status: null, linkedin_sent_at: null, route: "email" }), "needs_route", "UTC", now));
+});
+
+test("network composer rules: the stream keeps its own sender and profile, no guest flags, no website link for a synthetic domain", () => {
+  const abe = { app_metadata: { gtm_owner: true, gtm_sender: "user-9b0b68d398d1@example.com", gtm_signature: "Abe Sample Person" } };
+  const john = { name: "Jo", signature: "Jo" };
+  assert.equal(desk.senderFor("network", "user-f538cb95fc21@example.com", abe), "user-f538cb95fc21@example.com", "John's own network is sent as John");
+  assert.equal(desk.senderProfile("network", john, abe), john);
+  const h = desk.hints({ subject: "", body: "Hey Nia, the elders \u2014 {{slot}}", linkedin_note: "" }, undefined, "network");
+  assert.deepEqual([h.wisdom, h.emDash, h.slots], [[], false, 0], "the podcast-invitation flags stay guest-only");
+  const reach = desk.guestReach(desk.normalizeDossier(networkDossier(), "network").dossier, "Nia Example", "Nia Co");
+  assert.deepEqual(reach.map((l) => l.kind), ["linkedin"], "LinkedIn, and no website made from nia-example.network.invalid");
+  assert.ok(desk.isSyntheticDomain("x.network.invalid") && desk.isSyntheticDomain("x.guest.invalid") && !desk.isSyntheticDomain("nia.example"));
+  const start = desk.prefill(desk.normalizeDossier(networkDossier({ route: "email", prospect: { first_name: "Nia", email: "nia@nia.example" } }), "network").dossier, john, null, null);
+  assert.deepEqual([start.to, start.body, start.from], ["nia@nia.example", "Hey Nia,\n\n\n\nJo", "blank"], "an empty composer with his signature, nothing else");
 });

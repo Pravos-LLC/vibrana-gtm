@@ -4,14 +4,15 @@
 // for reference. Read only, except "Use this version" on an earlier desk text and the copy-link buttons. Any field of
 // the dossier may be missing; a section with nothing in it is left out. A guest's dossier (track 'guest') gets its own
 // layout after "Who": pillar, template, the dated trigger, the angle and questions, the warm path, and the approach and
-// protocol notes up front. The research date shows quietly under the name; there is no stale warning (a failed client check still alerts).
+// protocol notes up front. A network contact's (track 'network', VIB-522) gets a compact relationship block instead: tier,
+// relationship, where it comes from, the last two-way exchange and the one-line context. The research date shows quietly under the name; there is no stale warning (a failed client check still alerts).
 import { Fragment, useState } from "react";
 import { AlertTriangle, CheckCircle2, Copy, ExternalLink, UserRound, Mail, Globe, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toaster";
 import { cn } from "@/lib/ui/cn";
-import { DESK_VARIANT, exportAgeDays, guestReach, guestRoute, ROUTE_LABEL, safeUrl, TEMPLATE_LABEL, type Dossier, type Profile } from "@/lib/outreach/desk";
+import { DESK_VARIANT, exportAgeDays, guestReach, guestRoute, isSyntheticDomain, NETWORK_TIER_LABEL, ROUTE_LABEL, safeUrl, TEMPLATE_LABEL, type Dossier, type Profile } from "@/lib/outreach/desk";
 import type { DeskPerson } from "@/lib/outreach/desk-store";
 import type { Draft, DraftVersion } from "@/lib/outreach/model";
 
@@ -108,6 +109,9 @@ function DossierView({ person, onRestore }: { person: DeskPerson; onRestore: (v:
   const aiDrafts = person.reference.filter((r) => r.variant !== DESK_VARIANT);
   const own = person.reference.filter((r) => r.variant === DESK_VARIANT);
   const isGuest = d.track === "guest" || person.row.track === "guest";
+  const isNetwork = !isGuest && (d.track === "network" || person.row.track === "network");
+  // The network block's context line usually is the signal text; it is shown once.
+  const signalShown = !isGuest && (has(s.text) || has(s.url)) && !(isNetwork && s.text && s.text === d.network?.context && !has(s.url));
   const builtAt = person.row.built_at ?? d.built_at;
   const age = exportAgeDays(builtAt);
 
@@ -136,16 +140,17 @@ function DossierView({ person, onRestore }: { person: DeskPerson; onRestore: (v:
           </div>
           <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
             {safeUrl(p.linkedin_url) && <Ext href={p.linkedin_url}>LinkedIn</Ext>}
-            {person.row.domain && !person.row.domain.endsWith(".guest.invalid") && <Ext href={`https://${person.row.domain}`}>{person.row.domain}</Ext>}
+            {person.row.domain && !isSyntheticDomain(person.row.domain) && <Ext href={`https://${person.row.domain}`}>{person.row.domain}</Ext>}
             {p.email && <span className="font-mono text-ink-3">{p.email}</span>}
           </p>
         </div>
       </Section>
 
       {isGuest && <GuestView d={d} name={person.row.name} company={person.row.company} />}
+      {isNetwork && <NetworkView d={d} name={person.row.name} company={person.row.company} />}
 
-      {!isGuest && (has(s.text) || has(s.url)) && (
-        <Section title="Signal" note={[s.type, when(s.date)].filter(Boolean).join(" · ")} testid="desk-signal">
+      {signalShown && (
+        <Section title={isNetwork ? "Context" : "Signal"} note={[s.type && s.type !== "network_context" ? s.type : null, when(s.date)].filter(Boolean).join(" · ")} testid="desk-signal">
           <p className="whitespace-pre-wrap text-ink">{s.text}</p>
           {safeUrl(s.url) && <p className="text-xs"><Ext href={s.url}>{host(s.url!)}</Ext></p>}
         </Section>
@@ -314,6 +319,35 @@ function GuestView({ d, name, company }: { d: Dossier; name: string; company: st
       {has(g.warm_path) && <Section title="Warm path"><p className="whitespace-pre-wrap text-ink">{g.warm_path}</p></Section>}
       {has(g.representation) && <Section title="Representation"><p className="whitespace-pre-wrap text-ink-2">{g.representation}</p></Section>}
       {has(g.contact_line) && <Section title="Contact"><p className="whitespace-pre-wrap text-ink">{g.contact_line}</p></Section>}
+    </div>
+  );
+}
+
+const words = (v: string | null | undefined) => (v ?? "").toLowerCase().replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+const ORIGIN: Record<string, string> = { LINKEDIN: "LinkedIn", WHATSAPP: "WhatsApp", GMAIL: "Gmail" };
+const origin = (v: string) => ORIGIN[v.toUpperCase()] ?? words(v);
+
+/** The network block of an own-network dossier: how John knows them, compactly. Every field may be missing. */
+function NetworkView({ d, name, company }: { d: Dossier; name: string; company: string }) {
+  const n = d.network ?? {};
+  const tier = n.tier ? `${n.tier}${NETWORK_TIER_LABEL[n.tier] ? `, ${NETWORK_TIER_LABEL[n.tier].toLowerCase()}` : ""}` : null;
+  const facts = [tier, n.relationship && n.relationship !== "UNKNOWN" ? words(n.relationship) : null, ROUTE_LABEL[guestRoute(d)]].filter(has);
+  const origins = (n.origins ?? []).filter(has);
+  const exchanged = when(n.last_exchanged_at);
+  const contacted = when(n.last_contacted_at);
+  return (
+    <div className="space-y-4" data-testid="desk-network">
+      <Section title="Reach them"><ReachLinks dossier={d} name={name} company={company} /></Section>
+      <Section title="How you know them">
+        {facts.length > 0 && <div className="flex flex-wrap gap-1.5">{facts.map((f) => <Badge key={String(f)} variant="outline">{String(f)}</Badge>)}</div>}
+        <dl className="space-y-1 text-sm">
+          {origins.length > 0 && <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Connected via</dt><dd className="text-ink" data-testid="desk-network-origins">{origins.map(origin).join(", ")}</dd></div>}
+          <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Last exchanged</dt><dd className="text-ink" data-testid="desk-network-exchanged">{exchanged ? `${exchanged}${n.last_channel ? `, ${n.last_channel}` : ""}` : "No two-way exchange on record"}</dd></div>
+          {contacted && <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Last contacted</dt><dd className="text-ink-2">{contacted}</dd></div>}
+          {has(n.owners) && <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Relationship of</dt><dd className="text-ink-2">{n.owners!.map(words).join(", ")}</dd></div>}
+        </dl>
+        {has(n.context) && <p className="whitespace-pre-wrap text-ink" data-testid="desk-network-context">{n.context}</p>}
+      </Section>
     </div>
   );
 }

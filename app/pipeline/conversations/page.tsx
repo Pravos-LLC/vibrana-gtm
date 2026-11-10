@@ -37,7 +37,7 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
   ]);
   const ownerOf = ownerOfSender();
   const rows = desk.data ?? [];
-  const client = deskStats(rows, w, ownerOf, owner, "client"), guest = deskStats(rows, w, ownerOf, owner, "guest");
+  const client = deskStats(rows, w, ownerOf, owner, "client"), guest = deskStats(rows, w, ownerOf, owner, "guest"), network = deskStats(rows, w, ownerOf, owner, "network");
   const li = linkedin.data ? linkedinStats(linkedin.data.connections, linkedin.data.threads, w, owner) : null;
   const inq = inquiries.data ? inquiries.data.filter((r) => Date.parse(r.created_at) >= w.start.getTime()).length : null;
   const weeks = Array.from({ length: WEEKS }, (_, i) => {
@@ -45,13 +45,14 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
     const win: Window = { start: new Date(end.getTime() - 7 * 86_400_000), end, days: 7 };
     return { x: end.toISOString().slice(5, 10), s: deskStats(rows, win, ownerOf, owner) };
   });
-  const totalFor = (k: keyof ChannelStats) => (client[k] as number) + (guest[k] as number);
+  const totalFor = (k: keyof ChannelStats) => (client[k] as number) + (guest[k] as number) + (network[k] as number);
   const lastImport = linkedin.data?.lastImport;
   const row = (label: string, st: ChannelStats) => [label, st.firstTouches, st.followUps, st.replies, st.positive, pct(st.replyRate) ?? "under 10 sent", pct(st.positiveRate) ?? "-",
     st.bounceRate == null ? `${st.bounces}` : <span className={st.bounceRate > BOUNCE_ALARM ? "text-red-strong" : undefined}>{pct(st.bounceRate)}</span>];
-  // Guest emails go from John's own mailbox, which nothing reads yet: replies, bounces and rates there are not measured.
+  // Guest and network emails go from John's own mailboxes, which nothing reads yet: replies, bounces and rates there are not measured.
   const nm = <span className="text-ink-3">not measured</span>;
   const guestRow = [ "Podcast guests (own mailbox)", guest.firstTouches, guest.followUps, nm, nm, nm, nm, nm ];
+  const networkRow = [ "Own network (own mailbox)", network.firstTouches, network.followUps, nm, nm, nm, nm, nm ];
 
   return (
     <Shell title="Conversations" active="/pipeline">
@@ -69,8 +70,8 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
             tone={client.bounceRate != null && client.bounceRate > BOUNCE_ALARM ? "bad" : undefined} />
         </div>
         <Table head={["Track", "First touches", "Follow-ups", "Replies", "Positive", "Reply rate", "Positive rate", "Bounces"]} align={["l", "r", "r", "r", "r", "r", "r", "r"]}
-          rows={[row("Clients (HQ mailbox)", client), guestRow]} />
-        <p className="mt-3 text-sm text-ink-3">Guest replies are not measured: guest emails go from your own mailbox, which is not connected (it needs the Google Internal OAuth client). Abe&apos;s own sends and replies are on <Link className="underline" href="/performance/team">Team</Link>.</p>
+          rows={[row("Clients (HQ mailbox)", client), guestRow, networkRow]} />
+        <p className="mt-3 text-sm text-ink-3">Guest and network replies are not measured: those emails go from your own mailboxes, which are not connected (they need the Google Internal OAuth client). Abe&apos;s own sends and replies are on <Link className="underline" href="/performance/team">Team</Link>.</p>
         <div className="mt-6 grid gap-6 md:grid-cols-2">
           <TrendChart title="First touches a week" unit="emails" summary={`First touches per week over ${WEEKS} weeks`} data={weeks.map((x) => ({ x: x.x, value: x.s.firstTouches }))} />
           <TrendChart title="Replies a week" unit="replies" summary={`Replies per week over ${WEEKS} weeks`} data={weeks.map((x) => ({ x: x.x, value: x.s.replies }))} />
@@ -81,7 +82,7 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
         {!lastImport && <SourceNote>No LinkedIn export imported yet. Request it in LinkedIn Settings &gt; Data privacy &gt; Get a copy of your data (connections and messages), then run <code>python3 -m qualification.linkedin_import --emit-supabase &lt;export.zip&gt;</code> in vibrana-crm.</SourceNote>}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
           <StatTile label="Notes sent" value={desk.data ? String(totalFor("linkedinNotes")) : null} missing="not measured" note="from the desk" />
-          <StatTile label="Acceptance rate" value={pct(client.acceptRate ?? guest.acceptRate)} missing={`needs 10 notes (${totalFor("linkedinNotes")} so far)`} />
+          <StatTile label="Acceptance rate" value={pct(client.acceptRate ?? guest.acceptRate ?? network.acceptRate)} missing={`needs 10 notes (${totalFor("linkedinNotes")} so far)`} />
           <StatTile label="New connections" value={li ? String(li.connections) : null} missing="no export yet" note={li ? `${li.icpConnections} in ICP queues` : undefined} />
           <StatTile label="New conversations" value={li ? String(li.conversations) : null} missing="no export yet" note={li ? `${li.inbound} started by them` : undefined} />
           <StatTile label="Two-way with ICP" value={li ? String(li.icpTwoWay) : null} missing="no export yet" note={li ? `${li.twoWay} two-way in all` : undefined} />

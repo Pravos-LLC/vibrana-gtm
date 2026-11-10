@@ -3,10 +3,11 @@
 // autosave into a desk draft with history, two people at one company, mark sent (accepted, counted, queued for the
 // runbook as sent), LinkedIn invite, undo, skip, the daily target, and that a sent email can no longer change. The guest
 // stream (VIB-463): its own imports, sender, target and profile; mark sent by route (email, LinkedIn, intermediary), the
-// single follow-up that never counts, and that the two streams never see each other's people. Synthetic data only.
+// single follow-up that never counts, and that the two streams never see each other's people. The network stream (VIB-522):
+// its seeded row, imports, mark sent by email or LinkedIn, the follow-up, no AI angles, and three-way isolation. Synthetic data only.
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { admin, DESK_IDS, DESK_PROFILE, DOSSIER_FIXTURE, GUEST_FIXTURE, GUEST_IDS, GUEST_PROFILE, OUTREACH_IDS, seed, seedDesk } from "../support/seed.ts";
+import { admin, DESK_IDS, DESK_PROFILE, DOSSIER_FIXTURE, GUEST_FIXTURE, GUEST_IDS, GUEST_PROFILE, NETWORK_FIXTURE, NETWORK_IDS, NETWORK_PROFILE, OUTREACH_IDS, seed, seedDesk } from "../support/seed.ts";
 import { local } from "../support/local-supabase.ts";
 
 const l = local();
@@ -135,9 +136,10 @@ test("tracks: each stream has its own sender, target and profile; an empty table
   assert.deepEqual([(await store.deskSettings(db, "guest")).daily_target, (await store.deskSettings(db)).daily_target], [4, 5], "the guest target moved, the client's did not");
   await assert.rejects(store.setDailyTarget(db, 201, actor, "guest"), /1 to 200/);
   // Empty table: the old single desk row still answers for clients, then the defaults.
-  await db.from("gtm_outreach_tracks").delete().in("track", ["client", "guest"]);
+  await db.from("gtm_outreach_tracks").delete().in("track", ["client", "guest", "network"]);
   const empty = await store.deskTracks(db);
   assert.deepEqual([empty.client.daily_target, empty.client.from_address, empty.guest.daily_target, empty.guest.from_address, empty.guest.profile], [5, "user-045d73df3c9a@example.com", 2, "user-8dd8662c2f5a@example.com", {}]);
+  assert.deepEqual([empty.network.daily_target, empty.network.from_address, empty.network.profile], [15, "user-f538cb95fc21@example.com", {}], "the network falls back to 15 from its runtime sender");
   await db.from("gtm_outreach_desk").upsert({ id: true, daily_target: 9, profile: { signature: "Old" } }, { onConflict: "id" });
   assert.deepEqual([(await store.deskSettings(db)).daily_target, (await store.deskSettings(db)).profile.signature, (await store.deskSettings(db, "guest")).daily_target], [9, "Old", 2], "clients fall back to the old desk row");
   // Setting a target on an empty table makes the row with the track's own sender.
@@ -159,7 +161,7 @@ test("guest imports: dossiers and profile go to their own stream; the wrong file
   assert.equal(rows[0].dossier.guest.pillar, "Changed pillar");
   // A client id in a guest file would flip its stream: refused.
   const takeover = JSON.stringify([{ ...GUEST_FIXTURE[0], twenty_person_id: DESK_IDS.top }]);
-  await assert.rejects(store.importDossiers(db, takeover, { track: "guest" }), /already filed under the other track/);
+  await assert.rejects(store.importDossiers(db, takeover, { track: "guest" }), /already filed under another track/);
   await db.from("gtm_outreach_dossiers").delete().eq("twenty_person_id", "fx-g-new");
 
   const r = await store.importProfile(db, JSON.stringify({ ...GUEST_PROFILE, positioning: "Guest changed" }), { track: "guest" });
@@ -260,4 +262,78 @@ test("the follow-up: stamped by the database, undone cleanly, and never counts t
   await outreach.markDraft(db, sent.id, { email: "replied" });
   q = (await store.deskQueue(db, "guest")).find((i) => i.twenty_person_id === GUEST_IDS.followup)!;
   assert.deepEqual([q.state, followUpDue(q, "Asia/Makassar")], ["sent", false]);
+});
+
+// ---- the network stream (VIB-522) --------------------------------------------------------------------------------------
+
+test("network: the seeded row, its own imports and profile; a network id never changes stream", async () => {
+  const db = admin();
+  const t = await store.deskTracks(db);
+  assert.deepEqual([t.network.daily_target, t.network.from_address, t.network.profile.signature], [15, "user-f538cb95fc21@example.com", NETWORK_PROFILE.signature]);
+  assert.equal(await store.setDailyTarget(db, 12, actor, "network"), 12);
+  assert.deepEqual([(await store.deskSettings(db, "network")).daily_target, (await store.deskSettings(db, "guest")).daily_target, (await store.deskSettings(db)).daily_target], [12, 2, 5], "only the network target moved");
+  const file = JSON.stringify([{ ...NETWORK_FIXTURE[0], network: { ...NETWORK_FIXTURE[0].network, context: "Changed context" } }]);
+  await assert.rejects(store.importDossiers(db, file, { track: "guest" }), /is a network, but this is a guest import/);
+  await assert.rejects(store.importDossiers(db, JSON.stringify(GUEST_FIXTURE), { track: "network" }), /is a guest, but this is a network import/);
+  const r = await store.importDossiers(db, file, { track: "network" });
+  assert.deepEqual([r.inserted, r.updated], [[], [NETWORK_IDS.email]]);
+  const row = (await db.from("gtm_outreach_dossiers").select("track,score,dossier").eq("twenty_person_id", NETWORK_IDS.email).single()).data!;
+  assert.deepEqual([row.track, row.score, row.dossier.network.context, row.dossier.network.tier], ["network", 85, "Changed context", "T1"]);
+  await assert.rejects(store.importDossiers(db, JSON.stringify([{ ...NETWORK_FIXTURE[0], twenty_person_id: GUEST_IDS.email }]), { track: "network" }), /already filed under another track/);
+  const p = await store.importProfile(db, JSON.stringify({ ...NETWORK_PROFILE, positioning: "Network changed" }), { track: "network" });
+  assert.equal(p.gold_examples, 1);
+  assert.deepEqual([(await store.deskSettings(db, "network")).profile.positioning, (await store.deskSettings(db, "guest")).profile.positioning, (await store.deskSettings(db, "network")).daily_target], ["Network changed", GUEST_PROFILE.positioning, 12], "the other streams are untouched and the target is kept");
+  await seedDesk();
+});
+
+test("network: three-way isolation of queues and actions", async () => {
+  const db = admin();
+  const queues = { client: await store.deskQueue(db, "client"), guest: await store.deskQueue(db, "guest"), network: await store.deskQueue(db, "network") };
+  assert.deepEqual(queues.network.map((i) => [i.twenty_person_id, i.track, i.state, i.route ?? null]), [
+    [NETWORK_IDS.email, "network", "to_write", "email"], [NETWORK_IDS.linkedin, "network", "to_write", "linkedin"], [NETWORK_IDS.followup, "network", "to_write", "email"],
+  ]);
+  const ids = new Set(Object.values(NETWORK_IDS));
+  assert.ok(!queues.client.some((i) => ids.has(i.twenty_person_id)) && !queues.guest.some((i) => ids.has(i.twenty_person_id)), "no network person in the client or guest queue");
+  assert.ok(!queues.network.some((i) => i.track !== "network"), "and only network people in the network queue");
+  await assert.rejects(store.saveDesk(db, NETWORK_IDS.email, gedit({ body: "x" }), actor, NETWORK_PROFILE, "guest"), /network stream, not the guest stream/);
+  await assert.rejects(store.saveDesk(db, GUEST_IDS.email, gedit({ body: "x" }), actor, NETWORK_PROFILE, "network"), /guest stream, not the network stream/);
+  await assert.rejects(store.markDeskSent(db, DESK_IDS.top, edit(), actor, NETWORK_PROFILE, "network"), /client stream, not the network stream/);
+  await assert.rejects(store.markDeskLinkedinSent(db, NETWORK_IDS.linkedin, gedit({ linkedin_note: "Hi Ned" }), actor, NETWORK_PROFILE, "network"), /Mark invite sent is for the client stream/);
+  await assert.rejects(store.deskPerson(db, NETWORK_IDS.email, NETWORK_PROFILE, "client"), /network stream, not the client stream/);
+});
+
+test("network: mark sent by route (email or LinkedIn note), any route counts, the note is final; the follow-up never counts", async () => {
+  const db = admin();
+  const { followUpDue } = await import("../../lib/outreach/desk.ts");
+  const person = await store.deskPerson(db, NETWORK_IDS.email, NETWORK_PROFILE, "network");
+  assert.deepEqual([person.start.to, person.start.body], ["nia@nia.example", `Hey Nia,\n\n\n\n${NETWORK_PROFILE.signature}`], "a blank composer with the network signature");
+  await assert.rejects(store.markDeskSent(db, NETWORK_IDS.email, gedit({ to: "nia@nia.example", body: "Hey Nia," }), actor, NETWORK_PROFILE, "network"), /Add a subject/);
+  const email = await store.markDeskSent(db, NETWORK_IDS.email, gedit({ to: "nia@nia.example", subject: "Catching up", body: "Hey Nia,\n\nMine." }), actor, NETWORK_PROFILE, "network");
+  assert.deepEqual([email.track, email.route, email.status, email.email_status, email.prospect.twenty_person_id, !!email.email_sent_at], ["network", "email", "accepted", "sent", NETWORK_IDS.email, true],
+    "an email is stamped where the Twenty write-back looks (email_sent_at, prospect.twenty_person_id)");
+  await assert.rejects(store.markDeskSent(db, NETWORK_IDS.linkedin, gedit({ body: "Hey Ned" }), actor, NETWORK_PROFILE, "network"), /LinkedIn note is empty/);
+  const li = await store.markDeskSent(db, NETWORK_IDS.linkedin, gedit({ linkedin_note: "Hi Ned, good to see your news." }), actor, NETWORK_PROFILE, "network");
+  assert.deepEqual([li.route, li.linkedin_status, li.email_status, li.domain], ["linkedin", "sent", "none", "ned-fixture.network.invalid"]);
+  await assert.rejects(store.saveDesk(db, NETWORK_IDS.linkedin, gedit({ linkedin_note: "changed" }), actor, NETWORK_PROFILE, "network"), /note was already sent/);
+  let q = await store.deskQueue(db, "network");
+  assert.deepEqual(q.filter((i) => i.state === "sent").map((i) => i.twenty_person_id), [NETWORK_IDS.email, NETWORK_IDS.linkedin]);
+  assert.equal(sentToday(q, "Asia/Makassar", "network"), 2, "the email and the LinkedIn note both count");
+  const undo = await store.unmarkDeskSent(db, NETWORK_IDS.linkedin, "network");
+  assert.deepEqual([undo.linkedin_status, undo.linkedin_sent_at, undo.status], ["none", null, "accepted"]);
+  // Accepted, not sent, with a LinkedIn URL and note: exactly what the cold LinkedIn runbook picks up, were it a client.
+  assert.ok(!(await outreach.actionQueue(db, "linkedin", "desk")).some((r) => r.id === undo.id), "a network note never reaches the cold LinkedIn queue");
+  assert.ok(!(await outreach.actionQueue(db, "email", "desk")).some((r) => r.domain === "nia.example" || r.domain === "noa.example"), "nor the cold email queue");
+  assert.equal(sentToday(await store.deskQueue(db, "network"), "Asia/Makassar", "network"), 1);
+
+  // The follow-up, 8 days after Noa's email.
+  await assert.rejects(store.markDeskFollowUpSent(db, NETWORK_IDS.followup, "network"), /first message sent/);
+  const sent = await store.markDeskSent(db, NETWORK_IDS.followup, gedit({ to: "noa@noa.example", subject: "S", body: "Hey Noa,\n\nMine." }), actor, NETWORK_PROFILE, "network");
+  await db.from("gtm_outreach_drafts").update({ email_sent_at: new Date(Date.now() - 8 * 86_400_000).toISOString() }).eq("id", sent.id);
+  q = await store.deskQueue(db, "network");
+  assert.ok(followUpDue(q.find((i) => i.twenty_person_id === NETWORK_IDS.followup)!, "Asia/Makassar"), "8 days on, no reply: due");
+  const fu = await store.markDeskFollowUpSent(db, NETWORK_IDS.followup, "network");
+  assert.deepEqual([fu.follow_up_status, !!fu.follow_up_sent_at], ["sent", true]);
+  assert.equal(sentToday(await store.deskQueue(db, "network"), "Asia/Makassar", "network"), 1, "the follow-up did not count (only Nia's email)");
+  assert.equal((await store.unmarkDeskFollowUpSent(db, NETWORK_IDS.followup, "network")).follow_up_status, "none");
+  await assert.rejects(store.markDeskFollowUpSent(db, DESK_IDS.top, "client"), /Follow-ups are for the guest and network streams/);
 });

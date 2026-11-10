@@ -44,7 +44,8 @@ export async function syncOutcomes(db: SupabaseClient, opts: { deadline: number;
   const reader = opts.reader ?? (await GmailReader.connect(cfg!));
   const drafts = await readPages<OutcomeDraft>((from, to) => db.from("gtm_outreach_drafts")
     .select("id,subject,prospect,email_status,email_sent_at,email_sent_by,email_replied_at,email_bounced_at", { count: "exact" })
-    .eq("status", "accepted").neq("track", "guest").order("id").range(from, to), "outreach drafts");
+    // Client drafts only: guests and the network are sent from other mailboxes, which this HQ read never sees.
+    .eq("status", "accepted").eq("track", "client").order("id").range(from, to), "outreach drafts");
   const byId = new Map(drafts.map((d) => [d.id, d]));
   const patches = new Map<string, OutcomePatch>();
   let page = "";

@@ -4,7 +4,7 @@ import { isOfferOverride, type OfferOverride } from "@/lib/outreach/offers";
 import { after } from "next/server";
 import { adminDb } from "@/lib/db";
 import { emailHolds } from "@/lib/email/suppression";
-import { guestRoute, isTrack, senderProfile, type DeskEdit, type DossierRow, type Track } from "@/lib/outreach/desk";
+import { guestRoute, hasAngles, isTrack, senderProfile, type DeskEdit, type DossierRow, type Track } from "@/lib/outreach/desk";
 import { TwentyReader } from "@/lib/twenty";
 import {
   deskPerson, deskSettings, markDeskFollowUpSent, markDeskLinkedinSent, markDeskSent, saveDesk, setDailyTarget, skipPerson, unmarkDeskFollowUpSent, unmarkDeskSent, unskipPerson,
@@ -46,11 +46,15 @@ export async function loadDeskPerson(personId: string, track: Track): Promise<De
   return run(async (_actor, claims) => deskPerson(adminDb(), personId, await profile(stream(track), claims), track));
 }
 
-/** Generate copy for a client prospect or a podcast guest, only after the owner check and the dossier's client exclusion check pass. */
+/**
+ * Generate copy for a client prospect or a podcast guest, only after the owner check and the dossier's client exclusion check
+ * pass. Never for John's own network: he writes every one of those notes himself.
+ */
 export async function generateDeskAngles(personId: string, track: Track = "client", offerOverride: OfferOverride = "auto"): Promise<DeskResult<OutreachAngles>> {
   return run(async (actor, claims) => {
     if (!isOfferOverride(offerOverride)) throw new Error("Choose a valid offer before drafting.");
     const stream_ = stream(track);
+    if (!hasAngles(stream_)) throw new Error("Network notes are yours to write; there are no AI angles on this stream.");
     const currentProfile = await profile(stream_, claims);
     const person = await deskPerson(adminDb(), personId, currentProfile, stream_);
     if (person.row.dossier.client_check?.ok !== true) {
@@ -86,11 +90,11 @@ export async function saveDeskDraft(personId: string, edit: DeskEdit, track: Tra
   return run(async (actor, claims) => saveDesk(adminDb(), personId, edit, actor, await profile(stream(track), claims), track));
 }
 
-/** A client: the email. A guest: by the route on their dossier (email, LinkedIn note, or via an intermediary). */
+/** A client: the email. A guest or network contact: by the route on their dossier (email, LinkedIn note, or via an intermediary). */
 export async function markSent(personId: string, edit: DeskEdit, track: Track, angle?: SentAngle): Promise<DeskResult<Draft>> {
   return run(async (actor, claims) => {
     const prof = await profile(stream(track), claims);
-    // Email restrictions (VIB-513): on an email route only (a client, or a guest whose route is email). LinkedIn and
+    // Email restrictions (VIB-513): on an email route only (a client, or a guest or network contact whose route is email). LinkedIn and
     // intermediary routes are not email and are not held by them.
     const person = await deskPerson(adminDb(), personId, prof, track);
     if (stream(track) === "client" || guestRoute(person.row.dossier) === "email") await guardEmail(personId, edit.to?.trim() || null);
