@@ -8,6 +8,7 @@ export const TABS = [
   { href: "/pipeline", label: "Overview" },
   { href: "/pipeline/deals", label: "Deals" },
   { href: "/pipeline/conversations", label: "Conversations" },
+  { href: "/pipeline/replies", label: "Replies" },
   { href: "/pipeline/meetings", label: "Meetings" },
   { href: "/pipeline/traffic", label: "Traffic" },
   { href: "/pipeline/people", label: "People" },
