@@ -79,9 +79,16 @@ export async function recordProposals(db: SupabaseClient, ops: Op[]) {
 export async function detect(db: SupabaseClient) {
   type A = AttemptIn & { id: number };
   const attempts = await selectAll<A>((f, t) => db.from("gtm_email_attempts").select("id,event_id,person_id,recipient_hash,delivery,delivery_at,delivery_event_id").eq("delivery", "failed_invalid_address").order("id").range(f, t), "failed attempts");
-  // Decisions about Origami replies have their own operations (lib/origami/optouts.ts, VIB-521).
-  const all = await selectAll<LabelIn>((f, t) => db.from("gtm_email_reply_labels").select("id,event_id,person_id,source,opt_out,superseded_at,labeled_at").neq("opt_out", "none").is("superseded_at", null)
-    .is("origami_reply_id", null).order("id").range(f, t), "opt-out decisions");
+  // Decisions about Origami replies have their own operations (lib/origami/optouts.ts, VIB-521). Before the Origami
+  // migration (20261110020000) is applied there is no origami_reply_id column and no such decision: read without the filter.
+  const decisions = (origami: boolean) => selectAll<LabelIn>((f, t) => {
+    const q = db.from("gtm_email_reply_labels").select("id,event_id,person_id,source,opt_out,superseded_at,labeled_at").neq("opt_out", "none").is("superseded_at", null);
+    return (origami ? q.is("origami_reply_id", null) : q).order("id").range(f, t);
+  }, "opt-out decisions");
+  const all = await decisions(true).catch((e: Error) => {
+    if (/origami_reply_id/.test(e.message)) return decisions(false);
+    throw e;
+  });
   // A reply a person has labeled is decided: the rule's or the model's possible opt-out on it no longer opens a review (VIB-496).
   const labeled = new Set<number>();
   const ids = [...new Set(all.map((l) => l.event_id).filter((x): x is number => x != null))];
@@ -243,12 +250,13 @@ export async function applyTwenty(db: SupabaseClient, reader: TwentyReader, now:
 /** Whether an operation's evidence still stands: its label current and unchanged in scope, or the address failure still
  *  recorded as permanent. A correction since approval cancels the operation instead of writing it (finding 2). */
 export async function evidenceCurrent(db: SupabaseClient, op: StoredOp): Promise<boolean> {
-  // An Origami opt-out is one operation per person: current while any current Origami decision says this person opted out.
+  // An Origami opt-out (VIB-521) is current while its own decision is: the rule's, Origami's or a person's review.
   if (op.policy_version === ORIGAMI_RULE) {
-    if (op.action !== "person_opt_out" || op.reason !== "UNSUBSCRIBED") return false;
-    const r = await db.from("gtm_email_reply_labels").select("id").eq("person_id", op.person_id).not("origami_reply_id", "is", null).is("superseded_at", null).eq("opt_out", "person").limit(1);
+    if (op.action !== "person_opt_out" || op.reason !== "UNSUBSCRIBED" || op.label_id == null) return false;
+    const r = await db.from("gtm_email_reply_labels").select("superseded_at,opt_out,origami_reply_id").eq("id", op.label_id).maybeSingle();
     if (r.error) throw new Error(`evidence: ${r.error.message}`);
-    return (r.data ?? []).length > 0;
+    const l = r.data as { superseded_at: string | null; opt_out: string; origami_reply_id: number | null } | null;
+    return !!l && !l.superseded_at && l.opt_out === "person" && l.origami_reply_id != null;
   }
   if (op.label_id != null) {
     const r = await db.from("gtm_email_reply_labels").select("superseded_at,opt_out,source").eq("id", op.label_id).maybeSingle();

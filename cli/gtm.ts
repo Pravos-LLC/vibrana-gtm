@@ -1777,15 +1777,17 @@ const commands: Record<string, () => Promise<void>> = {
       return out(r, () => console.log(JSON.stringify(r)));
     }
     if (sub === "origami-reviewed") {
-      // An Origami opt-out no single Twenty person matched was handled by a person (in Twenty or by deciding it is no one
-      // there): record who, so its health incident clears. Ids are gtm_origami_replies ids.
+      // A person's decision on Origami opt-out evidence (VIB-521). Ids are gtm_origami_replies ids. --opt-out: it was an
+      // opt-out (the consent write follows, stops carry on); --not: it was not (the desk hold is released, stops not yet
+      // made are canceled); --handled: no single Twenty person matched and it was dealt with in Twenty by hand.
       const ids = (flag("--ids") ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0), by = flag("--by") ?? "";
-      if (!ids.length || !/^.{2,254}$/.test(by)) throw new Error('usage: gtm suppression origami-reviewed --ids 1,2 --by "<who handled them>"');
-      const rows = must(await db.from("gtm_origami_replies").update({ reviewed_at: now.toISOString(), reviewed_by: by, updated_at: now.toISOString() }).in("id", ids)
-        .in("match", ["ambiguous", "unmatched"]).is("reviewed_at", null).select("id"), "mark reviewed") as { id: number }[];
-      return out({ reviewed: rows.length }, () => console.log(`marked ${rows.length} Origami opt-out(s) reviewed`));
+      const picked = (["--opt-out", "--not", "--handled"] as const).filter((f) => argv.includes(f));
+      if (!ids.length || !by || picked.length !== 1) throw new Error('usage: gtm suppression origami-reviewed --ids 1,2 --by "<who decided>" --opt-out | --not | --handled');
+      const decision = ({ "--opt-out": "opt_out", "--not": "not_opt_out", "--handled": "handled" } as const)[picked[0]];
+      const r = await (await import("../lib/origami/optouts")).resolveOrigamiReviews(db, ids, decision, by, now);
+      return out(r, () => console.log(JSON.stringify(r, null, 2)));
     }
-    throw new Error("usage: gtm suppression plan | approve --ids 1,2 --ref TEXT | apply | origami-plan [--since DATE] | origami-reviewed --ids 1,2 --by NAME");
+    throw new Error("usage: gtm suppression plan | approve --ids 1,2 --ref TEXT | apply | origami-plan [--since DATE] | origami-reviewed --ids 1,2 --by NAME --opt-out|--not|--handled");
   },
 
   async team() {
@@ -2061,7 +2063,8 @@ const help = `gtm <command> [--json]
                            operations against it (--ids, --ref), and the guarded writer (EMAIL_SUPPRESSION_APPLY=1 only)
   suppression origami-plan [--since DATE]   the Origami opt-out dry run (VIB-521): what ORIGAMI_OPTOUT_APPLY=1 would
                            write to Twenty and stop in Origami, as counts; Origami reads only, no database
-  suppression origami-reviewed --ids 1,2 --by NAME   an unmatched Origami opt-out was handled by a person
+  suppression origami-reviewed --ids 1,2 --by NAME --opt-out|--not|--handled   a person's decision on Origami opt-out
+                           evidence: confirm (consent write) or reject (releases the desk hold), or handled in Twenty
   team reconcile [--days 30]   old thread-based email numbers next to the email contract v1 numbers, per member
                            (counts only; review before setting EMAIL_OUTCOMES_V2=1)
   sales reconcile [--days 60] [--apply]   match incoming Wise credits to unpaid payment milestones (same currency,

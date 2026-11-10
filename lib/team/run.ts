@@ -12,7 +12,7 @@ import { stock } from "./metrics";
 import type { TeamMember } from "./members";
 import { runEmailHealth, type HealthRun } from "../email/run";
 import { applyTwenty, detect } from "../email/suppression";
-import { runOrigamiOptouts } from "../origami/optouts";
+import { errorText, runOrigamiOptouts } from "../origami/optouts";
 
 export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string }; _lease?: string; _health?: HealthRun | { error: string }; _suppression?: Record<string, unknown>; _origami?: Record<string, unknown> };
 
@@ -34,6 +34,14 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
   const reader = new TwentyReader({ deadline: opts.deadline - 5_000 });
   // People come from the CRM mirror (VIB-516); it is ready once its backfill finished and it synced in the last 6 hours.
   const people = mirrorPeople(db, async () => mirrorReadiness(await loadMirrorState(db), now.getTime()));
+  // Origami opt-outs (VIB-521) first, with up to 100 s of the budget: compliance work goes before activity metrics, and
+  // work it cannot finish is deferred to the next run, never counted as failed. Off unless ORIGAMI_OPTOUT_APPLY=1; its
+  // Twenty operations are applied by applyTwenty below. Never fails the run.
+  try {
+    const origamiEnd = Math.min(opts.deadline - 120_000, Date.now() + 100_000);
+    reader.setDeadline(origamiEnd);
+    out._origami = await runOrigamiOptouts(db, reader, now, { deadline: origamiEnd }) as Record<string, unknown>;
+  } catch (e) { out._origami = { error: errorText(e) }; }
   // Keep the last part of the budget for the API key check.
   const membersEnd = opts.deadline - 20_000;
   for (const [i, m] of members.entries()) {
@@ -80,12 +88,6 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
       }
     } catch (e) { r.activity ??= `error: ${(e as Error).message.slice(0, 200)}`; r.stock ??= "skipped"; }
   }
-  // Origami opt-outs (VIB-521): poll replies and unsubscribes, record them, stop the person's sequences in every campaign.
-  // Off unless ORIGAMI_OPTOUT_APPLY=1; its Twenty operations are applied by applyTwenty below. Never fails the run.
-  try {
-    reader.setDeadline(opts.deadline - 45_000);
-    out._origami = await runOrigamiOptouts(db, reader, now, { deadline: opts.deadline - 45_000 }) as Record<string, unknown>;
-  } catch (e) { out._origami = { error: (e as Error).message.slice(0, 200).replace(/[^\s@]+@[^\s@]+/g, "[address]") }; }
   // Suppression (VIB-513): record the operations the evidence implies (pending review; Origami held), then apply approved
   // Twenty operations only when EMAIL_SUPPRESSION_APPLY=1. A failure here never fails the run.
   try {

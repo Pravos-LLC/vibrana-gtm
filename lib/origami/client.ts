@@ -21,6 +21,12 @@ export class OrigamiError extends Error {
   constructor(message: string, readonly status: number, readonly code: string | null) { super(message); }
 }
 
+/** The run's time is up. Not a failure of the item being worked on: callers defer it without counting an attempt. */
+export class DeadlineError extends Error {}
+
+/** Whether an error only means the run ran out of time (Origami's or Twenty's reader). */
+export const isDeadline = (e: unknown) => e instanceof DeadlineError || (e instanceof Error && /stopped at the run deadline/.test(e.message));
+
 export type ClientOpts = {
   key?: string; pauseMs?: number; retries?: number; deadline?: number; timeoutMs?: number; maxWaitMs?: number;
   fetcher?: typeof fetch; sleep?: (ms: number) => Promise<void>; now?: () => number;
@@ -59,7 +65,7 @@ export class OrigamiClient {
     for (let attempt = 0; ; attempt++) {
       const wait = this.last + pause - now();
       if (wait > 0) await sleep(wait);
-      if (this.opts.deadline && now() > this.opts.deadline) throw new Error(`Origami: stopped at the run deadline (${what})`);
+      if (this.opts.deadline && now() > this.opts.deadline) throw new DeadlineError(`Origami: stopped at the run deadline (${what})`);
       this.requests.count++;
       if (method === "POST") this.requests.writes++;
       let res: Response | null = null, failure = "";
@@ -79,7 +85,7 @@ export class OrigamiClient {
       if (!transient || attempt >= retries) throw new OrigamiError(`Origami ${what}: ${status || failure || "no response"}${code ? ` ${code}` : ""}`, status, code);
       const hinted = retryAfterMs(res?.headers.get("retry-after") ?? null, now());
       const delay = Math.min(maxWait, hinted ?? 2_000 * 2 ** attempt);
-      if (this.opts.deadline && now() + delay > this.opts.deadline) throw new OrigamiError(`Origami ${what}: ${status} and the retry would pass the run deadline`, status, code);
+      if (this.opts.deadline && now() + delay > this.opts.deadline) throw new DeadlineError(`Origami ${what}: ${status}; stopped at the run deadline rather than wait to retry`);
       await sleep(delay);
     }
   }
@@ -129,15 +135,16 @@ export function linkedinSlug(v: string | null | undefined): string | null {
 }
 
 // A sequence that will send nothing more: a terminal status, or any stop_reason (Origami stopped it: "replied",
-// "unsubscribed", "manual", "bounced", "linkedin_prior_contact", ... as read on production 2026-11-10), or every step done.
-// Steps still waiting (draft, scheduled, not_connected, ...) on a sequence with no stop reason keep it live.
+// "unsubscribed", "manual", "bounced", "linkedin_prior_contact", ... as read on production 2026-11-10), or a non-empty step
+// list with every step done. Steps still waiting (draft, scheduled, not_connected, ...), and an empty or missing step list
+// (a draft whose copy is not rendered yet sends once launched), keep a sequence with no stop reason live: it is stopped.
 const TERMINAL = new Set(["stopped", "unsubscribed", "bounced", "completed", "cancelled", "canceled", "removed"]);
 const STEP_DONE = new Set(["sent", "accepted", "stopped", "skipped", "failed", "bounced", "cancelled", "canceled", "replied", "delivered", "removed"]);
 
 /** Whether a sequence can still send. Pure. */
 export function settled(p: { status: string; stop_reason?: string | null; steps?: Step[] | null }): boolean {
   if (TERMINAL.has(p.status) || (typeof p.stop_reason === "string" && p.stop_reason.length > 0)) return true;
-  if (!Array.isArray(p.steps)) return false;
+  if (!Array.isArray(p.steps) || !p.steps.length) return false;
   return p.steps.every((s) => STEP_DONE.has(s.status));
 }
 

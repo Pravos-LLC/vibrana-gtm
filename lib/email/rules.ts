@@ -94,34 +94,67 @@ export const NEGATED = /\b(don'?t|do not|please don'?t|no need to)\s+(unsubscrib
 export const normalizeWords = (s: string) =>
   s.toLowerCase().replace(/[‘’]/g, "'").replace(/[^\p{L}\p{N}'\s]+/gu, " ").replace(/'(?!\p{L})|(?<!\p{L})'/gu, " ").replace(/\s+/g, " ").trim();
 
+/** normalizeWords without accents ("désinscrire" and "desinscrire" read the same). */
+export const foldWords = (s: string) => normalizeWords(s).normalize("NFD").replace(/\p{M}+/gu, "").replace(/ß/g, "ss");
+
 // Sign-offs that carry no meaning of their own. A line that is only one of these, or a trailing one on the last line, is
 // dropped; so is a short name line directly under a sign-off line ("Thanks,\nAna").
-const SIGN_OFF = /^(thanks|thank you|thanks a lot|many thanks|thx|ty|cheers|regards|best|best regards|kind regards|warm regards|all the best|br)$/;
+const SIGN_OFF = /^(thanks|thank you|thanks a lot|many thanks|thx|ty|cheers|regards|best|best regards|kind regards|warm regards|all the best|br|danke|merci|gracias|grazie|obrigado|obrigada|tack|tak|takk|bedankt|groeten|gruss|grusse|liebe grusse|viele grusse|mit freundlichen grussen|cordialement|saludos|un saludo|cordiali saluti|saluti|met vriendelijke groet|mvg|hilsen|halsningar|med vanlig halsning|atenciosamente|abracos)$/;
 const TRAILING_SIGN_OFF = /\s(thanks|thank you|thx|cheers|regards|best regards|kind regards)$/;
+// Greetings, in the languages our campaigns reach. A first line that is only a greeting and a name is dropped, and a
+// greeting that opens the first line ("Dear John, no.") is cut off it, so the answer under it is what is judged (VIB-521).
+const GREETING = "hi|hello|hey|hiya|dear|greetings|good morning|good afternoon|good evening|morning|hallo|hoi|hej|hei|moin|servus|guten morgen|guten tag|liebe|lieber|sehr geehrte|sehr geehrter|bonjour|bonsoir|salut|cher|chere|hola|buenos dias|buenas tardes|buenas|estimado|estimada|ciao|salve|buongiorno|gentile|ola|bom dia|boa tarde|caro|cara|goedemorgen|goedemiddag|goedendag|beste";
+const GREETING_LINE = new RegExp(`^(${GREETING})( [\\p{L}.]+){0,3}$`, "u");
+const GREETING_PREFIX = new RegExp(`^\\s*(${GREETING})\\b[^,!:\\n\u2013\u2014-]{0,40}[,!:\u2013\u2014-]+\\s*(?=\\S)`, "iu");
+// "John - no." / "Ana, stop": a single capitalized name before the answer. Words that are part of an answer are not names.
+const NAME_PREFIX = /^\s*(\p{Lu}[\p{L}'-]{1,30})\s*[,\u2013\u2014-]\s*(?=\S)/u;
+const NOT_A_NAME = new Set(["no", "nope", "nah", "stop", "thanks", "thank", "yes", "sure", "ok", "okay", "sorry", "well", "unfortunately", "honestly", "again", "please",
+  "nein", "non", "nee", "nej", "nei", "nao", "sadly", "actually", "hmm", "also", "but", "and", "so", "great", "perfect", "fine", "danke", "merci", "gracias", "grazie"]);
 
-/**
- * The words a person typed in this reply: the new text (newText), cut at a signature delimiter ("-- ") or a
- * "Sent from my ..." line, without trailing sign-off lines, normalized (normalizeWords). Pure.
- */
-export function replyCore(text: string): string {
-  const lines: string[] = [];
+/** The reply's new text as lines of words: cut at a signature, without a leading greeting or trailing sign-offs. Pure. */
+export function replyLines(text: string): string[] {
+  const raw: string[] = [];
   for (const l of newText(text).split("\n")) {
     if (/^--\s*$/.test(l) || /^\s*sent from my\b/i.test(l) || /^\s*get outlook for\b/i.test(l)) break;
-    const w = normalizeWords(l);
-    if (w) lines.push(w);
+    if (l.trim()) raw.push(l);
   }
+  // Leading greetings: a greeting opening the first line with the answer after it ("Dear John, no."), else a line that is
+  // only a greeting and a name ("Hi John,"), then a name opening the first line ("John - no.").
+  const plain = (l: string) => l.normalize("NFD").replace(/\p{M}+/gu, "");
+  for (let guard = 0; raw.length && guard < 3; guard++) {
+    const g = plain(raw[0]).match(GREETING_PREFIX);
+    if (g) { raw[0] = plain(raw[0]).slice(g[0].length); break; }
+    if (GREETING_LINE.test(foldWords(raw[0]))) { raw.shift(); continue; }
+    const n = raw[0].match(NAME_PREFIX);
+    if (n && !NOT_A_NAME.has(foldWords(n[1]))) raw[0] = raw[0].slice(n[0].length);
+    break;
+  }
+  // A bare name under the answer, without a sign-off ("No\n\nAna").
+  const name = (l: string) => l.trim().split(/\s+/).every((w) => /^\p{Lu}\p{Ll}+[.,]?$/u.test(w) && !NOT_A_NAME.has(foldWords(w))) && l.trim().split(/\s+/).length <= 2;
+  if (raw.length >= 2 && name(raw[raw.length - 1])) raw.pop();
+  const lines = raw.map(normalizeWords).filter(Boolean);
   for (;;) {
     const last = lines[lines.length - 1];
     if (last === undefined) break;
-    if (SIGN_OFF.test(last)) { lines.pop(); continue; }
+    if (SIGN_OFF.test(foldWords(last))) { lines.pop(); continue; }
     const prev = lines[lines.length - 2];
-    if (prev !== undefined && SIGN_OFF.test(prev) && /^\p{L}+( \p{L}+){0,2}$/u.test(last)) { lines.splice(-2, 2); continue; }
+    if (prev !== undefined && SIGN_OFF.test(foldWords(prev)) && /^\p{L}+( \p{L}+){0,2}$/u.test(last)) { lines.splice(-2, 2); continue; }
     break;
   }
-  let core = lines.join(" ");
-  while (TRAILING_SIGN_OFF.test(core)) core = core.replace(TRAILING_SIGN_OFF, "");
-  return core.trim();
+  if (lines.length) {
+    let last = lines[lines.length - 1];
+    while (TRAILING_SIGN_OFF.test(last)) last = last.replace(TRAILING_SIGN_OFF, "");
+    lines[lines.length - 1] = last.trim();
+    if (!lines[lines.length - 1]) lines.pop();
+  }
+  return lines;
 }
+
+/**
+ * The words a person typed in this reply: the new text (newText), cut at a signature delimiter ("-- ") or a
+ * "Sent from my ..." line, without a leading greeting or trailing sign-offs, normalized (normalizeWords). Pure.
+ */
+export const replyCore = (text: string) => replyLines(text).join(" ").trim();
 
 /** A bare "no" (or "no thanks"): what our emails ask a person to reply when they want no further contact. */
 export const bareNo = (text: string) => ["no", "nope", "no thanks", "no thank you"].includes(replyCore(text));

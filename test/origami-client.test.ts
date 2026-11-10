@@ -3,7 +3,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { installFetchMock } from "./support/fetch-mock.ts";
-import { linkedinSlug, OrigamiClient, OrigamiError, retryAfterMs, settled, settledRow } from "../lib/origami/client.ts";
+import { DeadlineError, isDeadline, linkedinSlug, OrigamiClient, OrigamiError, retryAfterMs, settled, settledRow } from "../lib/origami/client.ts";
 
 const B = "https://origami.chat/api/v3";
 const C = "00000000-0000-4000-8000-00000000c001", S = "00000000-0000-4000-8000-00000000a001";
@@ -54,22 +54,32 @@ test("stop POSTs an empty body to .../people/{sequence_id}/stop with an idempote
   assert.throws(() => c.stop("not-a-uuid", S, "k"), /not a UUID/);
 });
 
+test("a 429 whose Retry-After would pass the deadline stops as a deadline, not as a failure", async () => {
+  mock = installFetchMock([{ url: `${B}/send/campaigns`, status: 429, json: { code: "RATE_LIMITED" }, headers: { "retry-after": "50" } }]);
+  const { c } = client({ deadline: 10_000 });
+  await assert.rejects(c.campaigns(), (e: Error) => isDeadline(e));
+  assert.equal(isDeadline(new Error("Twenty read stopped at the run deadline")), true, "the Twenty reader's deadline counts too");
+  assert.equal(isDeadline(new Error("Origami GET /x: 500")), false);
+});
+
 test("a 5xx backs off and gives up after the retries; nothing runs past the deadline; demo mode sends nothing", async () => {
   mock = installFetchMock([{ url: `${B}/send/campaigns`, status: 503, json: {} }]);
   const { c, waits } = client({ retries: 2 });
   await assert.rejects(c.campaigns(), /503/);
   assert.deepEqual(waits, [2000, 4000]);
   const late = client({ deadline: -1 });
-  await assert.rejects(late.c.campaigns(), /deadline/);
+  await assert.rejects(late.c.campaigns(), (e: Error) => e instanceof DeadlineError && isDeadline(e), "the deadline is its own error, so callers defer instead of counting a failure");
   process.env.DEMO_MODE = "1";
   await assert.rejects(client().c.campaigns(), /Demo mode/);
   assert.equal(mock.calls.length, 3);
 });
 
-test("settled: a terminal status, any stop reason, or every step done; waiting steps keep a sequence live", () => {
+test("settled: a terminal status, any stop reason, or a non-empty step list all done; waiting or missing steps keep it live", () => {
   assert.equal(settled({ status: "stopped", stop_reason: "manual" }), true);
   assert.equal(settled({ status: "replied", stop_reason: "unsubscribed", steps: [{ status: "not_connected" }] }), true);
-  assert.equal(settled({ status: "no_messaging", stop_reason: null, steps: [] }), true);
+  assert.equal(settled({ status: "no_messaging", stop_reason: null, steps: [] }), false, "an empty step list is not finished: it is stopped");
+  assert.equal(settled({ status: "draft", stop_reason: null, steps: [] }), false, "a draft whose copy is not rendered yet sends once launched");
+  assert.equal(settled({ status: "no_messaging", stop_reason: "linkedin_prior_contact", steps: [] }), true);
   assert.equal(settled({ status: "replied", stop_reason: null, steps: [{ status: "sent" }, { status: "stopped" }] }), true);
   assert.equal(settled({ status: "ongoing", stop_reason: null, steps: [{ status: "sent" }, { status: "scheduled" }] }), false);
   assert.equal(settled({ status: "draft", stop_reason: null, steps: [{ status: "draft" }] }), false);

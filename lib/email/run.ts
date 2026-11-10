@@ -9,6 +9,7 @@ import { bounceCheck } from "./metrics";
 import { alertRecipients, checkDomain, healthDomains, notifyIncidents, reconcileIncidents, type DomainCheck, type Incident } from "./health";
 import { loadMirrorState, mirrorProblems } from "../crm/mirror";
 import { origamiApplyEnabled } from "../origami/client";
+import { RUN_KEY as ORIGAMI_RUN_KEY } from "../origami/optouts";
 
 const DNS_KEY = "email.health.dns";
 const STALE_SYNC_MS = 3 * 3_600_000;
@@ -30,8 +31,14 @@ export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], 
     const ev = must(await db.from("gtm_origami_replies").select("match,processed_at,last_error,created_at").neq("classification", "none").is("reviewed_at", null).in("match", ["pending", "ambiguous", "unmatched"]), "origami opt-outs") as { match: string; processed_at: string | null; last_error: string | null; created_at: string }[];
     const unmatched = ev.filter((r) => r.processed_at && r.match !== "pending").length;
     const stuck = ev.filter((r) => !r.processed_at && now.getTime() - Date.parse(r.created_at) > 2 * 3_600_000).length;
-    if (unmatched) observed.push({ key: "suppression:origami_unmatched", kind: "suppression", severity: "warning", summary: `${unmatched} Origami opt-out${unmatched === 1 ? "" : "s"} matched no single Twenty person; their Origami sequences are stopped, the CRM is not (gtm suppression origami-reviewed)`, detail: { unmatched } });
+    if (unmatched) observed.push({ key: "suppression:origami_unmatched", kind: "suppression", severity: "warning", summary: `${unmatched} Origami opt-out${unmatched === 1 ? "" : "s"} matched no single Twenty person; their Origami sequences are stopped, the CRM is not (gtm suppression origami-reviewed --handled)`, detail: { unmatched } });
     if (stuck) observed.push({ key: "suppression:origami_stuck", kind: "suppression", severity: "critical", summary: `${stuck} Origami opt-out${stuck === 1 ? "" : "s"} not processed after two hours`, detail: { stuck } });
+    // The step itself (lib/origami/optouts.ts runOrigamiOptouts): a failed run, or no successful run for three hours, means
+    // replies may not be read at all, which no evidence row can show.
+    const run = (must(await db.from("gtm_sync_state").select("value").eq("key", ORIGAMI_RUN_KEY).maybeSingle(), "origami step") as { value: { at?: string; error?: string | null; lastOkAt?: string | null } } | null)?.value ?? null;
+    const okAge = run?.lastOkAt ? now.getTime() - Date.parse(run.lastOkAt) : Infinity;
+    if (run?.error || okAge > 3 * 3_600_000) observed.push({ key: "suppression:origami_step", kind: "suppression", severity: "critical",
+      summary: `The Origami opt-out step ${run?.error ? `failed: ${run.error}` : run ? "has not succeeded for over three hours" : "has not run yet"}`.slice(0, 300), detail: { lastOkAt: run?.lastOkAt ?? null } });
   }
   for (const m of members) {
     const read = await db.from("gtm_team_mailboxes").select("address,last_sync_at,last_error,backfill_done").eq("member", m.code);

@@ -21,19 +21,23 @@
 import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
-import type { TwentyReader } from "../twenty";
+import { TwentyError, type TwentyReader } from "../twenty";
 import { addressHash, linkedinHash, replyHash } from "../team/crypto";
 import { lookupPeople } from "../team/mailbox";
 import { normAddress } from "../team/restrictions";
-import { linkedinSlug, OrigamiClient, OrigamiError, origamiApplyEnabled, origamiConfigured, settled, settledRow, type Campaign, type PersonDetail, type PersonRow } from "./client";
+import { isDeadline, linkedinSlug, OrigamiClient, OrigamiError, origamiApplyEnabled, origamiConfigured, settled, settledRow, type Campaign, type PersonDetail, type PersonRow } from "./client";
 import { classifyReply, exactPhrase, RULE_VERSION, unsubscribedStatus, type Classification } from "./rule";
 import { applyTwenty } from "../email/suppression";
 
 export { RULE_VERSION };
 export const APPROVAL_REF = "auto: origami-reply-v1 (standing decision 2026-11-10, VIB-521)";
 export const CURSOR_KEY = "origami.replies";
-// The poll re-reads the last 10 minutes each run, so a reply stored out of order on Origami's side is still seen.
-const OVERLAP_MS = 10 * 60_000;
+export const RUN_KEY = "origami.optouts.run";
+const STATUS_FULL_KEY = "origami.status.full";
+// The poll re-reads the last 72 hours every run. `since` is the reply's received time, not when Origami stored it, so a
+// reply that a slow LinkedIn or mailbox sync brings in late is still read; evidence already recorded is skipped by its key
+// before anything is judged, so the overlap costs one listing.
+export const LOOKBACK_MS = 72 * 3_600_000;
 
 export type Evidence = {
   kind: "reply" | "unsubscribed_status";
@@ -50,7 +54,13 @@ export type Seq = { campaign_id: string; sequence_id: string; live: boolean };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const uuid = (v: unknown) => (typeof v === "string" && UUID.test(v) ? v.toLowerCase() : null);
 const iso = (s: string) => new Date(s).toISOString();
-const clean = (m: string) => m.slice(0, 280).replace(/[^\s@]+@[^\s@]+/g, "[address]").replace(/linkedin\.com\/in\/\S+/gi, "[profile]");
+// What an error may say in last_error (owner-readable): never an address, a profile slug or a Twenty error body, which can
+// echo the query's variables.
+export const errorText = (e: unknown) => {
+  if (e instanceof TwentyError) return "Twenty: the CRM read or write failed";
+  const m = e instanceof Error ? e.message : String(e);
+  return m.slice(0, 280).replace(/[^\s@]+@[^\s@]+/g, "[address]").replace(/(linkedin\.com)?\/in\/[^\s"',}]+/gi, "[profile]").replace(/%[^\s"',}]*%/g, "[pattern]");
+};
 
 /** One key per piece of evidence, whichever path saw it first. Pure. */
 export const evidenceKey = (e: Pick<Evidence, "kind" | "sequence_id" | "received_at">) =>
@@ -58,11 +68,11 @@ export const evidenceKey = (e: Pick<Evidence, "kind" | "sequence_id" | "received
 
 /* ------------------------------------------------------------------------------------------------ reading Origami */
 
-/** Lead replies since `since` and every sequence Origami marked unsubscribed, as evidence. Read-only. */
-export async function collect(client: OrigamiClient, opts: { since?: string; now: Date }): Promise<{ evidence: Evidence[]; newest: string | null; campaigns: Campaign[] }> {
+/** Lead replies received since `since`, as evidence. Read-only. */
+export async function collectReplies(client: OrigamiClient, since?: string): Promise<{ evidence: Evidence[]; newest: string | null }> {
   const evidence: Evidence[] = [];
   let newest: string | null = null;
-  for (const r of await client.replies(opts.since)) {
+  for (const r of await client.replies(since)) {
     const seq = uuid(r.sequence_id);
     if (r.from !== "lead" || !seq || typeof r.body !== "string" || !Number.isFinite(Date.parse(r.received_at))) continue;
     const at = iso(r.received_at);
@@ -70,19 +80,38 @@ export async function collect(client: OrigamiClient, opts: { since?: string; now
       received_at: at, origami_reply_id: uuid(r.id), body: r.body });
     if (!newest || at > newest) newest = at;
   }
-  const campaigns = await client.campaigns();
+  return { evidence, newest };
+}
+
+/**
+ * Every sequence Origami marked unsubscribed, as evidence. Read-only. Origami shows its unsubscribes as `status: replied,
+ * stop_reason: unsubscribed` (production, 2026-11-10), so the hourly scan reads only the `replied` and `unsubscribed`
+ * people of each campaign; `full` reads everyone (once a day, in case the status changes).
+ */
+export async function collectStatuses(client: OrigamiClient, campaigns: Campaign[], now: Date, full = true): Promise<Evidence[]> {
+  const evidence: Evidence[] = [];
   for (const c of campaigns) {
-    for (const p of await client.people(c.id)) {
+    const rows = full ? await client.people(c.id) : [...await client.people(c.id, { status: "replied" }), ...await client.people(c.id, { status: "unsubscribed" })];
+    for (const p of rows) {
       const seq = uuid(p.sequence_id);
-      if (seq && unsubscribedStatus(p)) evidence.push({ kind: "unsubscribed_status", source: "status_scan", sequence_id: seq, campaign_id: c.id.toLowerCase(), channel: null, received_at: opts.now.toISOString(), origami_reply_id: null });
+      if (seq && unsubscribedStatus(p)) evidence.push({ kind: "unsubscribed_status", source: "status_scan", sequence_id: seq, campaign_id: c.id.toLowerCase(), channel: null, received_at: now.toISOString(), origami_reply_id: null });
     }
   }
+  return evidence;
+}
+
+/** Lead replies since `since` and every sequence Origami marked unsubscribed, as evidence. Read-only. */
+export async function collect(client: OrigamiClient, opts: { since?: string; now: Date }): Promise<{ evidence: Evidence[]; newest: string | null; campaigns: Campaign[] }> {
+  const { evidence, newest } = await collectReplies(client, opts.since);
+  const campaigns = await client.campaigns();
+  evidence.push(...await collectStatuses(client, campaigns, opts.now, true));
   return { evidence, newest, campaigns };
 }
 
 /** Whether the reply received at `receivedAt` is the person's first on the sequence; null when the replies are unknown. */
 export function firstReply(d: Pick<PersonDetail, "replies">, receivedAt: string): boolean | null {
-  if (!Array.isArray(d.replies)) return null;
+  // Unknown unless the replies say who sent them: without `from`, a later "no" must not read as the first one.
+  if (!Array.isArray(d.replies) || (d.replies.length && !d.replies.some((r) => typeof r.from === "string"))) return null;
   const at = Date.parse(receivedAt);
   return !d.replies.some((r) => r.from === "lead" && Date.parse(r.received_at) < at);
 }
@@ -172,11 +201,16 @@ export type OpRow = {
   observed_at: string; last_error: null;
 };
 
-/** The plain evidence line an applied opt-out appends to the person's consent evidence: ids and dates only. Pure. */
+/** The plain evidence line an applied opt-out appends to the person's consent evidence: ids and dates only. A status
+ *  is dated when the scan saw it, so it says "observed", not "received". Pure. */
 export const evidenceRef = (r: Pick<EvidenceRow, "kind" | "channel" | "campaign_id" | "sequence_id" | "received_at">) =>
-  `an Origami ${r.channel ? `${r.channel} ` : ""}${r.kind === "reply" ? "reply" : "unsubscribe"} received ${iso(r.received_at)} (campaign ${r.campaign_id ?? "unknown"}, sequence ${r.sequence_id}, rule ${RULE_VERSION})`;
+  `an Origami ${r.channel ? `${r.channel} ` : ""}${r.kind === "reply" ? "reply received" : "unsubscribe observed"} ${iso(r.received_at)} (campaign ${r.campaign_id ?? "unknown"}, sequence ${r.sequence_id}, rule ${RULE_VERSION})`;
 
-/** What one piece of actionable evidence implies. Pure: the same evidence always gives the same keys. */
+/**
+ * What one piece of actionable evidence implies. Pure: the same evidence always gives the same keys. Every key carries the
+ * evidence id, so a new opt-out after a correction (consent reset in Twenty, a sequence resumed) is a new operation and is
+ * applied; the writers make a repeat a no-op (already UNSUBSCRIBED, already stopped).
+ */
 export function proposeOrigamiOps(r: EvidenceRow, m: Match, seqs: Seq[], labelId: number, now: Date): OpRow[] {
   const confirmed = r.classification === "confirmed";
   const base = { address_hash: null, label_id: labelId, evidence_event_id: null, policy_version: RULE_VERSION, evidence_ref: evidenceRef(r), observed_at: iso(r.received_at), last_error: null } as const;
@@ -184,12 +218,13 @@ export function proposeOrigamiOps(r: EvidenceRow, m: Match, seqs: Seq[], labelId
   const out: OpRow[] = [];
   for (const s of seqs) {
     if (!s.live) continue;
-    out.push({ ...base, ...auto, op_key: `stop:${s.campaign_id}:${s.sequence_id}`, destination: "origami", action: "sequence_stop", person_id: m.person_id,
+    out.push({ ...base, ...auto, op_key: `stop:${s.campaign_id}:${s.sequence_id}:${r.id}`, destination: "origami", action: "sequence_stop", person_id: m.person_id,
       reason: confirmed ? "UNSUBSCRIBED" : "OPT_OUT_REVIEW", origami_campaign_id: s.campaign_id, origami_sequence_id: s.sequence_id });
   }
   if (m.match === "matched" && m.person_id) {
-    if (confirmed) out.push({ ...base, ...auto, op_key: `person:${m.person_id}:optout:origami`, destination: "twenty", action: "person_opt_out", person_id: m.person_id, reason: "UNSUBSCRIBED", origami_campaign_id: null, origami_sequence_id: null });
-    // A possible opt-out is a person's review, keyed by its decision (like a Gmail one): never approved here.
+    if (confirmed) out.push({ ...base, ...auto, op_key: `person:${m.person_id}:optout:origami:${r.id}`, destination: "twenty", action: "person_opt_out", person_id: m.person_id, reason: "UNSUBSCRIBED", origami_campaign_id: null, origami_sequence_id: null });
+    // A possible opt-out is a person's review, keyed by its decision (like a Gmail one): never approved here. It is resolved
+    // with `gtm suppression origami-reviewed` (resolveOrigamiReviews).
     else out.push({ ...base, op_key: `review:${m.person_id}:origami:${labelId}`, destination: "twenty", action: "person_opt_out", person_id: m.person_id, reason: "OPT_OUT_REVIEW",
       state: "pending_review", approved_at: null, approval_ref: null, origami_campaign_id: null, origami_sequence_id: null });
   }
@@ -198,15 +233,16 @@ export function proposeOrigamiOps(r: EvidenceRow, m: Match, seqs: Seq[], labelId
 
 /* ------------------------------------------------------------------------------------------------ recording */
 
-export type IngestResult = { recorded: number; duplicate: number; failed: number; confirmed: number; possible: number; none: number };
+export type IngestResult = { recorded: number; duplicate: number; failed: number; deferred: number; confirmed: number; possible: number; none: number; ids: number[] };
 
 /**
  * Records each piece of evidence once, judged by the rule. A second sight of the same evidence (webhook then poll, a
- * redelivery, an overlapping poll) changes nothing except filling in what the first path did not carry.
+ * redelivery, an overlapping poll) changes nothing except filling in what the first path did not carry. `ids` are the
+ * evidence rows, new or already there, in the order given. The run's deadline defers the rest (not a failure).
  */
 export async function ingest(db: SupabaseClient, client: OrigamiClient, items: Evidence[]): Promise<IngestResult> {
-  const out: IngestResult = { recorded: 0, duplicate: 0, failed: 0, confirmed: 0, possible: 0, none: 0 };
-  for (const e of items) {
+  const out: IngestResult = { recorded: 0, duplicate: 0, failed: 0, deferred: 0, confirmed: 0, possible: 0, none: 0, ids: [] };
+  for (const [i, e] of items.entries()) {
     try {
       const key = evidenceKey(e);
       type Prior = { id: number; origami_reply_id: string | null; campaign_id: string | null };
@@ -217,7 +253,7 @@ export async function ingest(db: SupabaseClient, client: OrigamiClient, items: E
         if (!prior.origami_reply_id && e.origami_reply_id) patch.origami_reply_id = e.origami_reply_id;
         if (!prior.campaign_id && e.campaign_id) patch.campaign_id = e.campaign_id;
         if (Object.keys(patch).length) must(await db.from("gtm_origami_replies").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", prior.id), "complete origami evidence");
-        out.duplicate++;
+        out.duplicate++; out.ids.push(prior.id);
         continue;
       }
       const j = await judge(client, e);
@@ -227,8 +263,12 @@ export async function ingest(db: SupabaseClient, client: OrigamiClient, items: E
         first_on_sequence: j.first, match: j.classification === "none" ? "not_needed" : "pending",
       };
       must(await db.from("gtm_origami_replies").upsert(row, { onConflict: "evidence_key", ignoreDuplicates: true }), "record origami evidence");
-      out.recorded++; out[j.classification]++;
-    } catch { out.failed++; }
+      const id = (must(await db.from("gtm_origami_replies").select("id").eq("evidence_key", key).single(), "recorded origami evidence") as { id: number }).id;
+      out.recorded++; out[j.classification]++; out.ids.push(id);
+    } catch (err) {
+      if (isDeadline(err)) { out.deferred += items.length - i; break; }
+      out.failed++;
+    }
   }
   return out;
 }
@@ -245,32 +285,46 @@ async function ensureLabel(db: SupabaseClient, r: EvidenceRow, m: Match, now: Da
   return row.id;
 }
 
-/** Writes new operations once. An auto-applied one canceled earlier (its evidence corrected) reopens on new evidence. */
-async function recordOps(db: SupabaseClient, ops: OpRow[], now: Date) {
+/** Writes new operations once; an existing one keeps its state and history. */
+async function recordOps(db: SupabaseClient, ops: OpRow[]) {
   if (!ops.length) return;
   must(await db.from("gtm_email_sync_ops").upsert(ops, { onConflict: "op_key,destination", ignoreDuplicates: true }), "record origami operations");
-  for (const o of ops.filter((x) => x.state === "approved")) {
-    must(await db.from("gtm_email_sync_ops").update({ state: "approved", approved_at: now.toISOString(), approval_ref: APPROVAL_REF, label_id: o.label_id, attempts: 0, last_error: null, updated_at: now.toISOString() })
-      .eq("op_key", o.op_key).eq("destination", o.destination).eq("state", "canceled"), "reopen origami operation");
+}
+
+async function takeLease(db: SupabaseClient, job: string, holder: string, waitMs = 0) {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const lease = await db.rpc("gtm_take_lease", { p_job: job, p_holder: holder, p_seconds: 600 });
+    if (!lease.error && lease.data === true) return true;
+    if (Date.now() + 3_000 > until) return false;
+    await new Promise((r) => setTimeout(r, 3_000));
   }
 }
 
-export type ProcessResult = { processed: number; failed: number; matched: number; ambiguous: number; unmatched: number; stopsProposed: number; skipped?: string };
+export type ProcessResult = { processed: number; failed: number; deferred: number; matched: number; ambiguous: number; unmatched: number; stopsProposed: number; labels: number[]; skipped?: string };
 
-/** Identity, Twenty match, the person's sequences everywhere, the decision and the operations, for recorded evidence. */
-export async function processPending(db: SupabaseClient, client: OrigamiClient, reader: TwentyReader, now: Date, opts: { campaigns?: Campaign[]; limit?: number } = {}): Promise<ProcessResult> {
-  const out: ProcessResult = { processed: 0, failed: 0, matched: 0, ambiguous: 0, unmatched: 0, stopsProposed: 0 };
+/**
+ * Identity, Twenty match, the person's sequences everywhere, the decision and the operations, for recorded evidence.
+ * `first` (evidence ids) goes before the backlog: the webhook's own reply is never stuck behind older rows. When the run's
+ * time is up the rest is deferred, never counted as a failed attempt.
+ */
+export async function processPending(db: SupabaseClient, client: OrigamiClient, reader: TwentyReader, now: Date,
+  opts: { campaigns?: Campaign[]; limit?: number; first?: number[]; waitForLeaseMs?: number } = {}): Promise<ProcessResult> {
+  const out: ProcessResult = { processed: 0, failed: 0, deferred: 0, matched: 0, ambiguous: 0, unmatched: 0, stopsProposed: 0, labels: [] };
   const holder = `process-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
-  const lease = await db.rpc("gtm_take_lease", { p_job: "origami.optouts.process", p_holder: holder, p_seconds: 600 });
-  if (lease.error || lease.data !== true) return { ...out, skipped: "another run is processing Origami evidence" };
+  if (!(await takeLease(db, "origami.optouts.process", holder, opts.waitForLeaseMs))) return { ...out, skipped: "another run is processing Origami evidence" };
   try {
     type Pending = EvidenceRow & { attempts: number };
-    const rows = must(await db.from("gtm_origami_replies").select("id,kind,channel,campaign_id,sequence_id,received_at,classification,attempts").is("processed_at", null)
-      .neq("classification", "none").lt("attempts", 10).order("id").limit(opts.limit ?? 25), "pending origami evidence") as Pending[];
+    const cols = "id,kind,channel,campaign_id,sequence_id,received_at,classification,attempts";
+    const pending = () => db.from("gtm_origami_replies").select(cols).is("processed_at", null).neq("classification", "none").lt("attempts", 10);
+    const first = opts.first?.length ? must(await pending().in("id", opts.first).order("id"), "this delivery's evidence") as Pending[] : [];
+    const rest = must(await pending().order("id").limit(opts.limit ?? 25), "pending origami evidence") as Pending[];
+    const rows = [...first, ...rest.filter((r) => !first.some((f) => f.id === r.id))];
     if (!rows.length) return out;
-    const campaigns = opts.campaigns ?? await client.campaigns();
-    for (const r of rows) {
+    let campaigns = opts.campaigns;
+    for (const [i, r] of rows.entries()) {
       try {
+        campaigns ??= await client.campaigns();
         if (!r.campaign_id) throw new Error("the sequence's campaign is not known yet (the hourly poll fills it in)");
         const id = await identityOf(client, { campaign_id: r.campaign_id, sequence_id: r.sequence_id });
         if (!id.email && !id.slug) throw new Error("Origami has no address or LinkedIn profile for the sequence");
@@ -278,13 +332,14 @@ export async function processPending(db: SupabaseClient, client: OrigamiClient, 
         const seqs = await findSequences(client, id, { campaign_id: r.campaign_id, sequence_id: r.sequence_id }, campaigns);
         const labelId = await ensureLabel(db, r, m, now);
         const ops = proposeOrigamiOps(r, m, seqs, labelId, now);
-        await recordOps(db, ops, now);
+        await recordOps(db, ops);
         must(await db.from("gtm_origami_replies").update({ processed_at: now.toISOString(), match: m.match, person_id: m.person_id, sequences_found: seqs.length,
           recipient_hash: id.email ? addressHash(id.email) : null, linkedin_hash: id.slug ? linkedinHash(id.slug) : null, last_error: null, updated_at: now.toISOString() }).eq("id", r.id), "origami evidence processed");
-        out.processed++; out[m.match]++; out.stopsProposed += ops.filter((o) => o.action === "sequence_stop").length;
+        out.processed++; out[m.match]++; out.stopsProposed += ops.filter((o) => o.action === "sequence_stop").length; out.labels.push(labelId);
       } catch (e) {
+        if (isDeadline(e)) { out.deferred += rows.length - i; break; }
         out.failed++;
-        await db.from("gtm_origami_replies").update({ attempts: r.attempts + 1, last_error: clean((e as Error).message), updated_at: new Date().toISOString() }).eq("id", r.id);
+        await db.from("gtm_origami_replies").update({ attempts: r.attempts + 1, last_error: errorText(e), updated_at: new Date().toISOString() }).eq("id", r.id);
       }
     }
     return out;
@@ -298,18 +353,21 @@ type StopOp = { id: number; state: string; attempts: number; label_id: number | 
 /**
  * Stops approved sequences one at a time, under its own lease. Each is read first (already stopped is success), stopped,
  * then read back; it is confirmed only when Origami shows it can send nothing more. A sequence Origami no longer has
- * (404) sends nothing. Only with ORIGAMI_OPTOUT_APPLY=1.
+ * (404) sends nothing. When the run's time is up the operation goes back as it was, with no attempt counted. Stops for
+ * the decisions in `firstLabels` go first. Only with ORIGAMI_OPTOUT_APPLY=1.
  */
-export async function applyOrigamiStops(db: SupabaseClient, client: OrigamiClient, now: Date, limit = 50) {
+export async function applyOrigamiStops(db: SupabaseClient, client: OrigamiClient, now: Date, opts: { limit?: number; firstLabels?: number[] } = {}) {
   if (!origamiApplyEnabled()) return { skipped: "ORIGAMI_OPTOUT_APPLY is not 1" };
   const holder = `stop-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
-  const lease = await db.rpc("gtm_take_lease", { p_job: "origami.stop.apply", p_holder: holder, p_seconds: 600 });
-  if (lease.error || lease.data !== true) return { skipped: "another apply holds the lease, or it could not be taken" };
+  if (!(await takeLease(db, "origami.stop.apply", holder))) return { skipped: "another apply holds the lease, or it could not be taken" };
   try {
-    const ops = must(await db.from("gtm_email_sync_ops").select("id,state,attempts,label_id,origami_campaign_id,origami_sequence_id,applied_at").eq("destination", "origami").eq("action", "sequence_stop")
-      .in("state", ["approved", "failed", "queued", "applied"]).not("approved_at", "is", null).lt("attempts", 5).order("id").limit(limit), "approved stops") as StopOp[];
-    const out = { stopped: 0, unchanged: 0, failed: 0, canceled: 0, lost: 0 };
-    for (const op of ops) {
+    const open = () => db.from("gtm_email_sync_ops").select("id,state,attempts,label_id,origami_campaign_id,origami_sequence_id,applied_at").eq("destination", "origami").eq("action", "sequence_stop")
+      .in("state", ["approved", "failed", "queued", "applied"]).not("approved_at", "is", null).lt("attempts", 5);
+    const first = opts.firstLabels?.length ? must(await open().in("label_id", opts.firstLabels).order("id"), "this delivery's stops") as StopOp[] : [];
+    const rest = must(await open().order("id").limit(opts.limit ?? 50), "approved stops") as StopOp[];
+    const ops = [...first, ...rest.filter((o) => !first.some((f) => f.id === o.id))];
+    const out = { stopped: 0, unchanged: 0, failed: 0, canceled: 0, lost: 0, deferred: 0 };
+    for (const [i, op] of ops.entries()) {
       const move = async (from: string[], patch: Record<string, unknown>) => {
         const r = await db.from("gtm_email_sync_ops").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", op.id).in("state", from).select("id");
         if (r.error) throw new Error(`operation state: ${r.error.message}`);
@@ -342,40 +400,133 @@ export async function applyOrigamiStops(db: SupabaseClient, client: OrigamiClien
         }
         if (changed) out.stopped++; else out.unchanged++;
       } catch (e) {
+        if (isDeadline(e)) {
+          // Back as it was (an applied one stays applied and is read back next run); no attempt is counted.
+          await move(["queued"], { state: op.state === "queued" ? "approved" : op.state }).catch(() => false);
+          out.deferred += ops.length - i;
+          break;
+        }
         out.failed++;
-        await move(["queued", "applied"], { state: "failed", attempts: op.attempts + 1, last_error: clean((e as Error).message) }).catch(() => false);
+        await move(["queued", "applied"], { state: "failed", attempts: op.attempts + 1, last_error: errorText(e) }).catch(() => false);
       }
     }
     return out;
   } finally { await db.rpc("gtm_release_lease", { p_job: "origami.stop.apply", p_holder: holder }); }
 }
 
+/* ------------------------------------------------------------------------------------------------ resolving reviews */
+
+export type ReviewDecision = "opt_out" | "not_opt_out" | "handled";
+
+/**
+ * A person's decision on Origami evidence (`gtm suppression origami-reviewed`). For a possible opt-out matched to one
+ * Twenty person, `opt_out` or `not_opt_out` is required; for evidence no single Twenty person matched, `handled` records
+ * that a person dealt with it in Twenty. The rule's decision is superseded by the person's (a `human` decision). Its
+ * OPT_OUT_REVIEW hold is canceled, which releases the desk. `opt_out` adds the consent write (approved by this decision)
+ * and keeps the stops; `not_opt_out` cancels stops not yet made (a sequence already stopped is resumed in Origami by hand)
+ * and any consent write not yet made. What was already written to Twenty is not undone here.
+ */
+export async function resolveOrigamiReviews(db: SupabaseClient, ids: number[], decision: ReviewDecision, by: string, now: Date) {
+  if (!/^.{2,254}$/.test(by)) throw new Error("--by names who decided (2 to 254 characters)");
+  type Row = EvidenceRow & { match: string; person_id: string | null; reviewed_at: string | null; processed_at: string | null };
+  const rows = must(await db.from("gtm_origami_replies").select("id,kind,channel,campaign_id,sequence_id,received_at,classification,match,person_id,reviewed_at,processed_at").in("id", ids), "origami evidence") as Row[];
+  const out = { resolved: 0, skipped: [] as { id: number; why: string }[], consentWrites: 0, holdsReleased: 0, stopsCanceled: 0 };
+  for (const r of rows) {
+    const matched = r.match === "matched" && !!r.person_id;
+    const why = r.reviewed_at ? "already reviewed" : r.classification === "none" ? "not an opt-out" : !r.processed_at ? "not processed yet" :
+      matched && decision === "handled" ? "matched: decide --opt-out or --not" : !matched && decision === "opt_out" ? "no single Twenty person: set the opt-out in Twenty, then --handled" : null;
+    if (why) { out.skipped.push({ id: r.id, why }); continue; }
+    const old = must(await db.from("gtm_email_reply_labels").select("id").eq("origami_reply_id", r.id).is("superseded_at", null), "current decisions") as { id: number }[];
+    const oldIds = old.map((l) => l.id);
+    for (const id of oldIds) must(await db.from("gtm_email_reply_labels").update({ superseded_at: now.toISOString() }).eq("id", id), "supersede decision");
+    const human = must(await db.from("gtm_email_reply_labels").insert({ origami_reply_id: r.id, person_id: r.person_id, source: "human", labeled_by: by, decision_version: 1, labeled_at: now.toISOString(),
+      intent: decision === "opt_out" ? "not_interested" : "neutral", opt_out: decision === "opt_out" ? "person" : "none" }).select("id").single(), "record decision") as { id: number };
+    const stamp = { updated_at: now.toISOString() };
+    if (oldIds.length) {
+      const held = must(await db.from("gtm_email_sync_ops").update({ ...stamp, state: "canceled", last_error: "resolved by a person's review" }).in("label_id", oldIds).eq("destination", "twenty")
+        .eq("reason", "OPT_OUT_REVIEW").in("state", ["pending_review", "approved", "failed", "held"]).select("id"), "release the review") as unknown[];
+      out.holdsReleased += held.length;
+      if (decision === "opt_out") {
+        // The stops carry on under the person's decision (a superseded decision would cancel them).
+        must(await db.from("gtm_email_sync_ops").update({ ...stamp, label_id: human.id, reason: "UNSUBSCRIBED" }).in("label_id", oldIds).eq("destination", "origami").in("state", ["approved", "failed"]), "keep the stops");
+      } else {
+        const stops = must(await db.from("gtm_email_sync_ops").update({ ...stamp, state: "canceled", last_error: "not an opt-out (a person's review)" }).in("label_id", oldIds).in("state", ["approved", "failed", "pending_review"]).select("id"), "cancel the rest") as unknown[];
+        out.stopsCanceled += stops.length;
+      }
+    }
+    if (decision === "opt_out" && matched) {
+      must(await db.from("gtm_email_sync_ops").upsert({ op_key: `person:${r.person_id}:optout:origami:${r.id}`, destination: "twenty", action: "person_opt_out", person_id: r.person_id, address_hash: null,
+        reason: "UNSUBSCRIBED", label_id: human.id, evidence_event_id: null, policy_version: RULE_VERSION, evidence_ref: evidenceRef(r), observed_at: iso(r.received_at),
+        state: "approved", approved_at: now.toISOString(), approval_ref: `human review (VIB-521): ${by}`.slice(0, 200) }, { onConflict: "op_key,destination", ignoreDuplicates: true }), "consent write");
+      out.consentWrites++;
+    }
+    must(await db.from("gtm_origami_replies").update({ reviewed_at: now.toISOString(), reviewed_by: by, ...stamp }).eq("id", r.id).is("reviewed_at", null), "mark reviewed");
+    out.resolved++;
+  }
+  for (const id of ids) if (!rows.some((r) => r.id === id)) out.skipped.push({ id, why: "no such evidence" });
+  return out;
+}
+
 /* ------------------------------------------------------------------------------------------------ the hourly step */
 
-/** The team cron's Origami step: poll since the cursor, record, process, stop. Off unless ORIGAMI_OPTOUT_APPLY=1. */
+type RunState = { at: string; ok: boolean; error: string | null; lastOkAt: string | null; deferred?: boolean };
+const readState = async <T>(db: SupabaseClient, key: string) => (must(await db.from("gtm_sync_state").select("value").eq("key", key).maybeSingle(), `read ${key}`) as { value: T } | null)?.value ?? null;
+const saveState = async (db: SupabaseClient, key: string, value: unknown, now: Date) =>
+  must(await db.from("gtm_sync_state").upsert({ key, value, updated_at: now.toISOString() }, { onConflict: "key" }), `save ${key}`);
+
+/**
+ * The team cron's Origami step, off unless ORIGAMI_OPTOUT_APPLY=1. In order: stops already approved; replies (the last 72
+ * hours past the cursor), recorded, processed and stopped; then Origami's own unsubscribes (`replied` and `unsubscribed`
+ * people hourly, everyone daily), the same way. Running out of time defers work to the next run. The outcome is saved
+ * (`origami.optouts.run`) for the health check, which raises an incident when the step fails.
+ */
 export async function runOrigamiOptouts(db: SupabaseClient, reader: TwentyReader, now: Date, opts: { deadline: number; client?: OrigamiClient }) {
   if (!origamiConfigured()) return { skipped: "ORIGAMI_API_KEY is not set" };
   if (!origamiApplyEnabled()) return { skipped: "ORIGAMI_OPTOUT_APPLY is not 1 (dry run: gtm suppression origami-plan)" };
   const client = opts.client ?? new OrigamiClient({ deadline: opts.deadline });
-  const state = (must(await db.from("gtm_sync_state").select("value").eq("key", CURSOR_KEY).maybeSingle(), "origami cursor") as { value: { since?: string } } | null)?.value ?? null;
-  const since = state?.since ? new Date(Date.parse(state.since) - OVERLAP_MS).toISOString() : undefined;
-  const { evidence, newest, campaigns } = await collect(client, { since, now });
-  const ingested = await ingest(db, client, evidence);
-  // The cursor moves only when everything read was recorded, so a failed item is read again next hour.
-  if (!ingested.failed) {
-    const next = [state?.since, newest].filter((x): x is string => !!x).sort().pop();
-    if (next) must(await db.from("gtm_sync_state").upsert({ key: CURSOR_KEY, value: { since: next, at: now.toISOString() }, updated_at: now.toISOString() }, { onConflict: "key" }), "save origami cursor");
+  const out: Record<string, unknown> = {};
+  let error: string | null = null, deferred = false;
+  try {
+    out.stopsFirst = await applyOrigamiStops(db, client, now);
+    const cursor = await readState<{ since?: string }>(db, CURSOR_KEY);
+    const since = cursor?.since ? new Date(Date.parse(cursor.since) - LOOKBACK_MS).toISOString() : undefined;
+    const { evidence, newest } = await collectReplies(client, since);
+    const replies = await ingest(db, client, evidence);
+    out.replies = { read: evidence.length, ...replies, ids: undefined };
+    // The cursor moves only when everything read was recorded, so a failed or deferred item is read again next hour.
+    if (!replies.failed && !replies.deferred) {
+      const next = [cursor?.since, newest].filter((x): x is string => !!x).sort().pop();
+      if (next) await saveState(db, CURSOR_KEY, { since: next, at: now.toISOString() }, now);
+    }
+    const campaigns = await client.campaigns();
+    out.processed = { ...await processPending(db, client, reader, now, { campaigns }), labels: undefined };
+    out.stops = await applyOrigamiStops(db, client, now);
+    const full = await readState<{ at?: string }>(db, STATUS_FULL_KEY);
+    const fullScan = !full?.at || now.getTime() - Date.parse(full.at) > 20 * 3_600_000;
+    const statuses = await collectStatuses(client, campaigns, now, fullScan);
+    const recorded = await ingest(db, client, statuses);
+    if (fullScan && !recorded.failed && !recorded.deferred) await saveState(db, STATUS_FULL_KEY, { at: now.toISOString() }, now);
+    out.statuses = { read: statuses.length, full: fullScan, ...recorded, ids: undefined };
+    if (recorded.recorded) {
+      out.processedStatuses = { ...await processPending(db, client, reader, now, { campaigns }), labels: undefined };
+      out.stopsStatuses = await applyOrigamiStops(db, client, now);
+    }
+    deferred = Object.values(out).some((v) => !!v && typeof v === "object" && Number((v as { deferred?: number }).deferred ?? 0) > 0);
+  } catch (e) {
+    if (isDeadline(e)) deferred = true; else error = errorText(e);
   }
-  const processed = await processPending(db, client, reader, now, { campaigns });
-  const stops = await applyOrigamiStops(db, client, now);
-  return { evidence: evidence.length, ingested, processed, stops, requests: client.requests.count };
+  const prev = await readState<RunState>(db, RUN_KEY).catch(() => null);
+  const state: RunState = { at: now.toISOString(), ok: !error, error, lastOkAt: error ? prev?.lastOkAt ?? null : now.toISOString(), deferred };
+  await saveState(db, RUN_KEY, state, now).catch(() => undefined);
+  return { ...out, ...(error ? { error } : {}), deferred, requests: client.requests.count };
 }
 
-/** The webhook's work, after the 2xx: record this reply, process it, stop the sequences and write Twenty at once. */
+/** The webhook's work, after the 2xx: this reply first, then its stops, then the Twenty write, at once. */
 export async function handleWebhookReply(db: SupabaseClient, reader: TwentyReader, client: OrigamiClient, e: Evidence, now: Date) {
   const ingested = await ingest(db, client, [e]);
-  const processed = await processPending(db, client, reader, now, { limit: 5 });
-  const stops = await applyOrigamiStops(db, client, now, 25);
+  // Waits briefly for the hourly run's lease rather than leave this reply to the next hour.
+  const processed = await processPending(db, client, reader, now, { first: ingested.ids, limit: 5, waitForLeaseMs: 30_000 });
+  const stops = await applyOrigamiStops(db, client, now, { limit: 25, firstLabels: processed.labels });
   // The same guarded writer and lease as the hourly run; a held lease leaves the write to the next run.
   const twenty = await applyTwenty(db, reader, now, 5);
   return { ingested, processed, stops, twenty };

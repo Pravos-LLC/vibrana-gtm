@@ -63,8 +63,10 @@ test("the webhook and the poll record the same reply once; replaying either chan
   await fresh();
   process.env.ORIGAMI_OPTOUT_APPLY = "1";
   mock = installFetchMock([...origami(), DB]);
-  assert.deepEqual(await O.ingest(admin(), client(), [webhookEvidence()]), { recorded: 1, duplicate: 0, failed: 0, confirmed: 1, possible: 0, none: 0 });
-  assert.deepEqual(await O.ingest(admin(), client(), [pollEvidence(), webhookEvidence()]), { recorded: 0, duplicate: 2, failed: 0, confirmed: 0, possible: 0, none: 0 });
+  const first = await O.ingest(admin(), client(), [webhookEvidence()]);
+  assert.deepEqual({ ...first, ids: first.ids.length }, { recorded: 1, duplicate: 0, failed: 0, deferred: 0, confirmed: 1, possible: 0, none: 0, ids: 1 });
+  const again = await O.ingest(admin(), client(), [pollEvidence(), webhookEvidence()]);
+  assert.deepEqual({ ...again, ids: again.ids }, { recorded: 0, duplicate: 2, failed: 0, deferred: 0, confirmed: 0, possible: 0, none: 0, ids: [first.ids[0], first.ids[0]] }, "both paths name the same evidence row");
   const rows = await evidence();
   assert.equal(rows.length, 1);
   assert.equal(rows[0].origami_reply_id, R1, "the poll fills in the reply id the webhook does not carry");
@@ -80,12 +82,12 @@ test("a confirmed opt-out: one Twenty operation for the person, a stop for each 
   mock = installFetchMock([...origami(), twentyPeople(P), DB]);
   await O.ingest(admin(), client(), [webhookEvidence()]);
   const r = await O.processPending(admin(), client(), reader(), new Date());
-  assert.deepEqual(r, { processed: 1, failed: 0, matched: 1, ambiguous: 0, unmatched: 0, stopsProposed: 1 });
-  assert.deepEqual((await ops()).map((o) => [o.destination, o.action, o.op_key, o.reason, o.state]), [
-    ["twenty", "person_opt_out", `person:${P}:optout:origami`, "UNSUBSCRIBED", "approved"],
-    ["origami", "sequence_stop", `stop:${C2}:${A2}`, "UNSUBSCRIBED", "approved"],
-  ], "A1 is already stopped by Origami, A3 is someone else, A4 was stopped by hand");
+  assert.deepEqual({ ...r, labels: r.labels.length }, { processed: 1, failed: 0, deferred: 0, matched: 1, ambiguous: 0, unmatched: 0, stopsProposed: 1, labels: 1 });
   const [row] = await evidence();
+  assert.deepEqual((await ops()).map((o) => [o.destination, o.action, o.op_key, o.reason, o.state]), [
+    ["twenty", "person_opt_out", `person:${P}:optout:origami:${row.id}`, "UNSUBSCRIBED", "approved"],
+    ["origami", "sequence_stop", `stop:${C2}:${A2}:${row.id}`, "UNSUBSCRIBED", "approved"],
+  ], "A1 is already stopped by Origami, A3 is someone else, A4 was stopped by hand");
   assert.deepEqual([row.match, row.person_id, row.sequences_found], ["matched", P, 2], "A1 and A2 are hers; only A2 can still send");
   assert.match(String(row.recipient_hash), /^[A-Za-z0-9_-]{32}$/);
   const label = (await admin().from("gtm_email_reply_labels").select("source,opt_out,person_id").eq("origami_reply_id", row.id)).data!;
@@ -128,7 +130,7 @@ test("stops: a live sequence is stopped once and read back; an already stopped o
   await fresh();
   process.env.ORIGAMI_OPTOUT_APPLY = "1";
   const now = new Date().toISOString();
-  const op = (c: string, s: string) => ({ op_key: `stop:${c}:${s}`, destination: "origami", action: "sequence_stop", reason: "UNSUBSCRIBED", policy_version: O.RULE_VERSION, observed_at: now,
+  const op = (c: string, s: string) => ({ op_key: `stop:${c}:${s}:1`, destination: "origami", action: "sequence_stop", reason: "UNSUBSCRIBED", policy_version: O.RULE_VERSION, observed_at: now,
     state: "approved", approved_at: now, approval_ref: O.APPROVAL_REF, origami_campaign_id: c, origami_sequence_id: s, evidence_ref: "test" });
   assert.equal((await admin().from("gtm_email_sync_ops").insert([op(C2, A2), op(C3, A4)])).error, null);
   mock = installFetchMock([
@@ -138,14 +140,14 @@ test("stops: a live sequence is stopped once and read back; an already stopped o
     { method: "GET", url: `^${B}/send/campaigns/${C3}/people/${A4}$`, regex: true, json: detail(A4, ANA, "stopped", "manual", ["sent", "stopped"]) },
     DB,
   ]);
-  assert.deepEqual(await O.applyOrigamiStops(admin(), client(), new Date()), { stopped: 1, unchanged: 1, failed: 0, canceled: 0, lost: 0 });
+  assert.deepEqual(await O.applyOrigamiStops(admin(), client(), new Date()), { stopped: 1, unchanged: 1, failed: 0, canceled: 0, lost: 0, deferred: 0 });
   const posts = origamiCalls().filter((c) => c.method === "POST");
   assert.equal(posts.length, 1);
   assert.equal(posts[0].body, "{}");
   assert.match(posts[0].headers["idempotency-key"], /^vib521-stop-\d+$/);
   assert.deepEqual((await ops()).map((o) => o.state), ["confirmed", "confirmed"]);
   const before = mock.calls.length;
-  assert.deepEqual(await O.applyOrigamiStops(admin(), client(), new Date()), { stopped: 0, unchanged: 0, failed: 0, canceled: 0, lost: 0 });
+  assert.deepEqual(await O.applyOrigamiStops(admin(), client(), new Date()), { stopped: 0, unchanged: 0, failed: 0, canceled: 0, lost: 0, deferred: 0 });
   assert.equal(mock.calls.slice(before).filter((c) => c.url.startsWith("https://origami.chat")).length, 0, "a rerun makes no Origami call");
 });
 
@@ -153,14 +155,14 @@ test("a stop whose read-back still shows a live sequence fails visibly and is re
   await fresh();
   process.env.ORIGAMI_OPTOUT_APPLY = "1";
   const now = new Date().toISOString();
-  assert.equal((await admin().from("gtm_email_sync_ops").insert({ op_key: `stop:${C2}:${A2}`, destination: "origami", action: "sequence_stop", reason: "UNSUBSCRIBED", policy_version: O.RULE_VERSION,
+  assert.equal((await admin().from("gtm_email_sync_ops").insert({ op_key: `stop:${C2}:${A2}:1`, destination: "origami", action: "sequence_stop", reason: "UNSUBSCRIBED", policy_version: O.RULE_VERSION,
     observed_at: now, state: "approved", approved_at: now, approval_ref: O.APPROVAL_REF, origami_campaign_id: C2, origami_sequence_id: A2 })).error, null);
   mock = installFetchMock([
     { method: "POST", url: `^${B}/send/campaigns/${C2}/people/${A2}/stop$`, regex: true, status: 409, json: { error: "x", code: "SEQUENCE_NOT_STOPPABLE" } },
     { method: "GET", url: `^${B}/send/campaigns/${C2}/people/${A2}$`, regex: true, json: detail(A2, ANA, "draft", null, ["draft"]) },
     DB,
   ]);
-  assert.deepEqual(await O.applyOrigamiStops(admin(), client(), new Date()), { stopped: 0, unchanged: 0, failed: 1, canceled: 0, lost: 0 });
+  assert.deepEqual(await O.applyOrigamiStops(admin(), client(), new Date()), { stopped: 0, unchanged: 0, failed: 1, canceled: 0, lost: 0, deferred: 0 });
   const [o] = await ops();
   assert.equal(o.state, "failed");
   assert.match(String(o.last_error), /read-back: the sequence can still send/);
@@ -200,4 +202,84 @@ test("with only ORIGAMI_OPTOUT_APPLY, the Twenty writer applies the Origami opt-
   assert.equal(d.gtmMarketingConsent, "UNSUBSCRIBED");
   assert.match(d.gtmConsentEvidence, new RegExp(`^site signup\\nUNSUBSCRIBED from an Origami email reply received ${T.replace(/\./g, "\\.")} \\(campaign ${C1}, sequence ${A1}, rule origami-reply-v1\\) \\(cockpit gtm:op:\\d+\\)\\.$`));
   assert.equal((await admin().from("gtm_email_sync_ops").select("state").eq("person_id", P2).single()).data!.state, "approved", "EMAIL_SUPPRESSION_APPLY is off: the email operation waits");
+});
+
+test("a run that runs out of time defers the rest: no attempt counted, nothing marked failed (review H1)", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+  await O.ingest(admin(), client(), [webhookEvidence("no"), { ...webhookEvidence("Not interested"), received_at: "2026-11-10T10:30:00.000Z" }]);
+  const late = new OrigamiClient({ key: "og_test", pauseMs: 0, retries: 0, deadline: Date.now() - 1 });
+  const r = await O.processPending(admin(), late, reader(), new Date());
+  assert.deepEqual([r.processed, r.failed, r.deferred], [0, 0, 2]);
+  assert.deepEqual((await evidence()).map((e) => [e.attempts, e.last_error, e.processed_at]), [[0, null, null], [0, null, null]]);
+  const now = new Date().toISOString();
+  assert.equal((await admin().from("gtm_email_sync_ops").insert({ op_key: `stop:${C2}:${A2}:9`, destination: "origami", action: "sequence_stop", reason: "UNSUBSCRIBED", policy_version: O.RULE_VERSION,
+    observed_at: now, state: "approved", approved_at: now, approval_ref: O.APPROVAL_REF, origami_campaign_id: C2, origami_sequence_id: A2 })).error, null);
+  const stops = await O.applyOrigamiStops(admin(), late, new Date());
+  assert.deepEqual(stops, { stopped: 0, unchanged: 0, failed: 0, canceled: 0, lost: 0, deferred: 1 });
+  assert.deepEqual((await ops()).map((o) => [o.state, o.attempts]), [["approved", 0]], "back as it was, for the next run");
+});
+
+test("a fresh opt-out after a correction is a new operation and is applied (review M4)", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+  await O.ingest(admin(), client(), [webhookEvidence("no")]);
+  await O.processPending(admin(), client(), reader(), new Date());
+  await admin().from("gtm_email_sync_ops").update({ state: "confirmed", confirmed_at: new Date().toISOString() }).eq("policy_version", O.RULE_VERSION);
+  // Consent was reset in Twenty (a re-consent); later Origami itself marks her other sequence unsubscribed.
+  await O.ingest(admin(), client(), [{ kind: "unsubscribed_status", source: "status_scan", sequence_id: A2, campaign_id: C2, channel: null, received_at: new Date().toISOString(), origami_reply_id: null }]);
+  await O.processPending(admin(), client(), reader(), new Date());
+  const consent = (await ops()).filter((o) => o.destination === "twenty" && o.reason === "UNSUBSCRIBED");
+  assert.equal(consent.length, 2, "a second consent operation, not swallowed by the first one's key");
+  assert.deepEqual(consent.map((o) => o.state).sort(), ["approved", "confirmed"]);
+});
+
+test("a possible opt-out is resolved by a person: --not releases the hold, --opt-out adds the consent write (review M5)", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+  await O.ingest(admin(), client(), [webhookEvidence("Not interested, we built our own.")]);
+  await O.processPending(admin(), client(), reader(), new Date());
+  const [row] = await evidence();
+  assert.deepEqual((await O.resolveOrigamiReviews(admin(), [row.id as number], "handled", "Reviewer Test", new Date())).skipped, [{ id: row.id, why: "matched: decide --opt-out or --not" }]);
+  const not = await O.resolveOrigamiReviews(admin(), [row.id as number], "not_opt_out", "Reviewer Test", new Date());
+  assert.deepEqual([not.resolved, not.holdsReleased, not.stopsCanceled, not.consentWrites], [1, 1, 1, 0]);
+  assert.deepEqual(await S.emailHolds(admin(), P, null), [], "the desk hold is released");
+  assert.deepEqual((await ops()).map((o) => o.state), ["canceled", "canceled"]);
+  const labels = (await admin().from("gtm_email_reply_labels").select("source,opt_out,superseded_at,labeled_by").eq("origami_reply_id", row.id).order("id")).data!;
+  assert.deepEqual(labels.map((l) => [l.source, l.opt_out, !!l.superseded_at]), [["deterministic", "uncertain", true], ["human", "none", false]]);
+  assert.equal((await O.resolveOrigamiReviews(admin(), [row.id as number], "opt_out", "Reviewer Test", new Date())).skipped[0].why, "already reviewed");
+
+  await fresh();
+  mock.restore();
+  mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+  await O.ingest(admin(), client(), [webhookEvidence("Not interested, we built our own.")]);
+  await O.processPending(admin(), client(), reader(), new Date());
+  const [again] = await evidence();
+  const yes = await O.resolveOrigamiReviews(admin(), [again.id as number], "opt_out", "Reviewer Test", new Date());
+  assert.deepEqual([yes.resolved, yes.holdsReleased, yes.consentWrites], [1, 1, 1]);
+  assert.deepEqual((await ops()).map((o) => [o.destination, o.reason, o.state]), [
+    ["twenty", "UNSUBSCRIBED", "approved"], ["twenty", "OPT_OUT_REVIEW", "canceled"], ["origami", "UNSUBSCRIBED", "approved"]], "consent write added, hold released, the stop carries on");
+  assert.deepEqual(await S.emailHolds(admin(), P, null), ["they opted out"]);
+  const consent = (await ops()).find((o) => o.reason === "UNSUBSCRIBED" && o.destination === "twenty")!;
+  assert.equal(await S.evidenceCurrent(admin(), consent as unknown as Parameters<typeof S.evidenceCurrent>[1]), true, "the person's decision is current evidence for the write");
+});
+
+test("the webhook's own reply is processed before older failing evidence (review M6)", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  const db = admin();
+  for (let i = 0; i < 6; i++) {
+    const seq = `00000000-0000-4000-8000-00000000b10${i}`;
+    assert.equal((await db.from("gtm_origami_replies").insert({ evidence_key: `status:${seq}`, kind: "unsubscribed_status", source: "status_scan", sequence_id: seq, received_at: new Date().toISOString(),
+      rule_version: O.RULE_VERSION, classification: "confirmed", reason: "origami_unsubscribed" })).error, null);
+  }
+  mock = installFetchMock([...origami(), twentyPeople(P), { method: "POST", url: `^${B}/send/campaigns/${C2}/people/${A2}/stop$`, regex: true, json: {} }, DB]);
+  const ingested = await O.ingest(db, client(), [webhookEvidence("no")]);
+  const r = await O.processPending(db, client(), reader(), new Date(), { first: ingested.ids, limit: 5 });
+  assert.equal(r.processed, 1, "this delivery's row, although six older rows (no campaign) come first by id");
+  assert.equal(r.failed, 5);
+  assert.equal((await evidence())[0].processed_at != null, true);
 });

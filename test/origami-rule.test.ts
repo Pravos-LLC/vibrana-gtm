@@ -40,6 +40,41 @@ test("refusals and opt-out wording are possible; a 'no' that opens a reply is po
   assert.equal(c("Don't unsubscribe me, I like these"), "none");
 });
 
+test("a greeting before the answer, or a name after it, does not hide a confirmed phrase (review B1)", () => {
+  for (const body of ["Hi John,\n\nNo.\n\nBest,\nAna", "Hi John,\n\nNo\n\nAna", "Hello,\nno", "Dear John, no.", "John - no.", "Hi, no", "Hi John,\n\nStop.",
+    "Hey John!\n\nNo thanks.\n\nCheers,\nAna", "Good morning,\n\nNot relevant.\n\nKind regards,\nAna Example", "Hallo John,\n\nNo.\n\nViele Grüße\nAna"]) {
+    assert.deepEqual(classifyReply(body, true), { classification: "confirmed", reason: "exact_phrase" }, JSON.stringify(body));
+  }
+});
+
+test("everyday refusals in English are possible opt-outs (review B1)", () => {
+  for (const body of ["Thanks, but no", "Thanks but no thanks", "Nah", "Pass", "We'll pass on this", "Opt me out", "please remove", "Take me off your list", "I am not the right person",
+    "Not the right contact, sorry", "This is not for us.", "Unfortunately, no.", "Hi John, unfortunately no. Ana", "No longer interested.", "Not at this time.", "Nope"]) {
+    assert.equal(classifyReply(body, true).classification, "possible", JSON.stringify(body));
+  }
+  assert.equal(classifyReply("Hi John,\n\nwe already have a vendor for this, so no.\n\nAna", true).classification, "possible", "a short reply with a standalone no");
+  assert.equal(classifyReply("Please stop.", true).classification, "possible");
+});
+
+test("refusals and unsubscribes in European languages are possible opt-outs (review B1)", () => {
+  for (const body of ["Nein danke", "Nein, danke!", "Kein Interesse.", "Bitte entfernen Sie mich", "Abmelden", "Nee, dank je", "Nee bedankt", "Geen interesse", "Uitschrijven",
+    "Non, merci", "Non merci.", "Pas intéressé", "Ça ne m'intéresse pas", "Désinscrire", "Merci de me désinscrire", "No gracias", "No me interesa", "Darse de baja", "Por favor, dar de baja",
+    "No grazie", "Non mi interessa", "Cancellami", "Não, obrigado", "Não tenho interesse", "Nej tack", "Inte intresserad", "Nej tak", "Ikke interesseret", "Nei takk", "Ikke interessert",
+    "Hola Juan,\n\nNo gracias.\n\nSaludos,\nJuan", "Bonjour,\n\nnon\n\nCordialement"]) {
+    assert.equal(classifyReply(body, true).classification, "possible", JSON.stringify(body));
+  }
+});
+
+test("normal replies stay out of CONFIRMED; the common ones record nothing", () => {
+  for (const body of ["No problem, let's talk Tuesday", "No worries! Send me the deck.", "Hi John, no rush, Thursday works.", "Feel free to stop by our office next week",
+    "Thanks, can you send more details?", "Sounds good, see you then.", "Hi John,\n\nYes, let's do it.\n\nBest,\nAna"]) {
+    assert.equal(classifyReply(body, true).classification, "none", JSON.stringify(body));
+  }
+  for (const body of ["Is there no way to get a demo next week?", "No, Tuesday is better", "We had no budget last year but might now"]) {
+    assert.notEqual(classifyReply(body, true).classification, "confirmed", JSON.stringify(body));
+  }
+});
+
 test("an unrelated reply records nothing", () => {
   for (const body of ["Thanks, can you send more details?", "Interesting. What does pricing look like?", "Let's talk next week.", "", "Thanks"]) assert.equal(c(body), "none", body);
 });
