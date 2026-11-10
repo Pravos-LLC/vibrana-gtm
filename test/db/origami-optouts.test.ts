@@ -522,3 +522,42 @@ test("repeated CRM deadlines do not starve fresh reply and status collection", a
   assert.ok(rows.some((r) => r.sequence_id === A2 && r.kind === "reply"));
   assert.ok(rows.some((r) => r.sequence_id === A3 && r.kind === "unsubscribed_status"));
 });
+
+test("a large search page resumes within its saved snapshot", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+  await O.ingest(admin(), client(), [webhookEvidence("no")]);
+  const c = client();
+  c.person = async (_campaign, seq) => ({ ...detail(seq, ANA, seq === A1 ? "replied" : "scheduled", seq === A1 ? "replied" : null, ["scheduled"]), replies: undefined });
+  let pagesRead = 0;
+  c.peoplePage = async () => {
+    pagesRead++;
+    return { items: Array.from({ length: 20 }, (_, i) => ({ sequence_id: `00000000-0000-4000-8000-${String(1100 + i).padStart(12, "0")}`, status: "scheduled", stop_reason: null })), next_cursor: null };
+  };
+  for (let i = 0; i < 3; i++) {
+    const result = await O.processPending(admin(), c, reader(), new Date(), { campaigns: [{ id: C1, status: "active" }] });
+    assert.equal((await ops()).filter((o) => o.destination === "origami").length, Math.min((i + 1) * 8, 20));
+    assert.equal((await ops()).filter((o) => o.destination === "twenty" && o.reason === "UNSUBSCRIBED").length, 1, "consent is queued before discovery finishes");
+    assert.equal(result.processed, i === 2 ? 1 : 0);
+  }
+  assert.equal(pagesRead, 1, "resume does not refetch a potentially changed page");
+});
+
+test("malformed status and sequence search rows are not acknowledged", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+  const c = client();
+  c.repliesPage = async () => ({ items: [], next_cursor: null });
+  c.campaignsPage = async () => ({ items: [{ id: C1, status: "active" }], next_cursor: null });
+  c.peoplePage = async () => ({ items: [{ sequence_id: A2, status: null as unknown as string, stop_reason: null }], next_cursor: null });
+  const run = await O.runOrigamiOptouts(admin(), reader(), new Date(), { deadline: Date.now() + 60_000, client: c });
+  assert.ok("error" in run && /malformed sequence/.test(run.error ?? ""));
+  assert.equal((await admin().from("gtm_sync_state").select("key").eq("key", "origami.status.full").maybeSingle()).data, null);
+  await O.ingest(admin(), c, [webhookEvidence("no")]);
+  c.peoplePage = async () => ({ items: [{ sequence_id: "invalid", status: "scheduled", stop_reason: null }], next_cursor: null });
+  const result = await O.processPending(admin(), c, reader(), new Date(), { campaigns: [{ id: C1, status: "active" }] });
+  assert.equal(result.failed, 1);
+  assert.equal((await evidence())[0].processed_at, null);
+});
