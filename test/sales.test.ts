@@ -195,6 +195,48 @@ test("desk: first touches, replies and labels by owner and track; rates wait for
   const abe = metrics.deskStats(rows, W, ownerOf, "ABE", "client");
   assert.deepEqual([abe.firstTouches, abe.positive, abe.replyRate], [1, 1, null]);
   assert.equal(metrics.deskStats(rows, W, ownerOf, null, "guest").firstTouches, 1);
+  const withNetwork = [...rows, row({ track: "network", email_sent_at: "2026-11-06T00:00:00Z" }), row({ track: "network", route: "linkedin", linkedin_sent_at: "2026-11-06T00:00:00Z", linkedin_status: "sent" })];
+  const net = metrics.deskStats(withNetwork, W, ownerOf, null, "network");
+  assert.deepEqual([net.firstTouches, net.linkedinNotes], [1, 1], "the network stream counts its own email and LinkedIn first touches");
+  assert.equal(metrics.deskStats(withNetwork, W, ownerOf, null, "client").firstTouches, 13, "and never dilutes the client numbers");
+});
+
+/** A PostgREST-shaped fake: every builder call is recorded per table; awaiting a read returns that table's rows. */
+function fakeDb(tables: Record<string, unknown[]>) {
+  const calls: Array<{ table: string; method: string; args: unknown[] }> = [];
+  const db = {
+    from(table: string) {
+      const result = () => ({ data: tables[table] ?? [], error: null, count: (tables[table] ?? []).length });
+      const builder: Record<string, unknown> = new Proxy({}, {
+        get(_t, method: string) {
+          if (method === "then") return (ok: (v: unknown) => unknown, bad: (e: unknown) => unknown) => Promise.resolve(result()).then(ok, bad);
+          if (method === "maybeSingle") return () => Promise.resolve({ data: null, error: null });
+          return (...args: unknown[]) => { calls.push({ table, method, args }); return builder; };
+        },
+      });
+      return builder;
+    },
+  };
+  return { db: db as never, calls };
+}
+
+test("the pipeline cron and the network stream: HQ outcomes read client drafts only; the Twenty write-back covers every sent desk email", async () => {
+  const { db, calls } = fakeDb({ gtm_outreach_drafts: [] });
+  const reader = { list: async () => ({ conversations: [], scanned: 0, nextPageToken: null }) };
+  await outcomes.syncOutcomes(db, { deadline: Date.now() + 10_000, reader: reader as never, mailbox: "hq@hq.test" });
+  const filters = calls.filter((c) => c.table === "gtm_outreach_drafts" && ["eq", "neq", "in"].includes(c.method)).map((c) => [c.method, ...c.args]);
+  assert.deepEqual(filters, [["eq", "status", "accepted"], ["eq", "track", "client"]], "guests and the network are sent from other mailboxes, so the HQ read never matches them");
+
+  const P = "00000000-0000-4000-8000-0000000000aa";
+  const sent = [{ email_sent_at: "2026-11-10T01:00:00Z", email_bounced_at: null, prospect: { twenty_person_id: P } }];
+  const wb = fakeDb({ gtm_outreach_drafts: sent, gtm_sync_state: [] });
+  const writes: unknown[] = [];
+  const twenty = { all: async () => [{ id: P, lastContactedAt: null }], read: async (_q: string, v: unknown) => { writes.push(v); return {}; } };
+  const run = await writeback.writeContacted(wb.db, twenty as never, new Date("2026-11-10T02:00:00Z"));
+  assert.deepEqual([run.checked, run.updated], [1, 1]);
+  assert.deepEqual(writes, [{ id: P, t: "2026-11-10T01:00:00Z" }], "a network email marked sent sets lastContactedAt like any desk email");
+  const trackFilters = wb.calls.filter((c) => c.table === "gtm_outreach_drafts" && c.args.includes("track")).map((c) => [c.method, ...c.args]);
+  assert.deepEqual(trackFilters, [["eq", "track", "network"]], "emails are read on every track; only the extra LinkedIn-note read is network-only");
 });
 
 test("LinkedIn, meetings and site days roll up per window and owner", () => {
@@ -307,6 +349,19 @@ test("write-back: the latest send per Twenty person since the cursor, ignoring m
     { email_sent_at: "2026-10-01T00:00:00Z", prospect: { twenty_person_id: "00000000-0000-4000-8000-000000000002" } },
   ], "2026-11-01T00:00:00Z");
   assert.deepEqual([...m], [[P, "2026-11-04T00:00:00Z"]]);
+});
+
+test("write-back: a network LinkedIn note is contact, a client or guest LinkedIn note and a bounced email are not (VIB-522)", () => {
+  const [A, B, C, D] = ["1", "2", "3", "4"].map((n) => `00000000-0000-4000-8000-00000000000${n}`);
+  const m = writeback.latestSends([
+    { email_sent_at: null, track: "network", linkedin_sent_at: "2026-11-05T00:00:00Z", prospect: { twenty_person_id: A } },
+    { email_sent_at: "2026-11-03T00:00:00Z", track: "network", linkedin_sent_at: "2026-11-06T00:00:00Z", prospect: { twenty_person_id: B } },
+    { email_sent_at: null, track: "guest", linkedin_sent_at: "2026-11-05T00:00:00Z", prospect: { twenty_person_id: C } },
+    { email_sent_at: null, track: "client", linkedin_sent_at: "2026-11-05T00:00:00Z", prospect: { twenty_person_id: C } },
+    { email_sent_at: "2026-11-05T00:00:00Z", email_bounced_at: "2026-11-05T01:00:00Z", track: "network", prospect: { twenty_person_id: D } },
+    { email_sent_at: null, track: "network", linkedin_sent_at: "2026-10-01T00:00:00Z", prospect: { twenty_person_id: D } },
+  ], "2026-11-01T00:00:00Z");
+  assert.deepEqual([...m].sort(), [[A, "2026-11-05T00:00:00Z"], [B, "2026-11-06T00:00:00Z"]]);
 });
 
 test("stage history: a new deal is dated at its close or creation (never its last edit), a move at now, a known stage not again", () => {

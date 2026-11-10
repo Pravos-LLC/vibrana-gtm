@@ -1,4 +1,6 @@
--- Behaviour tests for 20261019000000_gtm_outreach_tracks.sql (one writing desk, two streams, VIB-463).
+-- Behaviour tests for 20261019000000_gtm_outreach_tracks.sql (one writing desk, two streams, VIB-463). The third stream
+-- (20261110010000_gtm_outreach_network_track.sql, VIB-522) has its own file, gtm_outreach_network_track.sql; here it only
+-- shows up as the third seeded row.
 -- psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/tests/gtm_outreach_tracks.sql   (also `supabase test db`)
 -- Synthetic data only: .example domains and made-up names.
 begin;
@@ -15,11 +17,12 @@ end $$;
 
 select pg_temp.as_role('service_role', null);
 
--- The two tracks exist with their own sender and target; the client track carries the old desk's target.
+-- The tracks exist with their own sender and target; the client track carries the old desk's target.
 select results_eq($$select track, daily_target, from_address from public.gtm_outreach_tracks order by track$$,
-  $$values ('client'::text, 5, 'user-045d73df3c9a@example.com'::text), ('guest'::text, 2, 'user-8dd8662c2f5a@example.com'::text)$$, 'both tracks are seeded');
+  $$values ('client'::text, 5, 'user-045d73df3c9a@example.com'::text), ('guest'::text, 2, 'user-8dd8662c2f5a@example.com'::text),
+    ('network'::text, 15, 'user-f538cb95fc21@example.com'::text)$$, 'every track is seeded');
 select is((select daily_target from public.gtm_outreach_tracks where track = 'client'), (select daily_target from public.gtm_outreach_desk), 'the client target carries over from the desk');
-select throws_ok($$insert into public.gtm_outreach_tracks (track, daily_target, from_address) values ('other', 3, 'a@b.example')$$, '23514', null, 'only the two tracks');
+select throws_ok($$insert into public.gtm_outreach_tracks (track, daily_target, from_address) values ('other', 3, 'a@b.example')$$, '23514', null, 'only the known tracks');
 select throws_ok($$update public.gtm_outreach_tracks set daily_target = 0 where track = 'guest'$$, '23514', null, 'the target is at least 1');
 select throws_ok($$update public.gtm_outreach_tracks set from_address = 'not an address' where track = 'guest'$$, '23514', null, 'a sender is an email address');
 update public.gtm_outreach_tracks set daily_target = 3, updated_by = 'john' where track = 'guest';
@@ -30,7 +33,7 @@ insert into public.gtm_outreach_dossiers (twenty_person_id, domain, name) values
 insert into public.gtm_outreach_dossiers (twenty_person_id, domain, name, track) values ('g-guest', 'ada-guest.guest.invalid', 'Grace Example', 'guest');
 select results_eq($$select twenty_person_id, track from public.gtm_outreach_dossiers where twenty_person_id in ('p-client', 'g-guest') order by twenty_person_id$$,
   $$values ('g-guest'::text, 'guest'::text), ('p-client'::text, 'client'::text)$$, 'dossiers default to the client track');
-select throws_ok($$insert into public.gtm_outreach_dossiers (twenty_person_id, track) values ('p-z', 'x')$$, '23514', null, 'a dossier track is client or guest');
+select throws_ok($$insert into public.gtm_outreach_dossiers (twenty_person_id, track) values ('p-z', 'x')$$, '23514', null, 'a dossier track is a known track');
 
 -- A guest with no company domain is filed under a synthetic .guest.invalid key and gets a draft.
 insert into public.gtm_outreach_drafts (id, batch, domain, variant, person, track, route, subject, body)
@@ -53,7 +56,7 @@ update public.gtm_outreach_drafts set follow_up_status = 'none' where id = '0000
 select is((select follow_up_sent_at from public.gtm_outreach_drafts where id = '00000000-0000-4000-8000-0000000000e1'), null, 'undoing the follow-up clears its time');
 
 select pg_temp.as_role('authenticated', true);
-select is((select count(*)::int from public.gtm_outreach_tracks), 2, 'the owner reads both tracks');
+select is((select count(*)::int from public.gtm_outreach_tracks), 3, 'the owner reads every track');
 select pg_temp.as_role('authenticated', false);
 select is((select count(*)::int from public.gtm_outreach_tracks), 0, 'a non-owner reads nothing');
 

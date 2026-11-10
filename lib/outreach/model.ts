@@ -31,8 +31,8 @@ export type Draft = {
   person?: string;
   /** Set by the database the first time each channel is marked sent. */
   email_sent_at?: string | null; linkedin_sent_at?: string | null;
-  /** The writing desk's stream (default 'client'), how a guest is reached, and the single follow-up (never counts toward the target). */
-  track?: "client" | "guest"; route?: "email" | "linkedin" | "intermediary";
+  /** The writing desk's stream (default 'client'), how a guest or network contact is reached, and the single follow-up (never counts toward the target). */
+  track?: "client" | "guest" | "network"; route?: "email" | "linkedin" | "intermediary";
   follow_up_status?: "none" | "sent"; follow_up_sent_at?: string | null;
 };
 export const DRAFT_COLUMNS = "id,created_at,updated_at,batch,domain,variant,person,prospect,trigger,strategy,subject,body,original_subject,original_body,linkedin_note,followups,claims,findings,model,version,status,note,decided_by,decided_at,edited_by,edited_at,linkedin_status,email_status,email_sent_at,linkedin_sent_at,track,route,follow_up_status,follow_up_sent_at";
@@ -188,7 +188,13 @@ export function noteExport(d: Draft) {
 
 export const prospectName = (p: Prospect) => [p.first_name, p.last_name].filter((x) => x && String(x).trim()).join(" ").trim();
 
-/** `gtm outreach queue linkedin|email`: accepted drafts not yet acted on that have what the channel needs. */
+/**
+ * A cold draft: the client stream (a row with no track is the old contract, a client). Only cold drafts go to a send queue;
+ * the warm streams (guests, John's own network) are written and sent by hand at the desk, and an unknown track is never sent.
+ */
+export const isColdDraft = (d: Pick<Draft, "track">) => (d.track ?? "client") === "client";
+
+/** `gtm outreach queue linkedin|email`: accepted cold drafts not yet acted on that have what the channel needs. */
 type QueueBase = { id: string; batch: string; domain: string; variant: string; name: string; company: string | null };
 export type LinkedinQueueRow = QueueBase & { linkedin_url: string; linkedin_note: string; linkedin_status: LinkedinOutreachStatus };
 export type EmailQueueRow = QueueBase & { email: string; subject: string; body: string; followups: Followup[]; email_status: EmailStatus };
@@ -198,10 +204,10 @@ export function queueRows(drafts: Draft[], channel: "linkedin" | "email"): Linke
 export function queueRows(drafts: Draft[], channel: "linkedin" | "email"): LinkedinQueueRow[] | EmailQueueRow[] {
   const base = (d: Draft): QueueBase => ({ id: d.id, batch: d.batch, domain: d.domain, variant: d.variant, name: prospectName(d.prospect), company: d.prospect.company ?? null });
   if (channel === "linkedin") {
-    return drafts.filter((d) => d.track !== "guest" && d.status === "accepted" && (d.linkedin_status === "none" || d.linkedin_status === "queued") && d.prospect.linkedin_url && d.linkedin_note.trim())
+    return drafts.filter((d) => isColdDraft(d) && d.status === "accepted" && (d.linkedin_status === "none" || d.linkedin_status === "queued") && d.prospect.linkedin_url && d.linkedin_note.trim())
       .map((d) => ({ ...base(d), linkedin_url: d.prospect.linkedin_url!, linkedin_note: d.linkedin_note, linkedin_status: d.linkedin_status }));
   }
-  return drafts.filter((d) => d.track !== "guest" && d.status === "accepted" && (d.email_status === "none" || d.email_status === "queued") && d.prospect.email)
+  return drafts.filter((d) => isColdDraft(d) && d.status === "accepted" && (d.email_status === "none" || d.email_status === "queued") && d.prospect.email)
     .map((d) => ({ ...base(d), email: d.prospect.email!, subject: d.subject, body: d.body, followups: d.followups, email_status: d.email_status }));
 }
 

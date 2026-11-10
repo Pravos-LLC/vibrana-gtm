@@ -145,16 +145,39 @@ export const GUEST_FIXTURE = [
   guestDossier(GUEST_IDS.inter, "Ina", "ina-fixture.guest.invalid", 70, "intermediary", {}, { template: "04", approach_note: "Fixture approach note: go through the council.", protocol_note: "Fixture protocol note: final cut stays with the community.", contact_line: "Fixture council office, fixture-council.example/contact" }),
   guestDossier(GUEST_IDS.followup, "Eli", "eli.example", 60, "email"),
 ];
-export const dossierRow = (d: (typeof DOSSIER_FIXTURE)[number] | (typeof GUEST_FIXTURE)[number]) => ({
+
+// The network stream (VIB-522): John's own network in the vibrana-crm `--track network` contract. Made-up people, Twenty-style
+// uuids, .example domains and the synthetic '<slug>.network.invalid' domain a contact with no organization gets. Nia is
+// reached by email (a prior conversation), Ned by a LinkedIn note (a network connection), Noa by email (the follow-up fixture).
+export const NETWORK_IDS = { email: "00000000-0000-4000-8000-00000000ae01", linkedin: "00000000-0000-4000-8000-00000000ae02", followup: "00000000-0000-4000-8000-00000000ae03" };
+export const NETWORK_PROFILE = {
+  name: "Jo Fixture", first_name: "Jo", title: "Founder", signature: "Jo\nfixture.example", positioning: "Fixture network positioning.",
+  voice: ["Write like you talk to a friend."], facts: [{ id: "nf1", text: "Fixture network fact.", source: "Jo, 2026-11-10" }],
+  gold_examples: [{ note: "Fixture network gold.", subject: "Catching up", body: "Hey Nat,\n\nFixture network gold body.\n\nJo" }],
+};
+const networkDossier = (id: string, first: string, domain: string, score: number, route: "email" | "linkedin", network: Record<string, unknown> = {}) => ({
+  twenty_person_id: id, domain, built_at: new Date().toISOString(), track: "network", score, route, not_in_twenty: false,
+  prospect: { first_name: first, last_name: "Fixture", title: "Partner", company: `${first} Co`, email: route === "email" ? `${first.toLowerCase()}@${domain}` : null, linkedin_url: `https://www.linkedin.com/in/${first.toLowerCase()}-fixture`, country: "PT", city: "Lisbon", lane: null },
+  signal: { text: `Fixture: met ${first} at a fixture meetup`, url: null, date: "2026-03-04", type: "network_context" },
+  client_check: { ok: true, reason: "Fixture: not a client or an open deal", checked_at: "2026-11-10T08:00:00Z" },
+  network: { tier: "T1", relationship: "PRIOR_CONVERSATION", origins: ["LINKEDIN", "GMAIL"], last_exchanged_at: "2026-03-04T10:00:00Z", last_channel: "email", last_contacted_at: "2026-03-04T10:00:00Z", owners: ["JOHN"], context: `Fixture: met ${first} at a fixture meetup`, ...network },
+});
+export const NETWORK_FIXTURE = [
+  networkDossier(NETWORK_IDS.email, "Nia", "nia.example", 85, "email"),
+  networkDossier(NETWORK_IDS.linkedin, "Ned", "ned-fixture.network.invalid", 75, "linkedin", { tier: "T2", relationship: null, origins: ["LINKEDIN"], last_exchanged_at: null, last_channel: null, last_contacted_at: null, context: "Fixture: LinkedIn connection" }),
+  networkDossier(NETWORK_IDS.followup, "Noa", "noa.example", 65, "email"),
+];
+export const dossierRow = (d: (typeof DOSSIER_FIXTURE)[number] | (typeof GUEST_FIXTURE)[number] | (typeof NETWORK_FIXTURE)[number]) => ({
   twenty_person_id: d.twenty_person_id, track: "track" in d ? d.track : "client", domain: d.domain, name: `${d.prospect.first_name} ${d.prospect.last_name}`, company: d.prospect.company, title: d.prospect.title,
   score: "track" in d ? d.score : d.prospect.score, built_at: d.built_at, dossier: d,
 });
-/** The two tracks (target, sender, profile), as seed() leaves them. `target` is the client's; the guest's is 2. */
+/** The three tracks (target, sender, profile), as seed() leaves them. `target` is the client's; the guest's is 2, the network's 15. */
 export async function seedDesk(target = 5) {
   const at = new Date().toISOString();
   must(await admin().from("gtm_outreach_tracks").upsert([
     { track: "client", daily_target: target, from_address: "user-045d73df3c9a@example.com", profile: DESK_PROFILE, profile_imported_at: at },
     { track: "guest", daily_target: 2, from_address: "user-8dd8662c2f5a@example.com", profile: GUEST_PROFILE, profile_imported_at: at },
+    { track: "network", daily_target: 15, from_address: "user-f538cb95fc21@example.com", profile: NETWORK_PROFILE, profile_imported_at: at },
   ], { onConflict: "track" }), "desk tracks");
   // The old single desk row stays (the client track's fallback until a later cleanup).
   must(await admin().from("gtm_outreach_desk").upsert({ id: true, daily_target: target, profile: DESK_PROFILE, profile_imported_at: at }, { onConflict: "id" }), "desk");
@@ -443,7 +466,7 @@ export async function seed() {
   must(await db.from("gtm_outreach_drafts").update({ body: "Fixture solo body, edited.", edited_by: "owner@gtm.test", edited_at: new Date().toISOString() }).eq("id", OUTREACH_IDS.solo), "outreach edit");
   must(await db.from("gtm_outreach_angle_edits").insert({ run_id: ANGLE_RUN_ID, draft_id: OUTREACH_IDS.solo, person: "fx-angle-person", channel: "email", angle_key: "direct_fit", generated: {}, final: {} }), "outreach angle edit");
   // The writing desk: its queue, and the desk row (profile, target).
-  must(await db.from("gtm_outreach_dossiers").insert([...DOSSIER_FIXTURE, ...GUEST_FIXTURE].map(dossierRow)), "dossiers");
+  must(await db.from("gtm_outreach_dossiers").insert([...DOSSIER_FIXTURE, ...GUEST_FIXTURE, ...NETWORK_FIXTURE].map(dossierRow)), "dossiers");
   must(await db.from("gtm_outreach_dossiers").update({ skipped_at: new Date().toISOString(), skip_reason: "Fixture skip", skipped_by: "owner@gtm.test" }).eq("twenty_person_id", DESK_IDS.skip), "skip");
   await seedDesk();
 

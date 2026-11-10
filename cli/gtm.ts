@@ -1074,13 +1074,14 @@ const commands: Record<string, () => Promise<void>> = {
     const batch = flag("--batch");
     if (sub === "import-dossiers" || sub === "import-profile") {
       // The writing desk (/outreach/write): vibrana-crm's dossiers (one per Twenty person) and John's profile, per stream:
-      // --track client (the default) for cold prospects, --track guest for podcast guests.
+      // --track client (the default) for cold prospects, --track guest for podcast guests, --track network for John's own network.
       const file = flag("--file") ?? arg;
       const track = flag("--track") ?? "client";
       // A profile replaces the stream's stored one and the old text is not kept, so a forgotten flag must not default to clients.
-      if (sub === "import-profile" && !flag("--track")) throw new Error("import-profile needs --track client|guest: it replaces that stream's profile");
-      if (track !== "client" && track !== "guest") throw new Error(`--track is client or guest, not "${track}"`);
-      if (!file) throw new Error(`usage: gtm outreach ${sub} --file <path.json> [--track client|guest] [--dry-run]`);
+      if (sub === "import-profile" && !flag("--track")) throw new Error("import-profile needs --track client|guest|network: it replaces that stream's profile");
+      const { isTrack } = await import("../lib/outreach/desk");
+      if (!isTrack(track)) throw new Error(`--track is client, guest or network, not "${track}"`);
+      if (!file) throw new Error(`usage: gtm outreach ${sub} --file <path.json> [--track client|guest|network] [--dry-run]`);
       const desk = await import("../lib/outreach/desk-store");
       const canWrite = !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SECRET_KEY);
       const db = dry && !canWrite ? null : adminDb();
@@ -1147,7 +1148,7 @@ const commands: Record<string, () => Promise<void>> = {
         if (!rows.length) console.log("no outreach drafts");
       });
     }
-    throw new Error("usage: gtm outreach import <file.json> [--dry-run] | import-dossiers --file <path> [--track client|guest] [--dry-run] | import-profile --file <path> --track client|guest [--dry-run] | notes [--batch B] [--out file.json] | queue linkedin|email [--batch B] | mark <id> --linkedin queued|sent|connected|skipped | --email queued|sent|replied | list [--batch B] [--status pending|accepted|rejected|regenerate]");
+    throw new Error("usage: gtm outreach import <file.json> [--dry-run] | import-dossiers --file <path> [--track client|guest|network] [--dry-run] | import-profile --file <path> --track client|guest|network [--dry-run] | notes [--batch B] [--out file.json] | queue linkedin|email [--batch B] | mark <id> --linkedin queued|sent|connected|skipped | --email queued|sent|replied | list [--batch B] [--status pending|accepted|rejected|regenerate]");
   },
 
   async idea() {
@@ -1957,10 +1958,11 @@ const help = `gtm <command> [--json]
                            email address, subject, body and follow-ups
   outreach mark <id> --linkedin queued|sent|connected|skipped | --email queued|sent|replied   record what was done
   outreach list [--batch B] [--status pending|accepted|rejected|regenerate]   the drafts (all batches unless --batch)
-  outreach import-dossiers --file <path> [--track client|guest] [--dry-run]   load vibrana-crm's dossiers into the writing
-                           desk (/outreach/write), one per Twenty person; the file must hold rows of that track (client by
-                           default); a re-import refreshes each dossier and keeps John's skips and drafts
-  outreach import-profile --file <path> --track client|guest [--dry-run]   load John's profile for a stream
+  outreach import-dossiers --file <path> [--track client|guest|network] [--dry-run]   load vibrana-crm's dossiers into the
+                           writing desk (/outreach/write), one per Twenty person; the file must hold rows of that track
+                           (client by default; guest for podcast guests, network for John's own network); a re-import
+                           refreshes each dossier and keeps John's skips and drafts
+  outreach import-profile --file <path> --track client|guest|network [--dry-run]   load John's profile for a stream
                            (qualification/outreach_profile*.json): facts, proof, assets, signature, gold examples and, for
                            guests, the 01 to 04 templates, shown beside the composer
   idea add <title> [--summary s] [--kind K] [--pillar P] [--format F] [--effort s|m|l] [--impact 1-5] [--status S]

@@ -267,7 +267,8 @@
     "mailbox": "user-045d73df3c9a@example.com",
     "trackFrom": {
       "client": "user-045d73df3c9a@example.com",
-      "guest": "user-8dd8662c2f5a@example.com"
+      "guest": "user-8dd8662c2f5a@example.com",
+      "network": "user-f538cb95fc21@example.com"
     }
   },
   "packaging": {

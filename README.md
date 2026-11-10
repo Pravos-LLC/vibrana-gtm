@@ -1,6 +1,6 @@
 # GTM Cockpit
 
-A Next.js dashboard and command-line toolkit for a small content team. It includes a content calendar, approval queue, engagement review, analytics, a sales pipeline dashboard measured against a monthly take-home goal, and an outreach writing desk.
+A Next.js dashboard and command-line toolkit for a small content team. It includes a content calendar, approval queue, engagement review, analytics, a sales pipeline dashboard measured against a monthly take-home goal, and an outreach writing desk with three streams: cold client prospects, podcast guests, and the operator's own network (warm contacts, each note written by hand).
 
 ## Deployment and development
 

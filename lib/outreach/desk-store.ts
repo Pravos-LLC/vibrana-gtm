@@ -3,9 +3,11 @@ import { loadRuntimeConfig } from "../runtime-config.mjs";
 // queue, one person's desk, and John's actions (autosave, mark sent, LinkedIn invite sent, follow-up sent, skip, daily
 // target). Server and CLI only: the service client writes; the browser role can only read, and only as the owner.
 //
-// Two streams (VIB-463): 'client' and 'guest'. Each person, desk draft, target, sender and profile belongs to one track
-// (gtm_outreach_tracks); every read here is for one track, and an action that names a track refuses a person of the other.
-// A guest is reached by one of three routes. Mark sent records it where the rest of the system already looks:
+// Three streams: 'client' and 'guest' (VIB-463), and 'network' (VIB-522, John's own network). Each person, desk draft,
+// target, sender and profile belongs to one track (gtm_outreach_tracks); every read here is for one track, and an action
+// that names a track refuses a person of another. Guests and network contacts are the warm streams (isWarmTrack): a warm
+// person is reached by one of three routes (a network export only ever names email or linkedin). Mark sent records it
+// where the rest of the system already looks:
 //   email         email_status 'sent' (the address, subject and body he wrote),
 //   linkedin      linkedin_status 'sent' (the note he wrote; stamps linkedin_sent_at),
 //   intermediary  email_status 'sent' with route 'intermediary' (an organization's contact took the message; stamps
@@ -19,7 +21,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
 import {
   buildQueue, DESK_BATCH, DESK_LIMITS, DESK_VARIANT, deskEditProblems, DOSSIER_COLUMNS, draftDomain, draftProspect, draftStrategy,
-  draftTrigger, guestRoute, isAbout, isPersonId, parseDossiers, parseProfile, prefill, QUEUE_COLUMNS, routeSendProblems, sendProblems, TRACK_DEFAULTS, TRACKS,
+  draftTrigger, guestRoute, isAbout, isPersonId, isWarmTrack, parseDossiers, parseProfile, prefill, QUEUE_COLUMNS, routeSendProblems, sendProblems, TRACK_DEFAULTS, TRACKS,
   type DeskEdit, type DeskSettings, type DossierRow, type Profile, type QueueItem, type QueueRow, type Track,
 } from "./desk";
 import { DRAFT_COLUMNS, VERSION_COLUMNS, type Draft, type DraftVersion } from "./model";
@@ -35,9 +37,9 @@ const now = () => new Date().toISOString();
 export type DossierImportResult = { dryRun: boolean; inserted: string[]; updated: string[]; total: number };
 
 /**
- * `gtm outreach import-dossiers --file <path> [--track client|guest]`: upsert by Twenty person id. A re-import replaces the
+ * `gtm outreach import-dossiers --file <path> [--track client|guest|network]`: upsert by Twenty person id. A re-import replaces the
  * dossier and its denormalized columns and never touches John's skip or his desk draft. The file must hold rows of the track
- * it is imported as, and a person already filed under the other track is refused (an id never changes stream).
+ * it is imported as, and a person already filed under another track is refused (an id never changes stream).
  */
 export async function importDossiers(db: SupabaseClient | null, text: string, opts: { dryRun?: boolean; track?: Track } = {}): Promise<DossierImportResult> {
   const track = opts.track ?? "client";
@@ -50,7 +52,7 @@ export async function importDossiers(db: SupabaseClient | null, text: string, op
       const page = must(await db.from(DOSSIERS).select("twenty_person_id,track").in("twenty_person_id", ids.slice(i, i + 200)), "existing dossiers") as Array<{ twenty_person_id: string; track: Track }>;
       for (const r of page) { existing.add(r.twenty_person_id); if (r.track !== track) other.push(r.twenty_person_id); }
     }
-    if (other.length) throw new Error(`${other.join(", ")}: already filed under the other track, so a ${track} import cannot take them over`);
+    if (other.length) throw new Error(`${other.join(", ")}: already filed under another track, so a ${track} import cannot take them over`);
   }
   const result: DossierImportResult = { dryRun: Boolean(opts.dryRun) || !db, inserted: ids.filter((id) => !existing.has(id)), updated: ids.filter((id) => existing.has(id)), total: rows.length };
   if (opts.dryRun || !db) return result;
@@ -61,7 +63,7 @@ export async function importDossiers(db: SupabaseClient | null, text: string, op
   return result;
 }
 
-/** `gtm outreach import-profile --file <path> [--track client|guest]`: John's profile replaces the track's stored one. The target and sender are kept. */
+/** `gtm outreach import-profile --file <path> [--track client|guest|network]`: John's profile replaces the track's stored one. The target and sender are kept. */
 export async function importProfile(db: SupabaseClient | null, text: string, opts: { dryRun?: boolean; track?: Track } = {}): Promise<{ dryRun: boolean; facts: number; proof: number; assets: number; gold_examples: number; templates: number }> {
   const track = opts.track ?? "client";
   const profile = parseProfile(text);
@@ -69,24 +71,31 @@ export async function importProfile(db: SupabaseClient | null, text: string, opt
   if (opts.dryRun || !db) return { dryRun: true, ...summary };
   const imported = { profile, profile_imported_at: now() };
   const rows = must(await db.from(TRACKS_TABLE).update(imported).eq("track", track).select("track"), "import profile") as unknown[];
-  // The migration seeds both tracks; a missing row is made with the track's defaults, since sender and target are required.
+  // The migrations seed every track; a missing row is made with the track's defaults, since sender and target are required.
   if (!rows.length) must(await db.from(TRACKS_TABLE).upsert({ track, ...runtimeTrackDefaults()[track], ...imported }, { onConflict: "track" }).select("track"), "import profile");
   return { dryRun: false, ...summary };
 }
 
 // ---- reads -------------------------------------------------------------------------------------------------------------
 
-/** Database settings win; immutable runtime sender defaults cover missing legacy rows only. */
-function runtimeTrackDefaults() {
+/**
+ * Database settings win; immutable runtime sender defaults cover missing legacy rows only. The network sender is optional in
+ * the runtime configuration (a configuration from before VIB-522 has none), so its row's address, seeded by the migration, is
+ * what normally applies.
+ */
+function runtimeTrackDefaults(): Record<Track, { daily_target: number; from_address: string }> {
   const from = loadRuntimeConfig().mail.trackFrom;
-  return { client: { ...TRACK_DEFAULTS.client, from_address: from.client }, guest: { ...TRACK_DEFAULTS.guest, from_address: from.guest } };
+  return {
+    client: { ...TRACK_DEFAULTS.client, from_address: from.client }, guest: { ...TRACK_DEFAULTS.guest, from_address: from.guest },
+    network: { ...TRACK_DEFAULTS.network, from_address: from.network ?? TRACK_DEFAULTS.network.from_address },
+  };
 }
 
 const SETTINGS_COLUMNS = "daily_target,from_address,profile,profile_imported_at";
 
 /**
  * One track's settings: its row in gtm_outreach_tracks, else (client only) the old single desk row, else the defaults
- * (target 5 for clients, 2 for guests), so an empty table never leaves the desk without a target or a sender.
+ * (target 5 for clients, 2 for guests, 15 for the network), so an empty table never leaves the desk without a target or a sender.
  */
 export async function deskSettings(db: SupabaseClient, track: Track = "client"): Promise<DeskSettings> {
   const row = must(await db.from(TRACKS_TABLE).select(SETTINGS_COLUMNS).eq("track", track).maybeSingle(), "desk settings") as DeskSettings | null;
@@ -98,10 +107,10 @@ export async function deskSettings(db: SupabaseClient, track: Track = "client"):
   return { ...runtimeTrackDefaults()[track], profile: {}, profile_imported_at: null };
 }
 
-/** Both tracks' settings, for the page (both meters are always on screen). */
+/** Every track's settings, for the page (every meter is always on screen). */
 export async function deskTracks(db: SupabaseClient): Promise<Record<Track, DeskSettings>> {
-  const [client, guest] = await Promise.all(TRACKS.map((t) => deskSettings(db, t)));
-  return { client, guest };
+  const all = await Promise.all(TRACKS.map((t) => deskSettings(db, t)));
+  return Object.fromEntries(TRACKS.map((t, i) => [t, all[i]])) as Record<Track, DeskSettings>;
 }
 
 /** Every desk draft of one track, light: what the queue and "sent today" need. */
@@ -153,7 +162,7 @@ export async function deskPerson(db: SupabaseClient, personId: string, profile: 
 
 // ---- John's actions (the server actions check the owner claim first) --------------------------------------------------
 
-/** The caller's stream must be the person's: a guest id sent as a client (or the reverse) is refused, never half-handled. */
+/** The caller's stream must be the person's: a guest id sent as a client (or any other mix) is refused, never half-handled. */
 function onTrack(row: Pick<DossierRow, "track">, track: Track | undefined) {
   if (track && row.track !== track) throw new Error(`This person is on the ${row.track} stream, not the ${track} stream.`);
 }
@@ -172,8 +181,8 @@ async function deskDraft(db: SupabaseClient, personId: string): Promise<Draft | 
 
 const fields = (row: DossierRow, e: DeskEdit) => ({
   subject: e.subject, body: e.body, linkedin_note: e.linkedin_note, prospect: draftProspect(row.dossier, e.to),
-  // A guest's draft records how they are reached (the dossier's route); a client's stays at the column default.
-  ...(row.track === "guest" ? { route: guestRoute(row.dossier) } : {}),
+  // A warm (guest or network) draft records how they are reached (the dossier's route); a client's stays at the column default.
+  ...(isWarmTrack(row.track) ? { route: guestRoute(row.dossier) } : {}),
 });
 
 /**
@@ -189,8 +198,8 @@ export async function saveDesk(db: SupabaseClient, personId: string, edit: DeskE
     const same = existing.subject === edit.subject && existing.body === edit.body && existing.linkedin_note === edit.linkedin_note && (existing.prospect?.email ?? "") === (edit.to.trim() || row.dossier.prospect?.email || "");
     if (same) return existing;
     if (existing.email_status !== "none") throw new Error("This email was already sent, so it can't change any more.");
-    // A guest's LinkedIn note is final once it is sent (the client's invite stays editable, as before).
-    if (row.track === "guest" && (existing.linkedin_status === "sent" || existing.linkedin_status === "connected")) throw new Error("This note was already sent, so it can't change any more.");
+    // A warm stream's LinkedIn note is final once it is sent (the client's invite stays editable, as before).
+    if (isWarmTrack(row.track) && (existing.linkedin_status === "sent" || existing.linkedin_status === "connected")) throw new Error("This note was already sent, so it can't change any more.");
     const rows = must(await db.from(DRAFTS).update({ ...fields(row, edit), edited_by: actor, edited_at: now() })
       .eq("id", existing.id).eq("email_status", "none").select(DRAFT_COLUMNS), "save") as unknown as Draft[];
     if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
@@ -243,9 +252,9 @@ export async function unmarkDeskEmailSent(db: SupabaseClient, personId: string, 
 export async function markDeskLinkedinSent(db: SupabaseClient, personId: string, edit: DeskEdit, actor: string, profile: Profile = {}, track?: Track): Promise<Draft> {
   const problems = deskEditProblems(edit);
   if (problems.length) throw new Error(problems.join(" "));
-  // The client stream's invite button only. A guest on the LinkedIn route is marked sent by its route (markDeskSent), which
-  // records the route too, so undo can find it.
-  if ((await dossierRow(db, personId, track)).track !== "client") throw new Error("Mark invite sent is for the client stream; a guest is marked sent by its route.");
+  // The client stream's invite button only. A guest or network contact on the LinkedIn route is marked sent by its route
+  // (markDeskSent), which records the route too, so undo can find it.
+  if ((await dossierRow(db, personId, track)).track !== "client") throw new Error("Mark invite sent is for the client stream; a guest or network contact is marked sent by its route.");
   const d = await readyDesk(db, personId, edit, actor, profile, track);
   if (d.linkedin_status === "sent" || d.linkedin_status === "connected") return d;
   const rows = must(await db.from(DRAFTS).update({ linkedin_status: "sent", linkedin_sent_by: actor }).eq("id", d.id).eq("status", "accepted").select(DRAFT_COLUMNS), "mark invite sent") as unknown as Draft[];
@@ -254,7 +263,7 @@ export async function markDeskLinkedinSent(db: SupabaseClient, personId: string,
 }
 
 /**
- * "Mark sent" for either stream. A client is the email, as ever. A guest goes by the route their dossier names (see the top of
+ * "Mark sent" for any stream. A client is the email, as ever. A guest or network contact goes by the route their dossier names (see the top of
  * this file): email and intermediary set email_status, linkedin sets linkedin_status; each is checked for what that route needs.
  */
 export async function markDeskSent(db: SupabaseClient, personId: string, edit: DeskEdit, actor: string, profile: Profile = {}, track?: Track): Promise<Draft> {
@@ -272,7 +281,7 @@ export async function markDeskSent(db: SupabaseClient, personId: string, edit: D
   return rows[0];
 }
 
-/** Undo a mistaken "Mark sent" on either stream (it was not actually sent). A follow-up has to be undone first. */
+/** Undo a mistaken "Mark sent" on any stream (it was not actually sent). A follow-up has to be undone first. */
 export async function unmarkDeskSent(db: SupabaseClient, personId: string, track?: Track): Promise<Draft> {
   const row = await dossierRow(db, personId, track);
   if (row.track === "client") return unmarkDeskEmailSent(db, personId, track);
@@ -289,7 +298,7 @@ export async function unmarkDeskSent(db: SupabaseClient, personId: string, track
 
 /** "Mark follow-up sent": the single follow-up went out (7 to 10 days on, same thread). Never counts toward the target. */
 export async function markDeskFollowUpSent(db: SupabaseClient, personId: string, track?: Track): Promise<Draft> {
-  if ((await dossierRow(db, personId, track)).track !== "guest") throw new Error("Follow-ups are for the guest stream.");
+  if (!isWarmTrack((await dossierRow(db, personId, track)).track)) throw new Error("Follow-ups are for the guest and network streams.");
   const d = await deskDraft(db, personId);
   if (!d || !(d.email_status === "sent" || d.email_status === "replied" || d.linkedin_status === "sent" || d.linkedin_status === "connected")) throw new Error("Mark the first message sent before its follow-up.");
   if (d.follow_up_status === "sent") return d;
@@ -300,7 +309,7 @@ export async function markDeskFollowUpSent(db: SupabaseClient, personId: string,
 
 /** Undo a mistaken "Mark follow-up sent" (the database clears follow_up_sent_at). */
 export async function unmarkDeskFollowUpSent(db: SupabaseClient, personId: string, track?: Track): Promise<Draft> {
-  if ((await dossierRow(db, personId, track)).track !== "guest") throw new Error("Follow-ups are for the guest stream.");
+  if (!isWarmTrack((await dossierRow(db, personId, track)).track)) throw new Error("Follow-ups are for the guest and network streams.");
   const d = await deskDraft(db, personId);
   if (!d || d.follow_up_status !== "sent") throw new Error("No follow-up is marked sent.");
   const rows = must(await db.from(DRAFTS).update({ follow_up_status: "none" }).eq("id", d.id).eq("follow_up_status", "sent").select(DRAFT_COLUMNS), "undo follow-up") as unknown as Draft[];

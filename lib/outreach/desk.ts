@@ -4,28 +4,43 @@ import { outreachSignature } from "./email-format";
 // the composer's prefill and advisory hints, the Gmail compose link and "sent today". Database paths are in
 // ./desk-store.ts; the table shapes in brand.example.com migrations 20261017010000_gtm_outreach_desk.sql and
 // 20261019000000_gtm_outreach_tracks.sql (VIB-463: two streams, clients and podcast guests, each with its own sender,
-// daily target and profile). No runtime imports except the copy guard, so a client component can use it.
+// daily target and profile), and 20261110010000_gtm_outreach_network_track.sql (VIB-522: a third stream, John's own network).
+// No runtime imports except the copy guard, so a client component can use it.
 import { findBritishSpellings } from "../copy-guard";
 import type { Draft, Prospect, Strategy, Trigger } from "./model";
 
 /** John's desk drafts: gtm_outreach_drafts rows in this batch, variant 'john', person = the Twenty person id. */
 export const DESK_BATCH = "desk";
 export const DESK_VARIANT = "john";
-/** The two streams: cold client prospects, and podcast guests John invites (VIB-463). */
-export const TRACKS = ["client", "guest"] as const;
+/**
+ * The streams: cold client prospects, podcast guests John invites (VIB-463), and John's own network (VIB-522): people he
+ * already knows (a prior conversation, a LinkedIn, WhatsApp or Gmail connection), each note written by hand.
+ */
+export const TRACKS = ["client", "guest", "network"] as const;
 export type Track = (typeof TRACKS)[number];
-export const TRACK_LABEL: Record<Track, string> = { client: "Clients", guest: "Guests" };
+export const TRACK_LABEL: Record<Track, string> = { client: "Clients", guest: "Guests", network: "Network" };
 /**
  * What a track falls back to when gtm_outreach_tracks has no row for it. The mailboxes are Google Workspace: clients send from
- * vibranahq.com (warmed up in Origami), guests from John's own domain, as the host of the podcast.
+ * vibranahq.com (warmed up in Origami), guests from John's own domain, as the host of the podcast, and his network from his
+ * own Vibrana address.
  */
 export const TRACK_DEFAULTS: Record<Track, { daily_target: number; from_address: string }> = {
   client: { daily_target: 5, from_address: "user-045d73df3c9a@example.com" },
   guest: { daily_target: 2, from_address: "user-8dd8662c2f5a@example.com" },
+  network: { daily_target: 15, from_address: "user-f538cb95fc21@example.com" },
 };
 export const DEFAULT_TARGET = TRACK_DEFAULTS.client.daily_target;
-export const isTrack = (v: unknown): v is Track => v === "client" || v === "guest";
-/** How a guest is reached; any route counts toward the guest target. */
+export const isTrack = (v: unknown): v is Track => (TRACKS as readonly unknown[]).includes(v);
+/**
+ * A warm stream: never cold. Guests and his network are reached by any route (email or a LinkedIn note, and for guests an
+ * intermediary), each route counts toward the target, they get the single follow-up, and they never enter a cold send
+ * queue, the HQ mailbox outcomes or Origami. Podcast-specific parts (templates 01 to 04, prompts, the host history) stay
+ * guest-only: test `track === "guest"` for those.
+ */
+export const isWarmTrack = (track: Track | null | undefined): boolean => track === "guest" || track === "network";
+/** A stream the AI angles are offered on. John writes every network note himself. */
+export const hasAngles = (track: Track): boolean => track !== "network";
+/** How a guest or a network contact is reached; any route counts toward that stream's target. */
 export const ROUTES = ["email", "linkedin", "intermediary"] as const;
 export type Route = (typeof ROUTES)[number];
 export const ROUTE_LABEL: Record<Route, string> = { email: "Email", linkedin: "LinkedIn", intermediary: "Via an intermediary" };
@@ -57,6 +72,17 @@ export type DossierPerson = { headline?: string | null; about?: string | null; r
 export type Colleague = { name?: string | null; title?: string | null; email?: string | null; linkedin_url?: string | null };
 export type HistoryItem = { channel?: string | null; date?: string | null; summary?: string | null };
 export type ClientCheck = { ok?: boolean | null; reason?: string | null; checked_at?: string | null };
+/** The tiers of a network contact: T1 a prior conversation, T2 a direct network connection. */
+export const NETWORK_TIERS = ["T1", "T2"] as const;
+export const NETWORK_TIER_LABEL: Record<string, string> = { T1: "Prior conversation", T2: "Network connection" };
+/**
+ * The network block of an own-network dossier (vibrana-crm `--track network` exporter). Every field may be missing; what
+ * Twenty knows about the relationship: how warm, where it comes from, and the last two-way exchange.
+ */
+export type DossierNetwork = {
+  tier?: string | null; relationship?: string | null; origins?: string[] | null; last_exchanged_at?: string | null;
+  last_channel?: string | null; last_contacted_at?: string | null; owners?: string[] | null; context?: string | null;
+};
 /** The guest block of a podcast-guest dossier (vibrana-crm guest exporter). Every field may be missing. */
 export type DossierGuest = {
   season?: string | null; lane?: string | null; tier?: string | null; pillar?: string | null; template?: string | null;
@@ -70,8 +96,12 @@ export type DossierGuest = {
 
 export type Dossier = {
   twenty_person_id: string; domain?: string | null; built_at?: string | null;
-  /** Guest dossiers only: 'guest', how they are reached, and whether Twenty has them (twenty_person_id is 'guest-md:<slug>' when not). */
+  /**
+   * Guest and network dossiers: the track, how they are reached, and whether Twenty has them (a guest's twenty_person_id is
+   * 'guest-md:<slug>' when not; a network contact is always in Twenty).
+   */
   track?: Track | null; route?: Route | null; not_in_twenty?: boolean | null; score?: number | null; guest?: DossierGuest | null;
+  network?: DossierNetwork | null;
   prospect?: DossierProspect | null; company?: DossierCompany | null; signal?: DossierSignal | null;
   triggers?: DossierTrigger[] | null; sources?: DossierSource[] | null; brief?: DossierBrief | null; person?: DossierPerson | null;
   colleagues?: Colleague[] | null; history?: HistoryItem[] | null; client_check?: ClientCheck | null;
@@ -167,7 +197,7 @@ export function normalizeDossier(input: Record<string, unknown>, track: Track = 
   const raw = storable(input);
   const p = (isObject(raw.prospect) ? raw.prospect : {}) as DossierProspect;
   const c = (isObject(raw.company) ? raw.company : {}) as DossierCompany;
-  // The client contract carries the score on the prospect; the guest contract carries it at the top.
+  // The client contract carries the score on the prospect; the guest and network contracts carry it at the top.
   const rawScore = p.score != null && str(p.score) !== "" ? p.score : raw.score;
   const score = typeof rawScore === "number" ? rawScore : rawScore != null && str(rawScore) !== "" && Number.isFinite(Number(rawScore)) ? Number(rawScore) : null;
   const built = str(raw.built_at);
@@ -186,15 +216,26 @@ export function normalizeDossier(input: Record<string, unknown>, track: Track = 
 /** Problems with one dossier, in the words the CLI prints. Empty means it can be imported. */
 export function dossierProblems(d: DossierImport, raw: Record<string, unknown>): string[] {
   const out: string[] = [];
-  // A guest file holds guest rows and a client file client rows (a client row may leave the track out: it is the old contract).
+  // A guest file holds guest rows, a network file network rows and a client file client rows (a client row may leave the
+  // track out: it is the old contract).
   const rowTrack = raw.track == null || raw.track === "" ? (d.track === "client" ? "client" : null) : str(raw.track);
   if (rowTrack !== d.track) out.push(`is a ${rowTrack ?? "row with no track"}, but this is a ${d.track} import (--track ${d.track})`);
+  if (d.track === "guest" && raw.route != null && !(ROUTES as readonly string[]).includes(str(raw.route))) out.push(`route "${str(raw.route)}" is not email, linkedin or intermediary`);
+  // A network person is reached directly: their own email or a LinkedIn note, never an intermediary (the exporter emits only these).
+  if (d.track === "network" && raw.route != null && str(raw.route) !== "email" && str(raw.route) !== "linkedin") out.push(`route "${str(raw.route)}" is not email or linkedin`);
   if (d.track === "guest") {
     if (raw.guest != null && !isObject(raw.guest)) out.push("guest must be an object or null");
-    if (raw.route != null && !(ROUTES as readonly string[]).includes(str(raw.route))) out.push(`route "${str(raw.route)}" is not email, linkedin or intermediary`);
     if (isObject(raw.guest)) {
       if (raw.guest.prompts != null && !Array.isArray(raw.guest.prompts)) out.push("guest.prompts must be an array");
       if (raw.guest.template != null && !/^0[1-4]$/.test(str(raw.guest.template))) out.push(`guest.template "${str(raw.guest.template)}" is not 01 to 04`);
+    }
+  }
+  if (d.track === "network") {
+    if (raw.network != null && !isObject(raw.network)) out.push("network must be an object or null");
+    if (isObject(raw.network)) {
+      const n = raw.network;
+      if (n.tier != null && !(NETWORK_TIERS as readonly string[]).includes(str(n.tier))) out.push(`network.tier "${str(n.tier)}" is not T1 or T2`);
+      for (const k of ["origins", "owners"] as const) if (n[k] != null && (!Array.isArray(n[k]) || (n[k] as unknown[]).some((x) => typeof x !== "string"))) out.push(`network.${k} must be an array of strings`);
     }
   }
   if (!PERSON_ID.test(d.twenty_person_id)) out.push("twenty_person_id is letters, digits and . _ : - (at most 100)");
@@ -251,11 +292,12 @@ export function parseProfile(text: string): Profile {
 export const DESK_FILTERS = ["to_write", "written", "sent", "skipped"] as const;
 export type DeskState = (typeof DESK_FILTERS)[number];
 export const DESK_LABEL: Record<DeskState, string> = { to_write: "To write", written: "Written", sent: "Sent", skipped: "Skipped" };
-/** The guest queue also filters by "Follow-up due" and "Needs route"; neither is a state (a person is in one state at a time). */
+/** The guest and network queues also filter by "Follow-up due" and "Needs route"; neither is a state (a person is in one state at a time). */
 export type DeskFilter = DeskState | "followup_due" | "needs_route";
 export const FILTERS: Record<Track, readonly DeskFilter[]> = {
   client: DESK_FILTERS,
   guest: ["to_write", "written", "sent", "followup_due", "skipped", "needs_route"],
+  network: ["to_write", "written", "sent", "followup_due", "skipped", "needs_route"],
 };
 export const FILTER_LABEL: Record<DeskFilter, string> = { ...DESK_LABEL, followup_due: "Follow-up due", needs_route: "Needs route" };
 
@@ -265,11 +307,12 @@ export type DeskDraftState = Pick<Draft, "status" | "email_status" | "linkedin_s
 
 /**
  * Sent beats skipped beats written: a person John wrote to is sent, whatever else happened. For a client that is the email
- * (a LinkedIn invite alone is not); a guest is reached by email, LinkedIn note or an intermediary, and any of them is sent.
+ * (a LinkedIn invite alone is not); a guest or a network contact is reached by email, LinkedIn note or (guests) an
+ * intermediary, and any of them is sent.
  */
 export function deskState(row: { skipped_at: string | null }, draft: DeskDraftState | null | undefined, track: Track = "client"): DeskState {
   if (draft && (draft.email_status === "sent" || draft.email_status === "replied")) return "sent";
-  if (draft && track === "guest" && (draft.linkedin_status === "sent" || draft.linkedin_status === "connected")) return "sent";
+  if (draft && isWarmTrack(track) && (draft.linkedin_status === "sent" || draft.linkedin_status === "connected")) return "sent";
   if (row.skipped_at) return "skipped";
   if (draft) return "written";
   return "to_write";
@@ -278,7 +321,7 @@ export function deskState(row: { skipped_at: string | null }, draft: DeskDraftSt
 export type QueueRow = {
   twenty_person_id: string; track?: Track; domain: string | null; name: string; company: string; title: string; score: number | null;
   skipped_at: string | null; skip_reason: string; email: string | null; client_ok: boolean | null;
-  /** Guests: how they are reached, and whether Twenty has them (from the dossier). */
+  /** Guests and network contacts: how they are reached, and whether Twenty has them (from the dossier). */
   route?: Route | null; not_in_twenty?: boolean | string | null;
 };
 export type QueueItem = QueueRow & {
@@ -289,7 +332,7 @@ export type QueueItem = QueueRow & {
 
 /**
  * The queue of one track: highest score first, then by name. Each person carries their desk state. Rows and drafts of the
- * other track are left out, so a guest can never show in the client queue or the reverse (a row with no track is a client).
+ * other tracks are left out, so a guest can never show in the client or network queue, or any other mix (a row with no track is a client).
  */
 export function buildQueue(rows: QueueRow[], drafts: Array<DeskDraftState & { id: string; person: string; track?: Track }>, track: Track = "client"): QueueItem[] {
   const byPerson = new Map(drafts.filter((d) => (d.track ?? "client") === track).map((d) => [d.person, d]));
@@ -322,20 +365,20 @@ export function daysBetween(from: string | Date, to: string | Date, tz: string):
 }
 
 /**
- * What "sent today" counts: a client's email, or a guest's email or LinkedIn note (any route counts; an intermediary note is
- * an email_status sent). A follow-up never counts toward the target, so follow_up_sent_at is never read here.
+ * What "sent today" counts: a client's email, or a guest's or network contact's email or LinkedIn note (any route counts; an
+ * intermediary note is an email_status sent). A follow-up never counts toward the target, so follow_up_sent_at is never read here.
  */
 export function sentToday(items: Array<{ email_sent_at: string | null; linkedin_sent_at?: string | null }>, tz: string, track: Track = "client", now: Date = new Date()): number {
   const today = dayIn(now, tz);
   const on = (iso: string | null | undefined) => !!iso && dayIn(iso, tz) === today;
-  return items.filter((i) => on(i.email_sent_at) || (track === "guest" && on(i.linkedin_sent_at))).length;
+  return items.filter((i) => on(i.email_sent_at) || (isWarmTrack(track) && on(i.linkedin_sent_at))).length;
 }
 
-/** When a guest was first reached: the email or the LinkedIn note, the earliest of the email and the LinkedIn note. */
+/** When a guest or network contact was first reached: the earliest of the email and the LinkedIn note. */
 export const firstSentAt = (i: { email_sent_at: string | null; linkedin_sent_at?: string | null }) => [i.email_sent_at, i.linkedin_sent_at].filter((t): t is string => !!t).sort()[0] ?? null;
 
 /**
- * A guest whose follow-up is due: sent 7 or more calendar days ago (in the report time zone), no reply, no follow-up yet
+ * A guest or network contact whose follow-up is due: sent 7 or more calendar days ago (in the report time zone), no reply, no follow-up yet
  * (outreach/05). Pure on its inputs, so the edge days are unit-tested.
  */
 export function followUpDue(i: { state: DeskState; email_status: Draft["email_status"] | null; follow_up_status: Draft["follow_up_status"] | null; email_sent_at: string | null; linkedin_sent_at?: string | null }, tz: string, now: Date = new Date()): boolean {
@@ -343,7 +386,7 @@ export function followUpDue(i: { state: DeskState; email_status: Draft["email_st
   return i.state === "sent" && i.email_status !== "replied" && (i.follow_up_status ?? "none") === "none" && !!at && daysBetween(at, now, tz) >= FOLLOW_UP_DAYS;
 }
 
-/** A guest with no email or LinkedIn to write to: it goes through an intermediary, or Twenty does not have them yet. */
+/** A guest or network contact with no email or LinkedIn to write to: it goes through an intermediary, or Twenty does not have them yet. */
 export const needsRoute = (i: { route?: Route | null; not_in_twenty?: boolean | string | null }) => i.route === "intermediary" || String(i.not_in_twenty) === "true";
 
 /** The people one queue chip lists. "Needs route" leaves out people already sent or skipped: there is nothing left to route. */
@@ -397,7 +440,7 @@ export function prefill(dossier: Dossier, profile: Profile, desk: Pick<Draft, "s
   if (desk) return { to: str(desk.prospect?.email) || to, subject: desk.subject, body: resign(desk.body), linkedin_note: desk.linkedin_note, from: "desk" };
   if (own) return { to, subject: own.subject, body: resign(own.body), linkedin_note: own.linkedin_note, from: "own" };
   // Through an intermediary the first line goes to whoever answers the organization's inbox, not to the guest.
-  const viaOrg = dossier.track === "guest" && guestRoute(dossier) === "intermediary";
+  const viaOrg = isWarmTrack(dossier.track) && guestRoute(dossier) === "intermediary";
   return { to: viaOrg ? str(dossier.guest?.org_email) || to : to, subject: "", body: blankBody(firstName(dossier), profile.signature, viaOrg ? "Hello," : undefined), linkedin_note: "", from: "blank" };
 }
 
@@ -411,11 +454,11 @@ export function deskEditProblems(e: DeskEdit): string[] {
   return out;
 }
 
-/** How a guest is reached: the dossier's route, else email. */
+/** How a guest or network contact is reached: the dossier's route, else email. */
 export const guestRoute = (d: Pick<Dossier, "route"> | null | undefined): Route => ((ROUTES as readonly string[]).includes(str(d?.route)) ? (str(d?.route) as Route) : "email");
 
 /**
- * What has to be there before a guest is marked sent, by route. An email needs what any email needs; a LinkedIn note needs the
+ * What has to be there before a guest or network contact is marked sent, by route. An email needs what any email needs; a LinkedIn note needs the
  * note; an intermediary message goes through an organization's contact (often a form or a phone line), so it needs only the text.
  */
 export function routeSendProblems(e: DeskEdit, route: Route): string[] {
@@ -586,7 +629,7 @@ export function guestReach(d: Dossier, name: string, company: string): ReachLink
   const email = str(p.email), org = str(g.org_email);
   if (email) out.push({ kind: "email", label: email, href: `mailto:${email}`, copy: email, found: true });
   if (org && org !== email) out.push({ kind: "org_email", label: `${org} (organization)`, href: `mailto:${org}`, copy: org, found: true });
-  const site = siteUrl(g.website) ?? (d.domain && !d.domain.endsWith(".guest.invalid") ? siteUrl(d.domain) : null);
+  const site = siteUrl(g.website) ?? (d.domain && !isSyntheticDomain(d.domain) ? siteUrl(d.domain) : null);
   if (site) out.push({ kind: "website", label: cleanDomain(site) ?? site, href: site, copy: site, found: true });
   const contact = safeUrl(g.contact_url);
   if (contact && contact !== site) out.push({ kind: "contact", label: "Contact page", href: contact, copy: contact, found: true });
@@ -631,5 +674,8 @@ export function isAbout(draft: Pick<Draft, "domain" | "prospect">, personId: str
   if (pid) return pid === personId;
   return !!domain && draft.domain === domain;
 }
+
+/** A placeholder domain the exporters make up for someone with no organization ('<slug>.guest.invalid', '<slug>.network.invalid'). */
+export const isSyntheticDomain = (domain: string | null | undefined) => !!domain && domain.endsWith(".invalid");
 
 export const safeUrl = (u: string | null | undefined) => (u && /^https?:\/\//i.test(u.trim()) ? u.trim() : null);

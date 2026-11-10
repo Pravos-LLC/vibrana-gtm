@@ -1,10 +1,11 @@
 "use client";
 import { OFFER_IDS, offerName, type OfferOverride } from "@/lib/outreach/offers";
 
-// /outreach/write: John reviews each client email and guest invitation (VIB-463: two streams,
-// one screen). Left, the stream switch, both meters (each stream's sent today against its own target, always visible) and
-// the queue (highest score first); center, the composer, autosaved to his desk draft; right, the dossier and his own profile.
-// A guest is reached by email, a LinkedIn note or an intermediary, so the composer follows the route on the dossier.
+// /outreach/write: John reviews each client email and guest invitation and writes each note to his own network (VIB-463,
+// VIB-522: three streams, one screen). Left, the stream switch, every meter (each stream's sent today against its own target,
+// always visible) and the queue (highest score first); center, the composer, autosaved to his desk draft; right, the dossier
+// and his own profile. A guest or network contact (the warm streams) is reached by email, a LinkedIn note or (guests) an
+// intermediary, so the composer follows the route on the dossier. The network stream has no AI angles: he writes those himself.
 // Hints are advice only: nothing here blocks a save or a send, and a client email's dashes are his own.
 // Keyboard: J/K next and previous person, / search, G switch stream, Cmd/Ctrl+S save, Cmd/Ctrl+Enter mark sent (one step; Not sent undoes it).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toaster";
 import { cn } from "@/lib/ui/cn";
 import {
-  applyLink, blankBody, bodyHtml, bodyLinks, bodyPlain, DESK_LABEL, DESK_LIMITS, deskEditProblems, deskState, FILTER_LABEL, FILTERS, firstName, followUpDue, gmailComposeUrl, guestRoute, hasLinks, hints, matchesFilter,
+  applyLink, blankBody, bodyHtml, bodyLinks, bodyPlain, DESK_LABEL, DESK_LIMITS, deskEditProblems, deskState, FILTER_LABEL, FILTERS, firstName, followUpDue, gmailComposeUrl, guestRoute, hasAngles, hasLinks, hints, isWarmTrack, matchesFilter,
   needsRoute, normalizeLinkUrl, removeLink, ROUTE_LABEL, routeSendProblems, safeUrl, sameDeskEdit, scaffoldFor, sentToday, SLOT, TRACK_LABEL, TRACKS, WORDS,
   type DeskEdit, type DeskFilter, type DeskSettings, type DeskState, type DossierRow, type QueueItem, type Track,
 } from "@/lib/outreach/desk";
@@ -58,6 +59,8 @@ const copyBody = (body: string, done = "Body copied.") => {
     : navigator.clipboard?.writeText(plain);
   void Promise.resolve(write).then(() => toast(done), () => toast("Could not copy the body."));
 };
+/** "Clients are", "Guests are", but "Network is". */
+const isAre = (t: Track) => (t === "network" ? "is" : "are");
 const editOf = (p: DeskPerson): DeskEdit => ({ to: p.start.to, subject: p.start.subject, body: p.start.body, linkedin_note: p.start.linkedin_note });
 
 export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks, tz, actions }: {
@@ -87,7 +90,7 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [skipping, setSkipping] = useState(false);
   const [skipReason, setSkipReason] = useState("");
-  const [targets, setTargets] = useState<Record<Track, number>>({ client: tracks.client.daily_target, guest: tracks.guest.daily_target });
+  const [targets, setTargets] = useState<Record<Track, number>>(() => Object.fromEntries(TRACKS.map((t) => [t, tracks[t].daily_target])) as Record<Track, number>);
   const [editingTarget, setEditingTarget] = useState<Track | null>(null);
   const [linking, setLinking] = useState<{ start: number; end: number; url: string } | null>(null);
   const search = useRef<HTMLInputElement>(null);
@@ -102,20 +105,24 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
   const queuesRef = useRef(queues); queuesRef.current = queues;
   const inflight = useRef<Promise<boolean> | null>(null);
 
+  // Podcast-specific parts (templates, slots, the invitation wording) are guest-only; warm-stream behavior (routes, any route
+  // counts, the follow-up, a final LinkedIn note) is shared by guests and the network.
   const guest = track === "guest";
+  const warm = isWarmTrack(track);
+  const angled = hasAngles(track);
   const queue = queues[track];
   const profile = tracks[track].profile;
   const from = tracks[track].from_address;
   const id = person?.row.twenty_person_id ?? null;
   const item = queue.find((q) => q.twenty_person_id === id) ?? null;
   const state: DeskState | null = person ? deskState(item ?? person.row, draft, track) : null;
-  // A client's email, or any of a guest's routes: once it is sent the text is final.
-  const emailSent = guest
+  // A client's email, or any of a warm stream's routes: once it is sent the text is final.
+  const emailSent = warm
     ? draft?.email_status === "sent" || draft?.email_status === "replied" || draft?.linkedin_status === "sent" || draft?.linkedin_status === "connected"
     : draft?.email_status === "sent" || draft?.email_status === "replied";
   const inviteSent = draft?.linkedin_status === "sent" || draft?.linkedin_status === "connected";
   const clientCheckPassed = person?.row.dossier.client_check?.ok === true;
-  const route = guest && person ? guestRoute(person.row.dossier) : "email";
+  const route = warm && person ? guestRoute(person.row.dossier) : "email";
   const followedUp = draft?.follow_up_status === "sent";
   const dirty = !!edit && !!saved && !sameDeskEdit(edit, saved);
   const problems = edit ? deskEditProblems(edit) : [];
@@ -143,7 +150,7 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [edit?.body, guest, person?.row.twenty_person_id]);
+  }, [edit?.body, warm, person?.row.twenty_person_id]);
   const assets = (profile.assets ?? []).filter((a) => safeUrl(a.url));
   const scaffold = guest && person && route !== "linkedin" ? scaffoldFor(profile, person.row.dossier) : null;
   const slots = guest && edit ? [...new Set(edit.body.match(SLOT) ?? [])] : [];
@@ -255,10 +262,11 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
     const next = { ...before, body: formatOutreachEmail(before.body, profile.signature) };
     editRef.current = next; setEdit(next);
   };
-  // Both streams' progress is always on screen: each is counted on John's calendar day, against its own target.
-  const todays: Record<Track, number> = { client: sentToday(queues.client, tz, "client"), guest: sentToday(queues.guest, tz, "guest") };
+  // Every stream's progress is always on screen: each is counted on John's calendar day, against its own target.
+  const todays = Object.fromEntries(TRACKS.map((t) => [t, sentToday(queues[t], tz, t)])) as Record<Track, number>;
   const today = todays[track], target = targets[track];
-  const otherTrack: Track = guest ? "client" : "guest";
+  // When this stream is done for today, the first other stream (in stream order) still short of its target.
+  const otherTrack: Track | null = TRACKS.find((t) => t !== track && todays[t] < targets[t]) ?? null;
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return queue.filter((i) => (q ? `${i.name} ${i.company} ${i.title} ${i.domain ?? ""}`.toLowerCase().includes(q) : matchesFilter(i, filter, tz)));
@@ -275,7 +283,7 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
       });
       return { ...next, state: deskState(next, dd, q.track) };
     });
-    setQueues((cur) => ({ client: patch(cur.client), guest: patch(cur.guest) }));
+    setQueues((cur) => Object.fromEntries(TRACKS.map((t) => [t, patch(cur[t])])) as Record<Track, QueueItem[]>);
   }, []);
 
   /** Save now if anything changed. Resolves false when the text can't be saved (it says why). */
@@ -410,7 +418,7 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
     toast("LinkedIn invite marked sent.");
   };
 
-  /** The single follow-up (guests): marked separately, so it never counts toward the target. */
+  /** The single follow-up (guests and the network): marked separately, so it never counts toward the target. */
   const markFollowUp = async (undo = false) => {
     if (!person) return;
     const r = await (undo ? actions.undoFollowUp : actions.markFollowUp)(person.row.twenty_person_id, track);
@@ -477,7 +485,7 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
       if (typing(e.target) || mod || e.altKey) return;
       const k = e.key.toLowerCase();
       if (k === "j" || k === "k") { e.preventDefault(); step(k === "j" ? 1 : -1); return; }
-      if (k === "g") { e.preventDefault(); void switchTrack(trackRef.current === "client" ? "guest" : "client"); return; }
+      if (k === "g") { e.preventDefault(); void switchTrack(TRACKS[(TRACKS.indexOf(trackRef.current) + 1) % TRACKS.length]); return; }
       if (e.key === "/") { e.preventDefault(); search.current?.focus(); }
     };
     window.addEventListener("keydown", onKey);
@@ -491,9 +499,9 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
   const sentLabel = route === "linkedin" ? "LinkedIn note sent" : route === "intermediary" ? "Sent via an intermediary" : "Email sent";
   const sentAt = draft?.email_sent_at ?? draft?.linkedin_sent_at ?? null;
   const stamp = (iso: string) => new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
-  const due = !!item && guest && followUpDue(item, tz, now);
+  const due = !!item && warm && followUpDue(item, tz, now);
   const showEmailFields = route !== "linkedin";
-  const showNoteBox = !guest || route === "linkedin";
+  const showNoteBox = !warm || route === "linkedin";
   const gmailHref = edit ? gmailComposeUrl(edit, from) : "#";
 
   const meter = (t: Track) => {
@@ -550,8 +558,8 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
                 <span className="flex items-center gap-1.5">
                   <span className="truncate text-xs text-ink-2">{q.company}</span>
                   {q.client_ok === false && <AlertTriangle className="size-3 shrink-0 text-red-strong" aria-label="Client check did not pass" />}
-                  {guest && needsRoute(q) && <Badge variant="warning" className="px-1.5 py-0 text-[0.65rem]">Route</Badge>}
-                  {guest && followUpDue(q, tz, now) && <Badge variant="info" className="px-1.5 py-0 text-[0.65rem]">Follow up</Badge>}
+                  {warm && needsRoute(q) && <Badge variant="warning" className="px-1.5 py-0 text-[0.65rem]">Route</Badge>}
+                  {warm && followUpDue(q, tz, now) && <Badge variant="info" className="px-1.5 py-0 text-[0.65rem]">Follow up</Badge>}
                   {query && <Badge variant={STATE_TONE[q.state]} className="ml-auto px-1.5 py-0 text-[0.65rem]">{DESK_LABEL[q.state]}</Badge>}
                 </span>
               </button>
@@ -564,28 +572,28 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
 
       {/* Composer */}
       <section className="min-h-0 space-y-3 lg:overflow-y-auto lg:pr-1" aria-label="Composer" data-testid="desk-composer">
-        {todays[track] >= target && todays[otherTrack] < targets[otherTrack] && (
+        {todays[track] >= target && otherTrack && (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-[color:var(--emerald)]/40 bg-[color:var(--emerald)]/10 px-3 py-2 text-sm text-ink" data-testid="desk-jump">
-            <Check className="size-4 text-[color:var(--emerald)]" /> {TRACK_LABEL[track]} are done for today ({today}/{target}). {TRACK_LABEL[otherTrack]} are at {todays[otherTrack]}/{targets[otherTrack]}.
+            <Check className="size-4 text-[color:var(--emerald)]" /> {TRACK_LABEL[track]} {isAre(track)} done for today ({today}/{target}). {TRACK_LABEL[otherTrack]} {isAre(otherTrack)} at {todays[otherTrack]}/{targets[otherTrack]}.
             <Button size="sm" variant="secondary" className="ml-auto" onClick={() => void switchTrack(otherTrack)}>Go to {TRACK_LABEL[otherTrack]}</Button>
           </div>
         )}
-        {!person && <div className="rounded-lg border border-line p-10 text-center text-sm text-ink-2">{queue.length ? "Pick someone from the queue." : <>No {guest ? "guest " : ""}dossiers yet. Load them with <code>gtm outreach import-dossiers{guest ? " --track guest" : ""} --file dossiers.json</code>.</>}</div>}
+        {!person && <div className="rounded-lg border border-line p-10 text-center text-sm text-ink-2">{queue.length ? "Pick someone from the queue." : <>No {track !== "client" ? `${track} ` : ""}dossiers yet. Load them with <code>gtm outreach import-dossiers{track !== "client" ? ` --track ${track}` : ""} --file dossiers.json</code>.</>}</div>}
         {person && edit && (
           <>
             <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
               <h2 className="font-display text-pl-lg font-semibold tracking-tight text-ink" data-testid="desk-name">{person.row.name || person.row.twenty_person_id}</h2>
               <span className="text-sm text-ink-2">{[person.row.title, person.row.company].filter(Boolean).join(", ")}</span>
               {state && <Badge variant={STATE_TONE[state]} data-testid="desk-state">{DESK_LABEL[state]}</Badge>}
-              {guest && <Badge variant="outline" data-testid="desk-route">{ROUTE_LABEL[route]}</Badge>}
-              {guest && String(person.row.dossier.not_in_twenty) === "true" && <Badge variant="warning">Not in Twenty</Badge>}
-              {!guest && inviteSent && <Badge variant="outline">LinkedIn invite sent</Badge>}
+              {warm && <Badge variant="outline" data-testid="desk-route">{ROUTE_LABEL[route]}</Badge>}
+              {warm && String(person.row.dossier.not_in_twenty) === "true" && <Badge variant="warning">Not in Twenty</Badge>}
+              {!warm && inviteSent && <Badge variant="outline">LinkedIn invite sent</Badge>}
               <span className="ml-auto text-xs text-ink-3" data-testid="desk-save-state" aria-live="polite">
                 {loading ? "Loading..." : saveState === "saving" ? "Saving..." : dirty ? "Unsaved" : saveState === "saved" ? "Saved" : draft ? "Saved" : person.start.from === "own" ? "Your earlier rewrite, not saved here yet" : ""}
               </span>
             </header>
             {clientBad && <p className="flex items-center gap-1.5 text-xs text-red-strong"><AlertTriangle className="size-3.5" /> Client check did not pass: {person.row.dossier.client_check?.reason || "see the dossier"}.</p>}
-            <section className="space-y-4 rounded-xl border border-line bg-[color:var(--surface-card)] p-4 sm:p-5" aria-label="AI outreach angles" data-testid="desk-ai-angles">
+            {angled && <section className="space-y-4 rounded-xl border border-line bg-[color:var(--surface-card)] p-4 sm:p-5" aria-label="AI outreach angles" data-testid="desk-ai-angles">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-base font-medium text-ink">Choose your opening</p>
@@ -654,14 +662,14 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
                     )}
                   </>
                 )}
-              </section>
+              </section>}
             {person.row.skipped_at && (
               <p className="flex flex-wrap items-center gap-2 rounded-md border border-[color:var(--amber)]/40 bg-[color:var(--amber)]/10 px-3 py-2 text-xs text-amber-strong">
                 Skipped{person.row.skip_reason ? `: ${person.row.skip_reason}` : ""}.
                 <Button size="sm" variant="ghost" className="h-6 px-2" onClick={() => void unskip()}><Undo2 /> Unskip</Button>
               </p>
             )}
-            {guest && (
+            {warm && (
               <div className={cn("space-y-1.5 rounded-md border px-3 py-2 text-sm", route === "intermediary" ? "border-[color:var(--amber)]/40 bg-[color:var(--amber)]/10" : "border-line")} data-testid="desk-contact">
                 <p className="text-xs font-medium uppercase tracking-wide text-ink-3">{route === "intermediary" ? "Reach them through" : "Find them"}</p>
                 {route === "intermediary" && <p className="whitespace-pre-wrap text-ink">{guestInfo?.contact_line || "No contact line in the dossier. Use the links below to find the organization's contact."}</p>}
@@ -736,9 +744,9 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
 
             {hint && (
               <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-3" data-testid="desk-hints">
-                {!(guest && route === "linkedin") && (
-                  <span className={cn("tabular-nums", hint.length === "long" && "text-amber-strong")} title={guest ? `Your gold examples run about ${WORDS.low + 10} to ${WORDS.high - 20} words` : "A short question and an optional resource offer can be enough for a first message."}>
-                    {hint.words} words{guest && hint.length === "short" && hint.words >= 20 ? ", shorter than your examples" : hint.length === "long" ? ", longer than your examples" : ""}
+                {!(warm && route === "linkedin") && (
+                  <span className={cn("tabular-nums", hint.length === "long" && "text-amber-strong")} title={warm ? `Your gold examples run about ${WORDS.low + 10} to ${WORDS.high - 20} words` : "A short question and an optional resource offer can be enough for a first message."}>
+                    {hint.words} words{warm && hint.length === "short" && hint.words >= 20 ? ", shorter than your examples" : hint.length === "long" ? ", longer than your examples" : ""}
                   </span>
                 )}
                 {hint.british.length > 0 && <span className="text-amber-strong">British spelling: {hint.british.join(", ")}</span>}
@@ -750,7 +758,7 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
 
             <div className="flex flex-wrap items-center gap-2">
               {showEmailFields && <>
-                {!guest && <Button size="sm" variant="ghost" onClick={() => void formatEmail()} disabled={emailSent} data-testid="desk-format-email"><FileText /> Format email</Button>}
+                {!warm && <Button size="sm" variant="ghost" onClick={() => void formatEmail()} disabled={emailSent} data-testid="desk-format-email"><FileText /> Format email</Button>}
                 <Button size="sm" variant="secondary" onClick={() => copy("Subject", edit.subject)} disabled={!edit.subject}><Copy /> Copy subject</Button>
                 <Button size="sm" variant="secondary" onClick={() => copyBody(edit.body)}><Copy /> Copy body</Button>
                 {(route === "email" || edit.to.trim()) && (
@@ -761,9 +769,9 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
               </>}
               {!emailSent
                 ? <Button size="sm" onClick={() => void markSent()} disabled={problems.length > 0}><Check /> Mark sent</Button>
-                : <><Badge variant="success">{guest ? sentLabel : "Email sent"}{sentAt ? ` ${stamp(sentAt)}` : ""}</Badge>
+                : <><Badge variant="success">{warm ? sentLabel : "Email sent"}{sentAt ? ` ${stamp(sentAt)}` : ""}</Badge>
                     <Button size="sm" variant="ghost" className="text-ink-3" onClick={() => void undoSent()}><Undo2 /> Not sent</Button></>}
-              {guest && emailSent && (followedUp
+              {warm && emailSent && (followedUp
                 ? <><Badge variant="success" data-testid="desk-followup-sent">Follow-up sent{draft?.follow_up_sent_at ? ` ${stamp(draft.follow_up_sent_at)}` : ""}</Badge>
                     <Button size="sm" variant="ghost" className="text-ink-3" onClick={() => void markFollowUp(true)}><Undo2 /> Follow-up not sent</Button></>
                 : <>{due && <Badge variant="info" data-testid="desk-followup-due">Follow-up due</Badge>}
@@ -783,12 +791,12 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
                 <label className="block space-y-1">
                   <span className="flex justify-between text-xs text-ink-3"><span>LinkedIn note</span>
                     <span className={cn("tabular-nums", edit.linkedin_note.length > DESK_LIMITS.linkedin_note && "text-red-strong")} data-testid="desk-note-count">{edit.linkedin_note.length}/{DESK_LIMITS.linkedin_note}</span></span>
-                  <textarea value={edit.linkedin_note} disabled={guest && emailSent} onChange={(e) => setEdit({ ...edit, linkedin_note: e.target.value })} rows={guest ? 8 : 4} aria-label="LinkedIn note" className={cn(field, "text-base leading-relaxed")} />
+                  <textarea value={edit.linkedin_note} disabled={warm && emailSent} onChange={(e) => setEdit({ ...edit, linkedin_note: e.target.value })} rows={warm ? 8 : 4} aria-label="LinkedIn note" className={cn(field, "text-base leading-relaxed")} />
                 </label>
                 <div className="flex flex-wrap items-center gap-2">
                   <Button size="sm" variant="secondary" onClick={() => copy("Note", edit.linkedin_note)} disabled={!edit.linkedin_note}><Copy /> Copy note</Button>
                   {linkedinUrl && <Button size="sm" variant="secondary" asChild><a href={linkedinUrl} target="_blank" rel="noreferrer"><ExternalLink /> Open profile</a></Button>}
-                  {!guest && (inviteSent ? <Badge variant="success">Invite sent</Badge> : <Button size="sm" variant="secondary" onClick={() => void markInvite()} disabled={problems.length > 0}><Check /> Mark invite sent</Button>)}
+                  {!warm && (inviteSent ? <Badge variant="success">Invite sent</Badge> : <Button size="sm" variant="secondary" onClick={() => void markInvite()} disabled={problems.length > 0}><Check /> Mark invite sent</Button>)}
                 </div>
               </div>
             )}

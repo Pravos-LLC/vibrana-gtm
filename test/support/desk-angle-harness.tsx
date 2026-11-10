@@ -40,4 +40,4 @@ const actions = {
   markSent: failure, undoSent: failure, markInvite: failure, markFollowUp: failure, undoFollowUp: failure, skip: failure, unskip: failure, setTarget: failure,
 } as unknown as DeskActions;
 const settings = { daily_target: 5, from_address: "jo@fixture.example", profile_imported_at: null, profile: { name: "Jo Fixture", signature } };
-createRoot(document.getElementById("root")!).render(<WritingDesk initialQueues={{ client: queue, guest: [] }} initialTrack="client" initialPerson={first} tracks={{ client: settings, guest: settings }} tz="UTC" actions={actions} />);
+createRoot(document.getElementById("root")!).render(<WritingDesk initialQueues={{ client: queue, guest: [], network: [] }} initialTrack="client" initialPerson={first} tracks={{ client: settings, guest: settings, network: settings }} tz="UTC" actions={actions} />);

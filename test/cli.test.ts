@@ -842,7 +842,7 @@ test("gtm outreach import-dossiers refuses a bad file outright; import-profile n
   assert.match(noSig.stderr, /no signature/);
   const noTrack = gtm(["outreach", "import-profile", "--file", "{dir}/p.json"], { files: { "p.json": JSON.stringify({ name: "Jo", signature: "Jo" }) } });
   assert.equal(noTrack.code, 1);
-  assert.match(noTrack.stderr, /needs --track client\|guest/);
+  assert.match(noTrack.stderr, /needs --track client\|guest\|network/);
   assert.equal(noTrack.calls.length, 0, "nothing is written without an explicit stream");
   const ok = gtm(["outreach", "import-profile", "--file", "{dir}/p.json", "--track", "client", "--json"], {
     files: { "p.json": JSON.stringify({ name: "Jo", signature: "Jo\nFounder", facts: [{ id: "f1", text: "t" }], assets: [{ id: "a1", url: "https://x.example" }], gold_examples: [{ subject: "s", body: "b" }, { subject: "s2", body: "b2" }] }) },
@@ -880,11 +880,55 @@ test("gtm outreach import-dossiers --track guest stamps the track and takes the 
     files: { "g.json": JSON.stringify([guestDossier("fx-g-a")]) }, routes: [{ method: "GET", url: DOSSIERS, json: [{ twenty_person_id: "fx-g-a", track: "client" }] }],
   });
   assert.equal(takeover.code, 1);
-  assert.match(takeover.stderr, /already filed under the other track/);
+  assert.match(takeover.stderr, /already filed under another track/);
   assert.equal(takeover.calls.filter((c) => c.method === "POST").length, 0);
   const bad = gtm(["outreach", "import-dossiers", "--track", "podcast", "--file", "{dir}/g.json"], { files: { "g.json": "[]" } });
   assert.equal(bad.code, 1);
-  assert.match(bad.stderr, /--track is client or guest/);
+  assert.match(bad.stderr, /--track is client, guest or network, not "podcast"/);
+});
+
+const networkDossier = (id: string, over: Record<string, unknown> = {}) => ({
+  twenty_person_id: id, domain: "nia.example", built_at: "2026-11-10T08:00:00Z", track: "network", score: 72, route: "email", not_in_twenty: false,
+  prospect: { first_name: "Nia", last_name: "Example", title: "Partner", company: "Nia Co", email: "nia@nia.example", linkedin_url: null, country: "PT", city: null, lane: null },
+  signal: { text: "LinkedIn connection; last two-way email 2026-03-04", url: null, date: "2026-03-04", type: "network_context" },
+  client_check: { ok: true, reason: "not a client", checked_at: "2026-11-10T08:00:00Z" },
+  network: { tier: "T1", relationship: "PRIOR_CONVERSATION", origins: ["LINKEDIN", "GMAIL"], last_exchanged_at: "2026-03-04T10:00:00Z", last_channel: "email", last_contacted_at: null, owners: ["JOHN"], context: "LinkedIn connection; last two-way email 2026-03-04" },
+  ...over,
+});
+
+test("gtm outreach import-dossiers --track network stamps the track and takes the top-level score; a guest or client file is refused", () => {
+  const id = "00000000-0000-4000-8000-00000000c001";
+  const r = gtm(["outreach", "import-dossiers", "--track", "network", "--file", "{dir}/n.json"], {
+    files: { "n.json": JSON.stringify([networkDossier(id)]) },
+    routes: [{ method: "GET", url: DOSSIERS, json: [] }, { method: "POST", url: DOSSIERS, status: 201, json: [{ twenty_person_id: id }] }],
+  });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /inserted 1, updated 0 of 1 network dossiers/);
+  const [row] = body(r.calls.find((c) => c.method === "POST")!);
+  assert.deepEqual([row.twenty_person_id, row.track, row.domain, row.score, row.name], [id, "network", "nia.example", 72, "Nia Example"]);
+  assert.deepEqual(row.dossier.network.origins, ["LINKEDIN", "GMAIL"], "the network block is kept as exported");
+  const guestFile = gtm(["outreach", "import-dossiers", "--track", "network", "--file", "{dir}/g.json"], { files: { "g.json": JSON.stringify([guestDossier("guest-md:gia")]) } });
+  assert.equal(guestFile.code, 1);
+  assert.match(guestFile.stderr, /guest-md:gia: is a guest, but this is a network import \(--track network\)/);
+  const asGuest = gtm(["outreach", "import-dossiers", "--track", "guest", "--file", "{dir}/n.json"], { files: { "n.json": JSON.stringify([networkDossier(id)]) } });
+  assert.equal(asGuest.code, 1);
+  assert.match(asGuest.stderr, /is a network, but this is a guest import/);
+  const badTier = gtm(["outreach", "import-dossiers", "--track", "network", "--file", "{dir}/n.json"], { files: { "n.json": JSON.stringify([networkDossier(id, { network: { tier: "T9", origins: "LINKEDIN" } })]) } });
+  assert.equal(badTier.code, 1);
+  assert.match(badTier.stderr, /network\.tier "T9" is not T1 or T2[\s\S]*network\.origins must be an array of strings/);
+  assert.equal(badTier.calls.length, 0);
+});
+
+test("gtm outreach import-profile --track network writes the network track's profile and keeps its target and sender", () => {
+  const r = gtm(["outreach", "import-profile", "--track", "network", "--file", "{dir}/p.json", "--json"], {
+    files: { "p.json": JSON.stringify({ name: "Jo", signature: "Jo", gold_examples: [{ subject: "Catching up", body: "Hey Nat," }] }) },
+    routes: [{ method: "PATCH", url: TRACKS_TABLE, json: [{ track: "network" }] }],
+  });
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), { track: "network", dryRun: false, facts: 0, proof: 0, assets: 0, gold_examples: 1, templates: 0 });
+  const patch = r.calls.find((c) => c.method === "PATCH")!;
+  assert.match(decodeURIComponent(patch.url), /track=eq\.network/);
+  assert.deepEqual(Object.keys(body(patch)).sort(), ["profile", "profile_imported_at"], "the network target and sender are kept");
 });
 
 test("gtm outreach import-profile --track guest writes the guest track's profile, with its templates, and never the client's", () => {

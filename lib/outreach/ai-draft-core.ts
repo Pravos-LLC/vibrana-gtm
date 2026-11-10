@@ -1,6 +1,6 @@
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 import { activeOffers, eligibleOffers, selectionSchema, validateOfferResponse, type Offer, type OfferOverride, type OfferChoice, type OfferSelection } from "./offers";
-import { guestRoute, scaffoldFor, type DossierRow, type Profile, type Route, type Track } from "./desk";
+import { guestRoute, isWarmTrack, scaffoldFor, type DossierRow, type Profile, type Route, type Track } from "./desk";
 import { formatOutreachEmail, outreachSignature, stripLinks } from "./email-format";
 
 export const OUTREACH_ANGLE_KEYS = ["light_touch", "direct_fit", "useful_value"] as const;
@@ -50,7 +50,8 @@ const list = (values: Array<string | null | undefined> | null | undefined, maxIt
 
 /** Build a bounded, minimal prompt context. Do not pass mailbox history or desk drafts to the model. */
 export function outreachDraftContext(row: DossierRow, profile: Profile, override: OfferOverride = "auto", configuredOffers: Offer[] = activeOffers()): DraftContext {
-  const offers = row.track === "guest" ? [] : configuredOffers;
+  // Offers are for cold client prospects only, never a warm stream.
+  const offers = isWarmTrack(row.track) ? [] : configuredOffers;
   if (override !== "auto" && override !== "none" && !offers.some((offer) => offer.id === override)) throw new Error("That offer is unavailable. Choose another offer.");
   const dossier = row.dossier;
   const prospect = dossier.prospect ?? {};
