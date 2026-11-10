@@ -198,7 +198,7 @@ export const TABLES = [
   "gtm_email_attempts", "gtm_email_reply_labels", "gtm_email_sync_ops", "gtm_email_incidents", "gtm_dmarc_reports", "gtm_job_leases",
   "gtm_yt_videos", "gtm_yt_video_daily", "gtm_yt_channel_daily", "gtm_yt_dim_daily", "gtm_yt_report_files",
   "gtm_deal_milestones", "gtm_deal_stage_history", "gtm_linkedin_connections", "gtm_linkedin_threads", "gtm_web_daily",
-  "gtm_team_calendars", "gtm_calendar_meetings",
+  "gtm_team_calendars", "gtm_calendar_meetings", "gtm_origami_replies", "gtm_origami_webhook_deliveries",
   "review_batches", "review_assets", "review_comments", "review_publications", "review_publication_cancellations",
 ] as const;
 
@@ -323,6 +323,10 @@ export async function seed() {
   must(await db.from("gtm_job_leases").insert({ job: "fixture", holder: "fixture", expires_at: "2026-01-01T00:00:00Z" }), "job lease");
   must(await db.from("gtm_team_stock_daily").insert({ member: "SAMPLE", date: "2026-11-04", metrics: { sendable: 0 } }), "team stock");
   must(await db.from("gtm_crm_people").insert({ id: "00000000-0000-4000-8000-0000000000f1", created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z" }), "crm person");
+  // Origami opt-outs (VIB-521): one recorded reply with no opt-out (ids and a verdict only), and one webhook delivery.
+  must(await db.from("gtm_origami_replies").insert({ evidence_key: "reply:00000000-0000-4000-8000-00000000f0a1:2026-11-01T00:00:00.000Z", kind: "reply", source: "poll",
+    sequence_id: "00000000-0000-4000-8000-00000000f0a1", received_at: "2026-11-01T00:00:00Z", rule_version: "origami-reply-v1", classification: "none", reason: "no_opt_out", match: "not_needed" }), "origami reply");
+  must(await db.from("gtm_origami_webhook_deliveries").insert({ webhook_id: "fixture", event: "webhook.test" }), "origami delivery");
   must(await db.from("gtm_yt_videos").insert({ video_id: "sampleyt001", title: "Sample video" }), "yt video");
   must(await db.from("gtm_yt_video_daily").insert({ date: "2026-11-04", video_id: "sampleyt001", views: 1 }), "yt video day");
   must(await db.from("gtm_yt_channel_daily").insert({ date: "2026-11-04", views: 1 }), "yt channel day");

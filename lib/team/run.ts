@@ -12,8 +12,9 @@ import { stock } from "./metrics";
 import type { TeamMember } from "./members";
 import { runEmailHealth, type HealthRun } from "../email/run";
 import { applyTwenty, detect } from "../email/suppression";
+import { runOrigamiOptouts } from "../origami/optouts";
 
-export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string }; _lease?: string; _health?: HealthRun | { error: string }; _suppression?: Record<string, unknown> };
+export type TeamRun = Record<string, { activity?: string; mailbox?: SyncResult[] | string; stock?: string }> & { _keys?: { new: string[]; error?: string }; _lease?: string; _health?: HealthRun | { error: string }; _suppression?: Record<string, unknown>; _origami?: Record<string, unknown> };
 
 const LEASE = "team.hourly";
 
@@ -79,6 +80,12 @@ async function runLeased(db: SupabaseClient, members: TeamMember[], opts: { now?
       }
     } catch (e) { r.activity ??= `error: ${(e as Error).message.slice(0, 200)}`; r.stock ??= "skipped"; }
   }
+  // Origami opt-outs (VIB-521): poll replies and unsubscribes, record them, stop the person's sequences in every campaign.
+  // Off unless ORIGAMI_OPTOUT_APPLY=1; its Twenty operations are applied by applyTwenty below. Never fails the run.
+  try {
+    reader.setDeadline(opts.deadline - 45_000);
+    out._origami = await runOrigamiOptouts(db, reader, now, { deadline: opts.deadline - 45_000 }) as Record<string, unknown>;
+  } catch (e) { out._origami = { error: (e as Error).message.slice(0, 200).replace(/[^\s@]+@[^\s@]+/g, "[address]") }; }
   // Suppression (VIB-513): record the operations the evidence implies (pending review; Origami held), then apply approved
   // Twenty operations only when EMAIL_SUPPRESSION_APPLY=1. A failure here never fails the run.
   try {

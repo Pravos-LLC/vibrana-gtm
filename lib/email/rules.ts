@@ -87,8 +87,44 @@ export function newText(text: string): string {
   return out.join("\n").trim();
 }
 
-const OPT_OUT = /\b(unsubscribe( me)?|remove me|take me off|stop (emailing|e-mailing|contacting|sending)|do not (email|contact)|don'?t (email|contact) me|opt(ed)? out|no more emails)\b/i;
-const NEGATED = /\b(don'?t|do not|please don'?t|no need to)\s+(unsubscribe|remove)\b/i;
+export const OPT_OUT = /\b(unsubscribe( me)?|remove me|take me off|stop (emailing|e-mailing|contacting|sending)|do not (email|contact)|don'?t (email|contact) me|opt(ed)? out|no more emails)\b/i;
+export const NEGATED = /\b(don'?t|do not|please don'?t|no need to)\s+(unsubscribe|remove)\b/i;
+
+/** Lowercase words only: curly quotes folded, punctuation and runs of whitespace become one space. */
+export const normalizeWords = (s: string) =>
+  s.toLowerCase().replace(/[‘’]/g, "'").replace(/[^\p{L}\p{N}'\s]+/gu, " ").replace(/'(?!\p{L})|(?<!\p{L})'/gu, " ").replace(/\s+/g, " ").trim();
+
+// Sign-offs that carry no meaning of their own. A line that is only one of these, or a trailing one on the last line, is
+// dropped; so is a short name line directly under a sign-off line ("Thanks,\nAna").
+const SIGN_OFF = /^(thanks|thank you|thanks a lot|many thanks|thx|ty|cheers|regards|best|best regards|kind regards|warm regards|all the best|br)$/;
+const TRAILING_SIGN_OFF = /\s(thanks|thank you|thx|cheers|regards|best regards|kind regards)$/;
+
+/**
+ * The words a person typed in this reply: the new text (newText), cut at a signature delimiter ("-- ") or a
+ * "Sent from my ..." line, without trailing sign-off lines, normalized (normalizeWords). Pure.
+ */
+export function replyCore(text: string): string {
+  const lines: string[] = [];
+  for (const l of newText(text).split("\n")) {
+    if (/^--\s*$/.test(l) || /^\s*sent from my\b/i.test(l) || /^\s*get outlook for\b/i.test(l)) break;
+    const w = normalizeWords(l);
+    if (w) lines.push(w);
+  }
+  for (;;) {
+    const last = lines[lines.length - 1];
+    if (last === undefined) break;
+    if (SIGN_OFF.test(last)) { lines.pop(); continue; }
+    const prev = lines[lines.length - 2];
+    if (prev !== undefined && SIGN_OFF.test(prev) && /^\p{L}+( \p{L}+){0,2}$/u.test(last)) { lines.splice(-2, 2); continue; }
+    break;
+  }
+  let core = lines.join(" ");
+  while (TRAILING_SIGN_OFF.test(core)) core = core.replace(TRAILING_SIGN_OFF, "");
+  return core.trim();
+}
+
+/** A bare "no" (or "no thanks"): what our emails ask a person to reply when they want no further contact. */
+export const bareNo = (text: string) => ["no", "nope", "no thanks", "no thank you"].includes(replyCore(text));
 
 export type ReplyRule = { intent: "auto_reply" | "uncertain"; opt_out: "none" | "uncertain" };
 
@@ -97,10 +133,11 @@ export type ReplyRule = { intent: "auto_reply" | "uncertain"; opt_out: "none" | 
  * "uncertain" intent for the model or a person to decide. `auto` is the Auto-Submitted/Precedence verdict from headers.
  * Scope: messages whose headers already declare them automated never become replies (lib/team/classify.ts threadOutcome),
  * so they are not labeled; `auto` here catches a reply whose headers say so only when it reached this point otherwise.
+ * A bare "no" is a possible opt-out too: our emails end "Reply "no" and I won't contact you again" (VIB-521).
  */
 export function replyRule(text: string, auto: boolean): ReplyRule {
   const fresh = newText(text);
-  const optOut = OPT_OUT.test(fresh) && !NEGATED.test(fresh);
+  const optOut = (OPT_OUT.test(fresh) && !NEGATED.test(fresh)) || bareNo(text);
   if (auto && !optOut) return { intent: "auto_reply", opt_out: "none" };
   return { intent: "uncertain", opt_out: optOut ? "uncertain" : "none" };
 }

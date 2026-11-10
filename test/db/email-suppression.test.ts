@@ -52,7 +52,7 @@ test("without the flag nothing is written; with it the writer re-reads, writes t
   await fresh(); await S.detect(admin());
   await S.approve(admin(), (await ops()).map((o) => o.id), "dry run 2026-11-06 approved by test", new Date());
   mock = installFetchMock([DB]);
-  assert.deepEqual(await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date()), { skipped: "EMAIL_SUPPRESSION_APPLY is not 1" });
+  assert.deepEqual(await S.applyTwenty(admin(), new TwentyReader({ pauseMs: 0 }), new Date()), { skipped: "EMAIL_SUPPRESSION_APPLY and ORIGAMI_OPTOUT_APPLY are not 1" });
   assert.equal(mock.calls.filter((c) => c.url.startsWith("https://crm.test")).length, 0);
   mock.restore();
   process.env.EMAIL_SUPPRESSION_APPLY = "1";

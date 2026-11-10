@@ -109,6 +109,8 @@ test("API routes authenticate themselves: cron and webhook refuse unauthenticate
   expect((await raw("/api/cron/sync")).status).toBe(401);
   expect((await raw("/api/cron/sync", "GET", { Authorization: "Bearer wrong" })).status).toBe(401);
   expect((await raw("/api/webhooks/zernio", "POST", { "x-zernio-signature": "00" })).status).toBe(401);
+  // The Origami webhook is dormant until ORIGAMI_WEBHOOK_SECRET is set (VIB-521; the local stack leaves it unset).
+  expect((await raw("/api/webhooks/origami", "POST", { "webhook-id": "x", "webhook-timestamp": "1", "webhook-signature": "v1,AA==" })).status).toBe(503);
   expect((await raw("/api/cron/engage", "GET", { Authorization: "Bearer wrong" })).status).toBe(401);
   expect((await raw("/api/engage/intake", "POST", { Authorization: "Bearer wrong" })).status).toBe(401);
 });

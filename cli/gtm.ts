@@ -1741,6 +1741,19 @@ const commands: Record<string, () => Promise<void>> = {
     // Email suppression (VIB-513). `plan` records what the evidence implies and prints the dry-run report (counts only);
     // `approve --ids 1,2 --ref "..."` approves pending Twenty operations against that report; `apply` runs the guarded
     // writer, only with EMAIL_SUPPRESSION_APPLY=1. Origami operations stay held until its exclusion scope is verified.
+    if (rest[0] === "origami-plan") {
+      // The Origami opt-out dry run (VIB-521): what ORIGAMI_OPTOUT_APPLY=1 would do with the evidence on Origami now.
+      // Origami GETs only (and Twenty reads when TWENTY_API_KEY is set); no database, no write. Counts only.
+      const now = new Date();
+      const { OrigamiClient } = await import("../lib/origami/client");
+      const { planOrigami } = await import("../lib/origami/optouts");
+      const { TwentyReader } = await import("../lib/twenty");
+      const since = flag("--since");
+      if (since && !Number.isFinite(Date.parse(since))) throw new Error("--since is a date or timestamp, e.g. 2026-11-01");
+      const deadline = Date.now() + 20 * 60_000;
+      const report = await planOrigami(new OrigamiClient({ deadline }), process.env.TWENTY_API_KEY && process.env.TWENTY_BASE ? new TwentyReader({ deadline }) : null, now, { since: since ? new Date(since).toISOString() : undefined });
+      return out(report, () => console.log(JSON.stringify(report, null, 2)));
+    }
     const { adminDb, must } = await import("../lib/db");
     const S = await import("../lib/email/suppression");
     const db = adminDb(), sub = rest[0], now = new Date();
@@ -1763,7 +1776,16 @@ const commands: Record<string, () => Promise<void>> = {
       const r = await S.applyTwenty(db, new TwentyReader({ deadline: Date.now() + 240_000 }), now);
       return out(r, () => console.log(JSON.stringify(r)));
     }
-    throw new Error("usage: gtm suppression plan | approve --ids 1,2 --ref TEXT | apply");
+    if (sub === "origami-reviewed") {
+      // An Origami opt-out no single Twenty person matched was handled by a person (in Twenty or by deciding it is no one
+      // there): record who, so its health incident clears. Ids are gtm_origami_replies ids.
+      const ids = (flag("--ids") ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0), by = flag("--by") ?? "";
+      if (!ids.length || !/^.{2,254}$/.test(by)) throw new Error('usage: gtm suppression origami-reviewed --ids 1,2 --by "<who handled them>"');
+      const rows = must(await db.from("gtm_origami_replies").update({ reviewed_at: now.toISOString(), reviewed_by: by, updated_at: now.toISOString() }).in("id", ids)
+        .in("match", ["ambiguous", "unmatched"]).is("reviewed_at", null).select("id"), "mark reviewed") as { id: number }[];
+      return out({ reviewed: rows.length }, () => console.log(`marked ${rows.length} Origami opt-out(s) reviewed`));
+    }
+    throw new Error("usage: gtm suppression plan | approve --ids 1,2 --ref TEXT | apply | origami-plan [--since DATE] | origami-reviewed --ids 1,2 --by NAME");
   },
 
   async team() {
@@ -2037,6 +2059,9 @@ const help = `gtm <command> [--json]
                            date and re-read its outreach threads on the next hourly run (reconciles older rows; reads only)
   suppression plan|approve|apply   email suppression (VIB-513): the dry-run report (counts only), approve pending Twenty
                            operations against it (--ids, --ref), and the guarded writer (EMAIL_SUPPRESSION_APPLY=1 only)
+  suppression origami-plan [--since DATE]   the Origami opt-out dry run (VIB-521): what ORIGAMI_OPTOUT_APPLY=1 would
+                           write to Twenty and stop in Origami, as counts; Origami reads only, no database
+  suppression origami-reviewed --ids 1,2 --by NAME   an unmatched Origami opt-out was handled by a person
   team reconcile [--days 30]   old thread-based email numbers next to the email contract v1 numbers, per member
                            (counts only; review before setting EMAIL_OUTCOMES_V2=1)
   sales reconcile [--days 60] [--apply]   match incoming Wise credits to unpaid payment milestones (same currency,

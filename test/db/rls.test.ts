@@ -22,7 +22,7 @@ before(async () => {
 
 const OUTREACH_IDS_SOLO = OUTREACH_IDS.solo;
 // Service-key-only tables: RLS on, no policy and no grant for anon or authenticated, so not even the owner reads them.
-const SERVICE_ONLY = ["review_publications", "review_publication_cancellations", "client_feedback", "gtm_job_leases"];
+const SERVICE_ONLY = ["review_publications", "review_publication_cancellations", "client_feedback", "gtm_job_leases", "gtm_origami_webhook_deliveries"];
 // Column-limited: the owner reads the listed columns only (a mailbox's status, never its sealed token).
 const COLUMN_LIMITED: Record<string, string> = {
   gtm_team_mailboxes: "member,address,key_version,backfill_done,connected_at,last_sync_at,last_error,granted_scopes,scopes_checked_at",
@@ -89,6 +89,8 @@ function probe(t: (typeof TABLES)[number]): { row: Record<string, unknown>; key:
     case "gtm_dmarc_reports": { const k = randomUUID().replace(/-/g, "").repeat(2); return { row: { report_key: k, reporter: "probe", domain: "probe.example.com", begin_at: "2001-01-01T00:00:00Z", end_at: "2001-01-02T00:00:00Z", messages: 1, dmarc_pass: 1, dkim_aligned: 1, spf_aligned: 1 }, key: ["report_key", k], patch: { messages: 2 } }; }
     case "gtm_crm_people": { const u = randomUUID(); return { row: { id: u, created_at: "2001-01-01T00:00:00Z", updated_at: "2001-01-01T00:00:00Z" }, key: ["id", u], patch: { has_email: true } }; }
     case "gtm_job_leases": { const j = `probe-${id.replace(/[^a-z0-9]/g, "").slice(0, 40)}`; return { row: { job: j, holder: "probe", expires_at: "2001-01-01T00:00:00Z" }, key: ["job", j], patch: { holder: "changed" } }; }
+    case "gtm_origami_replies": { const u = randomUUID(); return { row: { evidence_key: `status:${u}`, kind: "unsubscribed_status", source: "status_scan", sequence_id: u, received_at: new Date().toISOString(), rule_version: "probe", classification: "none", reason: "probe", match: "not_needed" }, key: ["sequence_id", u], patch: { attempts: 1 } }; }
+    case "gtm_origami_webhook_deliveries": return { row: { webhook_id: id, event: "webhook.test" }, key: ["webhook_id", id], patch: { event: "changed.event" } };
     case "gtm_team_calendars": { const m = `C${id.slice(6, 12).toUpperCase().replace(/[^A-Z0-9]/g, "A")}`; return { row: { member: m, address: "probe@example.com", token_ciphertext: "x".repeat(60) }, key: ["member", m], patch: { last_error: "changed" } }; }
     case "gtm_calendar_meetings": { const k = randomUUID().replace(/-/g, ""); return { row: { member: "PROBE", event_key: k, meeting_id: randomUUID(), origin: "created", start_at: "2026-01-01T00:00:00Z", kind: "OTHER" }, key: ["event_key", k], patch: { kind: "CLIENT" } }; }
     case "gtm_web_daily": return { row: { site: "probe.example.com", day: "2001-01-01", visitors: 1, pageviews: 1 }, key: ["site", "probe.example.com"], patch: { visitors: 2 } };

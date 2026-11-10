@@ -8,6 +8,7 @@ import { loadOutcomes } from "./load";
 import { bounceCheck } from "./metrics";
 import { alertRecipients, checkDomain, healthDomains, notifyIncidents, reconcileIncidents, type DomainCheck, type Incident } from "./health";
 import { loadMirrorState, mirrorProblems } from "../crm/mirror";
+import { origamiApplyEnabled } from "../origami/client";
 
 const DNS_KEY = "email.health.dns";
 const STALE_SYNC_MS = 3 * 3_600_000;
@@ -23,6 +24,15 @@ export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], 
   if (reviews) observed.push({ key: "suppression:review", kind: "suppression", severity: "warning", summary: `${reviews} possible opt-out${reviews === 1 ? "" : "s"} waiting for a person's review (email is held on the desk meanwhile)`, detail: { reviews } });
   if (waiting) observed.push({ key: "suppression:pending", kind: "suppression", severity: "warning", summary: `${waiting} suppression operation${waiting === 1 ? "" : "s"} waiting over two hours for approval or apply (gtm suppression plan)`, detail: { waiting } });
   if (failing) observed.push({ key: "suppression:failed", kind: "suppression", severity: "critical", summary: `${failing} suppression operation${failing === 1 ? "" : "s"} failed to apply`, detail: { failing } });
+  // Origami opt-outs (VIB-521): one that no single Twenty person matched waits for a person (its sequences are stopped),
+  // and evidence that keeps failing to process is not suppressed anywhere yet.
+  if (origamiApplyEnabled()) {
+    const ev = must(await db.from("gtm_origami_replies").select("match,processed_at,last_error,created_at").neq("classification", "none").is("reviewed_at", null).in("match", ["pending", "ambiguous", "unmatched"]), "origami opt-outs") as { match: string; processed_at: string | null; last_error: string | null; created_at: string }[];
+    const unmatched = ev.filter((r) => r.processed_at && r.match !== "pending").length;
+    const stuck = ev.filter((r) => !r.processed_at && now.getTime() - Date.parse(r.created_at) > 2 * 3_600_000).length;
+    if (unmatched) observed.push({ key: "suppression:origami_unmatched", kind: "suppression", severity: "warning", summary: `${unmatched} Origami opt-out${unmatched === 1 ? "" : "s"} matched no single Twenty person; their Origami sequences are stopped, the CRM is not (gtm suppression origami-reviewed)`, detail: { unmatched } });
+    if (stuck) observed.push({ key: "suppression:origami_stuck", kind: "suppression", severity: "critical", summary: `${stuck} Origami opt-out${stuck === 1 ? "" : "s"} not processed after two hours`, detail: { stuck } });
+  }
   for (const m of members) {
     const read = await db.from("gtm_team_mailboxes").select("address,last_sync_at,last_error,backfill_done").eq("member", m.code);
     if (read.error) {
