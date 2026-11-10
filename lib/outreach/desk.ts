@@ -82,7 +82,60 @@ export const NETWORK_TIER_LABEL: Record<string, string> = { T1: "Prior conversat
 export type DossierNetwork = {
   tier?: string | null; relationship?: string | null; origins?: string[] | null; last_exchanged_at?: string | null;
   last_channel?: string | null; last_contacted_at?: string | null; owners?: string[] | null; context?: string | null;
+  /** The warm score (0 to 100) that orders the desk, its rank (1 = top of the desk) and the five parts it adds up from. */
+  warm?: NetworkWarm | null;
+  /**
+   * A link to the exact last conversation: a LinkedIn messaging thread or a Gmail URL, nothing else (threadUrl). Anything
+   * else is dropped at import and never rendered.
+   */
+  last_thread_url?: string | null;
+  /** Message counts per channel. Metadata only: the export never carries message content. */
+  history?: NetworkHistory | null;
+  /** The day they connected on LinkedIn, YYYY-MM-DD. */
+  connected_on?: string | null;
 };
+export const WARM_PARTS = ["relationship", "recency", "role", "reach", "connector"] as const;
+export type WarmPart = (typeof WARM_PARTS)[number];
+export type NetworkWarm = { score?: number | null; rank?: number | null; parts?: Partial<Record<WarmPart, number | null>> | null };
+export type MessageCounts = { sent?: number | null; received?: number | null };
+export type NetworkHistory = { linkedin?: MessageCounts | null; gmail?: MessageCounts | null };
+/** How the desk names the channel of the last conversation (linkedin, gmail or whatsapp; older exports said email). */
+export const CHANNEL_LABEL: Record<string, string> = { linkedin: "LinkedIn", gmail: "Gmail", whatsapp: "WhatsApp", email: "email" };
+
+/** "12 messages: you 7, them 5" across LinkedIn and Gmail; null when the export carries no counts. */
+export function messageCountsLine(h: NetworkHistory | null | undefined): string | null {
+  if (!h || typeof h !== "object") return null;
+  const channels = [h.linkedin, h.gmail].filter((c): c is MessageCounts => !!c && typeof c === "object");
+  if (!channels.length) return null;
+  const n = (v: unknown) => (Number.isInteger(v) && (v as number) > 0 ? (v as number) : 0);
+  const you = channels.reduce((a, c) => a + n(c.sent), 0), them = channels.reduce((a, c) => a + n(c.received), 0);
+  if (!you && !them) return "No messages on record";
+  return `${you + them} ${you + them === 1 ? "message" : "messages"}: you ${you}, them ${them}`;
+}
+
+/** "#14 · warm score 72: relationship 25, recency 20, role 15, reach 6, connector 6"; null without a score. */
+export function warmLine(w: NetworkWarm | null | undefined): string | null {
+  if (!w || typeof w !== "object" || !Number.isFinite(Number(w.score)) || w.score == null) return null;
+  const parts = w.parts && typeof w.parts === "object" ? WARM_PARTS.filter((k) => Number.isFinite(Number(w.parts![k])) && w.parts![k] != null).map((k) => `${k} ${w.parts![k]}`) : [];
+  const rank = Number.isInteger(w.rank) && (w.rank as number) >= 1 ? `#${w.rank} · ` : "";
+  return `${rank}warm score ${w.score}${parts.length ? `: ${parts.join(", ")}` : ""}`;
+}
+
+/**
+ * The one link to a last conversation the desk opens: https, no credentials or port, and the host exactly www.linkedin.com
+ * with a /messaging/thread/ path, or exactly mail.google.com. Null for anything else (another host, a lookalike, a profile
+ * page, javascript:). Checked at import and again at render. Gmail's thread id is in the fragment, so a query string and a
+ * fragment are kept.
+ */
+export function threadUrl(v: unknown): string | null {
+  if (typeof v !== "string" || !v.trim() || v.length > 2048 || /\s/.test(v.trim())) return null;
+  let u: URL;
+  try { u = new URL(v.trim()); } catch { return null; }
+  if (u.protocol !== "https:" || u.username || u.password || u.port) return null;
+  if (u.hostname === "www.linkedin.com" && u.pathname.startsWith("/messaging/thread/")) return u.href;
+  if (u.hostname === "mail.google.com") return u.href;
+  return null;
+}
 /** The guest block of a podcast-guest dossier (vibrana-crm guest exporter). Every field may be missing. */
 export type DossierGuest = {
   season?: string | null; lane?: string | null; tier?: string | null; pillar?: string | null; template?: string | null;
@@ -198,7 +251,10 @@ export function normalizeDossier(input: Record<string, unknown>, track: Track = 
   const p = (isObject(raw.prospect) ? raw.prospect : {}) as DossierProspect;
   const c = (isObject(raw.company) ? raw.company : {}) as DossierCompany;
   // The client contract carries the score on the prospect; the guest and network contracts carry it at the top.
-  const rawScore = p.score != null && str(p.score) !== "" ? p.score : raw.score;
+  const n = isObject(raw.network) ? raw.network : null;
+  const warm = n && isObject(n.warm) ? n.warm : null;
+  // A network row's top-level score is its warm score; an exporter that leaves the top out still orders the desk by it.
+  const rawScore = p.score != null && str(p.score) !== "" ? p.score : raw.score != null && str(raw.score) !== "" ? raw.score : track === "network" ? warm?.score : null;
   const score = typeof rawScore === "number" ? rawScore : rawScore != null && str(rawScore) !== "" && Number.isFinite(Number(rawScore)) ? Number(rawScore) : null;
   const built = str(raw.built_at);
   return {
@@ -209,7 +265,11 @@ export function normalizeDossier(input: Record<string, unknown>, track: Track = 
     title: str(p.title).slice(0, 300),
     score,
     built_at: built && !Number.isNaN(Date.parse(built)) ? new Date(built).toISOString() : null,
-    dossier: { ...(raw as Dossier), twenty_person_id: str(raw.twenty_person_id) },
+    dossier: {
+      ...(raw as Dossier), twenty_person_id: str(raw.twenty_person_id),
+      // A thread link outside the allowlist is dropped, never stored.
+      ...(n && n.last_thread_url != null ? { network: { ...(n as DossierNetwork), last_thread_url: threadUrl(n.last_thread_url) } } : {}),
+    },
   };
 }
 
@@ -236,6 +296,7 @@ export function dossierProblems(d: DossierImport, raw: Record<string, unknown>):
       const n = raw.network;
       if (n.tier != null && !(NETWORK_TIERS as readonly string[]).includes(str(n.tier))) out.push(`network.tier "${str(n.tier)}" is not T1 or T2`);
       for (const k of ["origins", "owners"] as const) if (n[k] != null && (!Array.isArray(n[k]) || (n[k] as unknown[]).some((x) => typeof x !== "string"))) out.push(`network.${k} must be an array of strings`);
+      out.push(...networkExtraProblems(n));
     }
   }
   if (!PERSON_ID.test(d.twenty_person_id)) out.push("twenty_person_id is letters, digits and . _ : - (at most 100)");
@@ -244,6 +305,33 @@ export function dossierProblems(d: DossierImport, raw: Record<string, unknown>):
   for (const k of ["triggers", "sources", "colleagues", "history"] as const) if (raw[k] != null && !Array.isArray(raw[k])) out.push(`${k} must be an array`);
   const bytes = new TextEncoder().encode(JSON.stringify(d.dossier)).length;
   if (bytes > MAX_DOSSIER_BYTES) out.push(`dossier is ${Math.round(bytes / 1000)} kB (at most ${MAX_DOSSIER_BYTES / 1000} kB)`);
+  return out;
+}
+
+const isCount = (v: unknown) => Number.isInteger(v) && (v as number) >= 0;
+/** The optional warm, history, channel and connection keys of a network block (old rows have none of them). */
+function networkExtraProblems(n: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  if (n.warm != null) {
+    if (!isObject(n.warm)) out.push("network.warm must be an object or null");
+    else {
+      const w = n.warm;
+      if (w.score != null && !(Number.isInteger(w.score) && (w.score as number) >= 0 && (w.score as number) <= 100)) out.push("network.warm.score must be a whole number from 0 to 100");
+      if (w.rank != null && !(Number.isInteger(w.rank) && (w.rank as number) >= 1)) out.push("network.warm.rank must be a whole number from 1, or null");
+      if (w.parts != null && (!isObject(w.parts) || Object.values(w.parts).some((x) => x != null && !Number.isInteger(x)))) out.push("network.warm.parts must be an object of whole numbers");
+    }
+  }
+  // last_channel is not checked: an older export may name a channel this desk does not know, and it is shown as written.
+  if (n.last_channel != null && typeof n.last_channel !== "string") out.push("network.last_channel must be a string or null");
+  if (n.last_thread_url != null && typeof n.last_thread_url !== "string") out.push("network.last_thread_url must be a string or null");
+  if (n.history != null) {
+    if (!isObject(n.history)) out.push("network.history must be an object or null");
+    else for (const [k, c] of Object.entries(n.history)) {
+      if (c == null) continue;
+      if (!isObject(c) || (c.sent != null && !isCount(c.sent)) || (c.received != null && !isCount(c.received))) out.push(`network.history.${k} must be {sent, received} counts`);
+    }
+  }
+  if (n.connected_on != null && !(typeof n.connected_on === "string" && /^\d{4}-\d{2}-\d{2}$/.test(n.connected_on) && !Number.isNaN(Date.parse(`${n.connected_on}T00:00:00Z`)))) out.push("network.connected_on must be YYYY-MM-DD or null");
   return out;
 }
 
@@ -303,6 +391,7 @@ export const FILTER_LABEL: Record<DeskFilter, string> = { ...DESK_LABEL, followu
 
 export type DeskDraftState = Pick<Draft, "status" | "email_status" | "linkedin_status"> & {
   email_sent_at?: string | null; linkedin_sent_at?: string | null; follow_up_status?: Draft["follow_up_status"] | null; follow_up_sent_at?: string | null;
+  email_replied_at?: string | null; linkedin_replied_at?: string | null;
 };
 
 /**
@@ -328,6 +417,8 @@ export type QueueItem = QueueRow & {
   track: Track; state: DeskState; draft_id: string | null; status: Draft["status"] | null; email_status: Draft["email_status"] | null;
   linkedin_status: Draft["linkedin_status"] | null; email_sent_at: string | null; linkedin_sent_at: string | null;
   follow_up_status: Draft["follow_up_status"] | null; follow_up_sent_at: string | null;
+  /** When they answered: an email reply (the mailbox sync or Mark replied) or a LinkedIn reply (Mark replied only). */
+  email_replied_at: string | null; linkedin_replied_at: string | null;
 };
 
 /**
@@ -343,6 +434,7 @@ export function buildQueue(rows: QueueRow[], drafts: Array<DeskDraftState & { id
       state: deskState(r, d, track), draft_id: d?.id ?? null, status: d?.status ?? null, email_status: d?.email_status ?? null,
       linkedin_status: d?.linkedin_status ?? null, email_sent_at: d?.email_sent_at ?? null, linkedin_sent_at: d?.linkedin_sent_at ?? null,
       follow_up_status: d?.follow_up_status ?? null, follow_up_sent_at: d?.follow_up_sent_at ?? null,
+      email_replied_at: d?.email_replied_at ?? null, linkedin_replied_at: d?.linkedin_replied_at ?? null,
     };
   }).sort((a, b) => (Number(b.score ?? -Infinity) - Number(a.score ?? -Infinity)) || a.name.localeCompare(b.name) || a.twenty_person_id.localeCompare(b.twenty_person_id));
 }
@@ -377,13 +469,17 @@ export function sentToday(items: Array<{ email_sent_at: string | null; linkedin_
 /** When a guest or network contact was first reached: the earliest of the email and the LinkedIn note. */
 export const firstSentAt = (i: { email_sent_at: string | null; linkedin_sent_at?: string | null }) => [i.email_sent_at, i.linkedin_sent_at].filter((t): t is string => !!t).sort()[0] ?? null;
 
+/** They answered, on any channel: an email marked or synced replied, or a LinkedIn reply John marked. */
+export const hasReplied = (i: { email_status?: Draft["email_status"] | null; email_replied_at?: string | null; linkedin_replied_at?: string | null }) =>
+  i.email_status === "replied" || !!i.email_replied_at || !!i.linkedin_replied_at;
+
 /**
- * A guest or network contact whose follow-up is due: sent 7 or more calendar days ago (in the report time zone), no reply, no follow-up yet
- * (outreach/05). Pure on its inputs, so the edge days are unit-tested.
+ * A guest or network contact whose follow-up is due: sent 7 or more calendar days ago (in the report time zone), no reply on any
+ * channel, no follow-up yet (outreach/05). Pure on its inputs, so the edge days are unit-tested.
  */
-export function followUpDue(i: { state: DeskState; email_status: Draft["email_status"] | null; follow_up_status: Draft["follow_up_status"] | null; email_sent_at: string | null; linkedin_sent_at?: string | null }, tz: string, now: Date = new Date()): boolean {
+export function followUpDue(i: { state: DeskState; email_status: Draft["email_status"] | null; follow_up_status: Draft["follow_up_status"] | null; email_sent_at: string | null; linkedin_sent_at?: string | null; email_replied_at?: string | null; linkedin_replied_at?: string | null }, tz: string, now: Date = new Date()): boolean {
   const at = firstSentAt(i);
-  return i.state === "sent" && i.email_status !== "replied" && (i.follow_up_status ?? "none") === "none" && !!at && daysBetween(at, now, tz) >= FOLLOW_UP_DAYS;
+  return i.state === "sent" && !hasReplied(i) && (i.follow_up_status ?? "none") === "none" && !!at && daysBetween(at, now, tz) >= FOLLOW_UP_DAYS;
 }
 
 /** A guest or network contact with no email or LinkedIn to write to: it goes through an intermediary, or Twenty does not have them yet. */

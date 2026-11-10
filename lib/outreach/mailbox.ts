@@ -23,14 +23,24 @@ export const PAGE_SIZE = 25;
  * the desk's configured client sender is used, then the configured inbox MAILBOX.
  */
 export async function hqAddress(db: { from: (t: string) => any }): Promise<string> {
-  const { data, error } = await db.from("gtm_outreach_tracks").select("from_address").eq("track", "client").maybeSingle();
+  return (await trackAddress(db, "client")) ?? MAILBOX;
+}
+
+const oneAddress = (v: string | null | undefined) => {
+  const a = v?.trim().toLowerCase();
+  return a && addresses(a).length === 1 && addresses(a)[0] === a ? a : null;
+};
+
+/**
+ * The address one desk stream sends from (gtm_outreach_tracks.from_address), else the stream's configured sender; null when
+ * neither is a single address. A desk email's replies are matched against it. The network stream's address is a send-as alias,
+ * so its sent mail and replies sit in the mailbox of the Google account behind it (networkMailboxConfig), not under its own name.
+ */
+export async function trackAddress(db: { from: (t: string) => any }, track: "client" | "network"): Promise<string | null> {
+  const { data, error } = await db.from("gtm_outreach_tracks").select("from_address").eq("track", track).maybeSingle();
   // A failed read must not quietly search the wrong mailbox and report "no replies": it throws, and the caller says so.
   if (error) throw new Error(`outreach tracks: ${error.message}`);
-  const a = (data as { from_address?: string | null } | null)?.from_address?.trim().toLowerCase();
-  if (a && addresses(a).length === 1 && addresses(a)[0] === a) return a;
-  // The desk's own configured client sender, then the inbox mailbox.
-  const fallback = loadRuntimeConfig().mail.trackFrom?.client?.trim().toLowerCase();
-  return fallback && addresses(fallback).length === 1 && addresses(fallback)[0] === fallback ? fallback : MAILBOX;
+  return oneAddress((data as { from_address?: string | null } | null)?.from_address) ?? oneAddress(loadRuntimeConfig().mail.trackFrom?.[track]);
 }
 export const validThreadId = (id: string) => /^[a-f0-9]{1,64}$/i.test(id);
 export const validPageToken = (token: string) => token.length <= 2048 && /^[a-zA-Z0-9_+=/.-]*$/.test(token);
@@ -53,13 +63,28 @@ export function addresses(value: string): string[] {
 }
 const subject = (value: string) => value.replace(/^(?:(?:re|fw|fwd):\s*)+/gi, "").trim().toLowerCase();
 
+/** The HQ outreach mailbox the client stream's outcomes and /outreach/inbox read (OUTREACH_GMAIL_*). */
 export function mailboxConfig(env: Record<string, string | undefined> = process.env): MailboxConfig | null {
+  return gmailEnv(env, "OUTREACH_GMAIL", MAILBOX);
+}
+
+/**
+ * The mailbox the network stream's outcomes read (VIB-522): the Google account whose send-as alias the network desk sends from.
+ * NETWORK_GMAIL_CLIENT_ID, NETWORK_GMAIL_CLIENT_SECRET and NETWORK_GMAIL_REFRESH_TOKEN (an OAuth client and a refresh token
+ * granted gmail.readonly by that account; a thread search needs more than gmail.metadata), and NETWORK_GMAIL_ACCOUNT, that
+ * account's primary address, which the connection is checked against. Null until all four are set.
+ */
+export function networkMailboxConfig(env: Record<string, string | undefined> = process.env): MailboxConfig | null {
+  return gmailEnv(env, "NETWORK_GMAIL", null);
+}
+
+function gmailEnv(env: Record<string, string | undefined>, prefix: "OUTREACH_GMAIL" | "NETWORK_GMAIL", fallbackAccount: string | null): MailboxConfig | null {
   if (process.env.DEMO_MODE === "1") return null;
   assertLiveProvidersAllowed();
-  const clientId = env.OUTREACH_GMAIL_CLIENT_ID, clientSecret = env.OUTREACH_GMAIL_CLIENT_SECRET, refreshToken = env.OUTREACH_GMAIL_REFRESH_TOKEN;
+  const clientId = env[`${prefix}_CLIENT_ID`], clientSecret = env[`${prefix}_CLIENT_SECRET`], refreshToken = env[`${prefix}_REFRESH_TOKEN`];
   if (!clientId || !clientSecret || !refreshToken) return null;
-  const email = env.OUTREACH_GMAIL_ACCOUNT?.trim() || MAILBOX;
-  if (addresses(email).length !== 1 || addresses(email)[0] !== email.toLowerCase()) return null;
+  const email = env[`${prefix}_ACCOUNT`]?.trim() || fallbackAccount;
+  if (!email || addresses(email).length !== 1 || addresses(email)[0] !== email.toLowerCase()) return null;
   return { email, clientId, clientSecret, refreshToken };
 }
 

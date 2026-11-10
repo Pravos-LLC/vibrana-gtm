@@ -37,7 +37,7 @@ const actions = {
     if (window.deskFixture.failGeneration) return { ok: false, error: "Fixture generation failed." };
     return { ok: true, value: { selection: { offer_id: override === "auto" ? "ai-readiness" : override, confidence: "medium", reason: "The synthetic dossier describes an organizational adoption need.", uncertainty: "Synthetic example only.", evidence_ids: [] }, evidence: [], angles: OUTREACH_ANGLE_KEYS.map((key, i) => ({ key, label: ["Light touch", "Direct fit", "Useful value"][i], rationale: "Synthetic explanation for this fixture.", role_read: "unclear", role_evidence_ids: [], evidence_ids: [], subject: `fixture subject ${i + 1}`, body: `Hi Riley, This is fixture opening ${i + 1}.\n\nThis paragraph is synthetic test content.\n\nOne fixture question?\n\nP.S. Fixture resource.`, linkedin_note: `Fixture LinkedIn note ${i + 1}.` })) } };
   },
-  markSent: failure, undoSent: failure, markInvite: failure, markFollowUp: failure, undoFollowUp: failure, skip: failure, unskip: failure, setTarget: failure,
+  markSent: failure, undoSent: failure, markInvite: failure, markFollowUp: failure, undoFollowUp: failure, markReplied: failure, undoReplied: failure, skip: failure, unskip: failure, setTarget: failure,
 } as unknown as DeskActions;
 const settings = { daily_target: 5, from_address: "jo@fixture.example", profile_imported_at: null, profile: { name: "Jo Fixture", signature } };
 createRoot(document.getElementById("root")!).render(<WritingDesk initialQueues={{ client: queue, guest: [], network: [] }} initialTrack="client" initialPerson={first} tracks={{ client: settings, guest: settings, network: settings }} tz="UTC" actions={actions} />);

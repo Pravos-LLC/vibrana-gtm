@@ -1,5 +1,7 @@
-// Outreach outcomes for the pipeline dashboard: what happened to each accepted desk email in the HQ outreach mailbox,
-// stored on the draft so the numbers survive (the /outreach/inbox page only ever computed them live).
+// Outreach outcomes for the pipeline dashboard: what happened to each accepted desk email in the mailbox it was sent from,
+// stored on the draft so the numbers survive (the /outreach/inbox page only ever computed them live). Two streams are read,
+// each from its own mailbox: the client stream from the HQ outreach mailbox (OUTREACH_GMAIL_*), and John's network stream
+// (VIB-522) from the Google account its sending address is an alias of (NETWORK_GMAIL_*). Guests are not read.
 //
 // - A sent thread that matches a draft with no send recorded stamps the send (a forgotten "Mark sent" still counts),
 //   attributed to the mailbox address.
@@ -9,7 +11,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
 import { readPages } from "../db-read";
-import { GmailReader, hqAddress, mailboxConfig, type Conversation, type OutreachMail } from "../outreach/mailbox";
+import { GmailReader, hqAddress, mailboxConfig, networkMailboxConfig, trackAddress, type Conversation, type OutreachMail } from "../outreach/mailbox";
 
 export type OutcomeDraft = OutreachMail & {
   email_status: "none" | "queued" | "sent" | "replied"; email_sent_by: string | null;
@@ -34,18 +36,34 @@ export function outcomePatch(c: Conversation, d: OutcomeDraft, mailbox: string):
 
 export type OutcomeRun = { scanned: number; matched: number; sent: number; replied: number; bounced: number; pages: number; complete: boolean; skipped?: string };
 
-/** Pages through the HQ mailbox (last 90 days) until the deadline or `maxPages`, then writes what changed. */
-export async function syncOutcomes(db: SupabaseClient, opts: { deadline: number; maxPages?: number; reader?: GmailReader; mailbox?: string }): Promise<OutcomeRun> {
+/** The streams whose outcomes are read, and the mailbox each one is read from. */
+export type OutcomeTrack = "client" | "network";
+export const NOT_CONNECTED: Record<OutcomeTrack, string> = {
+  client: "the HQ outreach mailbox is not connected (OUTREACH_GMAIL_*)",
+  network: "the network mailbox is not connected (NETWORK_GMAIL_*)",
+};
+
+/**
+ * Pages through one stream's mailbox (last 90 days) until the deadline or `maxPages`, then writes what changed on that
+ * stream's accepted drafts only. The client stream (the default) reads the HQ mailbox; the network stream reads the account
+ * behind its alias, searched for the alias address.
+ */
+export async function syncOutcomes(db: SupabaseClient, opts: { deadline: number; maxPages?: number; reader?: GmailReader; mailbox?: string; track?: OutcomeTrack }): Promise<OutcomeRun> {
+  const track = opts.track ?? "client";
   const run: OutcomeRun = { scanned: 0, matched: 0, sent: 0, replied: 0, bounced: 0, pages: 0, complete: true };
-  const cfg = opts.reader ? null : mailboxConfig();
-  if (!opts.reader && !cfg) return { ...run, complete: false, skipped: "the HQ outreach mailbox is not connected (OUTREACH_GMAIL_*)" };
-  // The desk's sending address, never the connected account: that may be an inbox HQ mail is forwarded to.
-  const mailbox = opts.mailbox ?? (await hqAddress(db));
+  const cfg = opts.reader ? null : track === "network" ? networkMailboxConfig() : mailboxConfig();
+  if (!opts.reader && !cfg) return { ...run, complete: false, skipped: NOT_CONNECTED[track] };
+  // The stream's sending address, never the connected account: for clients that may be an inbox HQ mail is forwarded to,
+  // and the network sends from an alias of the account it connects as.
+  const mailbox = opts.mailbox ?? (track === "network" ? await trackAddress(db, "network") : await hqAddress(db));
+  if (!mailbox) return { ...run, complete: false, skipped: "the network stream has no sending address (gtm_outreach_tracks)" };
   const reader = opts.reader ?? (await GmailReader.connect(cfg!));
-  const drafts = await readPages<OutcomeDraft>((from, to) => db.from("gtm_outreach_drafts")
+  const drafts = (await readPages<OutcomeDraft>((from, to) => db.from("gtm_outreach_drafts")
     .select("id,subject,prospect,email_status,email_sent_at,email_sent_by,email_replied_at,email_bounced_at", { count: "exact" })
-    // Client drafts only: guests and the network are sent from other mailboxes, which this HQ read never sees.
-    .eq("status", "accepted").eq("track", "client").order("id").range(from, to), "outreach drafts");
+    // One stream's drafts: each mailbox only ever sees its own stream's mail (guests go from yet another mailbox).
+    .eq("status", "accepted").eq("track", track).order("id").range(from, to), "outreach drafts"))
+    // A draft with no subject is a LinkedIn note: it can never match an email thread, and must not match a subjectless one.
+    .filter((d) => d.subject.trim() !== "");
   const byId = new Map(drafts.map((d) => [d.id, d]));
   const patches = new Map<string, OutcomePatch>();
   let page = "";

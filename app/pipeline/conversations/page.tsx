@@ -1,6 +1,6 @@
 // Pipeline > Conversations: outreach that turns into conversations. Email from the writing desk (first touches,
-// follow-ups, replies and John's positive label, per track), LinkedIn from the weekly export, and website inquiries.
-// No opens: there is no tracking pixel.
+// follow-ups, replies and John's positive label, per track), John's own network week by week and tier by tier (VIB-522),
+// LinkedIn from the weekly export, and website inquiries. No opens: there is no tracking pixel.
 import Link from "next/link";
 import { Section, Shell, Table } from "@/components/shell";
 import { StatTile } from "@/components/stat-tile";
@@ -8,8 +8,10 @@ import { TrendChart } from "@/components/performance/trend-chart";
 import { SalesNav, pct } from "@/components/sales/nav";
 import { SourceNote } from "@/components/sales/parts";
 import { adminDb } from "@/lib/db";
-import { loadDesk, loadInquiries, loadLinkedIn, ownerOfSender, parseOwner, parsePeriod } from "@/lib/sales/load";
-import { deskStats, linkedinStats, windowFor, type ChannelStats, type Window } from "@/lib/sales/metrics";
+import { loadDesk, loadInquiries, loadLinkedIn, loadNetworkTiers, ownerOfSender, parseOwner, parsePeriod } from "@/lib/sales/load";
+import { deskStats, linkedinStats, networkWeekly, windowFor, type ChannelStats, type Window } from "@/lib/sales/metrics";
+import { RUN_KEY, type PipelineRun } from "@/lib/sales/run";
+import { REPORT_TZ } from "@/lib/reports/week";
 import { sessionDb } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +19,8 @@ export const maxDuration = 30;
 export const metadata = { title: "Conversations" };
 
 const WEEKS = 12;
+/** Calendar weeks on the network scoreboard. */
+const NETWORK_WEEKS = 6;
 // Email contract v1 (VIB-496): alert above 2%. The cohort-based alert over the last 7 days, at any n, runs in email health;
 // this tile shows the period rate against the same threshold.
 const BOUNCE_ALARM = 0.02;
@@ -31,12 +35,22 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
   const db = await sessionDb();
   const { data: claims } = await db.auth.getClaims();
   const isOwner = (claims?.claims?.app_metadata as { gtm_owner?: boolean } | undefined)?.gtm_owner === true;
-  const [desk, linkedin, inquiries] = await Promise.all([
-    loadDesk(db, since), loadLinkedIn(db, since),
+  // The network scoreboard reaches back NETWORK_WEEKS calendar weeks (one more day covers the time zone).
+  const networkSince = new Date(now.getTime() - (NETWORK_WEEKS * 7 + 1) * 86_400_000);
+  const [desk, linkedin, inquiries, tiers, lastRun] = await Promise.all([
+    loadDesk(db, new Date(Math.min(since.getTime(), networkSince.getTime()))), loadLinkedIn(db, since),
     isOwner && !owner ? loadInquiries(adminDb(), since) : Promise.resolve({ data: null, error: owner ? "inquiries are not attributed to a person" : "not the owner" }),
+    loadNetworkTiers(db),
+    db.from("gtm_sync_state").select("value").eq("key", RUN_KEY).maybeSingle().then((r) => (r.data?.value ?? null) as { result?: PipelineRun } | null, () => null),
   ]);
+  // Whether the hourly job read the network mailbox on its last run: until it does, network email replies are only the ones
+  // marked on the desk, and bounces are not measured.
+  const netRun = lastRun?.result?.networkOutcomes;
+  const networkMailbox = !!netRun && typeof netRun === "object" && !netRun.skipped;
   const ownerOf = ownerOfSender();
   const rows = desk.data ?? [];
+  const tz = REPORT_TZ();
+  const networkWeeks = desk.data ? networkWeekly(rows, (p) => (p ? tiers.data?.get(p) ?? null : null), { tz, weeks: NETWORK_WEEKS, now, ownerOf: ownerOfSender(), owner }) : null;
   const client = deskStats(rows, w, ownerOf, owner, "client"), guest = deskStats(rows, w, ownerOf, owner, "guest"), network = deskStats(rows, w, ownerOf, owner, "network");
   const li = linkedin.data ? linkedinStats(linkedin.data.connections, linkedin.data.threads, w, owner) : null;
   const inq = inquiries.data ? inquiries.data.filter((r) => Date.parse(r.created_at) >= w.start.getTime()).length : null;
@@ -52,7 +66,8 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
   // Guest and network emails go from John's own mailboxes, which nothing reads yet: replies, bounces and rates there are not measured.
   const nm = <span className="text-ink-3">not measured</span>;
   const guestRow = [ "Podcast guests (own mailbox)", guest.firstTouches, guest.followUps, nm, nm, nm, nm, nm ];
-  const networkRow = [ "Own network (own mailbox)", network.firstTouches, network.followUps, nm, nm, nm, nm, nm ];
+  // Network email replies are counted (the desk's Mark replied, and the mailbox sync once connected); rates stay unmeasured.
+  const networkRow = [ "Own network (own mailbox)", network.firstTouches, network.followUps, network.replies, nm, nm, nm, networkMailbox ? network.bounces : nm ];
 
   return (
     <Shell title="Conversations" active="/pipeline">
@@ -71,11 +86,22 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
         </div>
         <Table head={["Track", "First touches", "Follow-ups", "Replies", "Positive", "Reply rate", "Positive rate", "Bounces"]} align={["l", "r", "r", "r", "r", "r", "r", "r"]}
           rows={[row("Clients (HQ mailbox)", client), guestRow, networkRow]} />
-        <p className="mt-3 text-sm text-ink-3">Guest and network replies are not measured: those emails go from your own mailboxes, which are not connected (they need the Google Internal OAuth client). Abe&apos;s own sends and replies are on <Link className="underline" href="/performance/team">Team</Link>.</p>
+        <p className="mt-3 text-sm text-ink-3">Guest replies are not measured: those emails go from your own mailbox, which is not connected. Network replies are {networkMailbox ? "read hourly from the network mailbox, plus any you mark on the desk" : "the ones you mark replied on the desk; the network mailbox is not connected"}. Abe&apos;s own sends and replies are on <Link className="underline" href="/performance/team">Team</Link>.</p>
         <div className="mt-6 grid gap-6 md:grid-cols-2">
           <TrendChart title="First touches a week" unit="emails" summary={`First touches per week over ${WEEKS} weeks`} data={weeks.map((x) => ({ x: x.x, value: x.s.firstTouches }))} />
           <TrendChart title="Replies a week" unit="replies" summary={`Replies per week over ${WEEKS} weeks`} data={weeks.map((x) => ({ x: x.x, value: x.s.replies }))} />
         </div>
+      </Section>
+
+      <Section title="Own network" note={`by week and warm tier · ${networkMailbox ? "email replies and bounces from the network mailbox and your marks" : "replies are the ones you mark on the desk"}`}>
+        {tiers.error && <SourceNote tone="bad">The network tiers could not be read ({tiers.error}); every person shows as No tier.</SourceNote>}
+        <div data-testid="network-scoreboard">
+          <Table head={["Week of", "Tier", "Email notes", "LinkedIn notes", "Email replies", "LinkedIn replies", "Follow-ups", "Bounces"]} align={["l", "l", "r", "r", "r", "r", "r", "r"]}
+            rows={(networkWeeks ?? []).flatMap((w) => w.tiers.map((t, i) => [
+              i === 0 ? weekLabel(w.monday) : "", t.tier, t.emailNotes, t.linkedinNotes, t.emailReplies, t.linkedinReplies, t.followUps, networkMailbox ? t.bounces : nm,
+            ]))} />
+        </div>
+        <p className="mt-3 text-sm text-ink-3">Counts, not rates: each note, reply, follow-up and bounce in the week it happened (Monday to Sunday, {tz}). LinkedIn replies are the ones you mark on the desk; LinkedIn has no API. The tier is the one on the person&apos;s dossier.</p>
       </Section>
 
       <Section title="LinkedIn" note={lastImport ? `from your export, imported ${lastImport.slice(0, 10)}` : "from your weekly LinkedIn export"}>
@@ -97,3 +123,6 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
     </Shell>
   );
 }
+
+/** "Nov 9" for the Monday a week starts on. */
+const weekLabel = (monday: string) => new Date(`${monday}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });

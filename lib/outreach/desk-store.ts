@@ -12,7 +12,10 @@ import { loadRuntimeConfig } from "../runtime-config.mjs";
 //   linkedin      linkedin_status 'sent' (the note he wrote; stamps linkedin_sent_at),
 //   intermediary  email_status 'sent' with route 'intermediary' (an organization's contact took the message; stamps
 //                 email_sent_at, so `gtm outreach queue|mark` and "sent today" need no special case; route says how).
-// A follow-up is its own column (follow_up_status), so it never counts toward a target.
+// A follow-up is its own column (follow_up_status), so it never counts toward a target. A warm stream's reply is marked by
+// hand (markDeskReplied): a LinkedIn note's in linkedin_replied_at (LinkedIn has no API), an email's as email_status
+// 'replied' with email_replied_at, which the network mailbox sync (lib/sales/outcomes.ts) also writes once connected.
+// A re-import (importDossiers) only ever writes the dossier table, so none of this moves when the export is refreshed.
 //
 // John's text is a gtm_outreach_drafts row (batch 'desk', variant 'john', person = Twenty id), so the version trigger
 // keeps every replaced text, and `gtm outreach queue|mark` and the LinkedIn runbook read it like any accepted draft.
@@ -24,7 +27,7 @@ import {
   draftTrigger, guestRoute, isAbout, isPersonId, isWarmTrack, parseDossiers, parseProfile, prefill, QUEUE_COLUMNS, routeSendProblems, sendProblems, TRACK_DEFAULTS, TRACKS,
   type DeskEdit, type DeskSettings, type DossierRow, type Profile, type QueueItem, type QueueRow, type Track,
 } from "./desk";
-import { DRAFT_COLUMNS, VERSION_COLUMNS, type Draft, type DraftVersion } from "./model";
+import { DESK_DRAFT_COLUMNS, DRAFT_COLUMNS, VERSION_COLUMNS, type Draft, type DraftVersion } from "./model";
 
 const DRAFTS = "gtm_outreach_drafts";
 const DOSSIERS = "gtm_outreach_dossiers";
@@ -115,9 +118,9 @@ export async function deskTracks(db: SupabaseClient): Promise<Record<Track, Desk
 
 /** Every desk draft of one track, light: what the queue and "sent today" need. */
 async function deskDrafts(db: SupabaseClient, track: Track) {
-  const out: Array<Pick<Draft, "id" | "status" | "email_status" | "linkedin_status" | "follow_up_status"> & { person: string; track: Track; email_sent_at: string | null; linkedin_sent_at: string | null; follow_up_sent_at: string | null }> = [];
+  const out: Array<Pick<Draft, "id" | "status" | "email_status" | "linkedin_status" | "follow_up_status"> & { person: string; track: Track; email_sent_at: string | null; linkedin_sent_at: string | null; follow_up_sent_at: string | null; email_replied_at: string | null; linkedin_replied_at: string | null }> = [];
   for (let from = 0; ; from += 1000) {
-    const page = must(await db.from(DRAFTS).select("id,person,track,status,email_status,linkedin_status,email_sent_at,linkedin_sent_at,follow_up_status,follow_up_sent_at")
+    const page = must(await db.from(DRAFTS).select("id,person,track,status,email_status,linkedin_status,email_sent_at,linkedin_sent_at,follow_up_status,follow_up_sent_at,email_replied_at,linkedin_replied_at")
       .eq("batch", DESK_BATCH).eq("variant", DESK_VARIANT).eq("track", track).order("id").range(from, from + 999), "desk drafts") as typeof out;
     out.push(...page);
     if (page.length < 1000) return out;
@@ -150,7 +153,7 @@ export async function deskPerson(db: SupabaseClient, personId: string, profile: 
   const row = must(await db.from(DOSSIERS).select(DOSSIER_COLUMNS).eq("twenty_person_id", personId).maybeSingle(), "dossier") as unknown as DossierRow | null;
   if (!row) throw new Error("No dossier for this person. Import it with gtm outreach import-dossiers.");
   onTrack(row, track);
-  const draft = must(await db.from(DRAFTS).select(DRAFT_COLUMNS).eq("batch", DESK_BATCH).eq("variant", DESK_VARIANT).eq("person", personId).maybeSingle(), "desk draft") as unknown as Draft | null;
+  const draft = must(await db.from(DRAFTS).select(DESK_DRAFT_COLUMNS).eq("batch", DESK_BATCH).eq("variant", DESK_VARIANT).eq("person", personId).maybeSingle(), "desk draft") as unknown as Draft | null;
   const versions = draft ? (must(await db.from("gtm_outreach_draft_versions").select(VERSION_COLUMNS).eq("draft_id", draft.id).order("created_at", { ascending: false }).limit(50), "draft history") as unknown as DraftVersion[]) : [];
   // Person id and domain are validated (a token and a hostname), so they are safe inside the filter.
   const ors = [`prospect->>twenty_person_id.eq.${personId}`, ...(row.domain ? [`domain.eq.${row.domain}`] : [])].join(",");
@@ -176,7 +179,7 @@ async function dossierRow(db: SupabaseClient, personId: string, track?: Track): 
 }
 
 async function deskDraft(db: SupabaseClient, personId: string): Promise<Draft | null> {
-  return must(await db.from(DRAFTS).select(DRAFT_COLUMNS).eq("batch", DESK_BATCH).eq("variant", DESK_VARIANT).eq("person", personId).maybeSingle(), "desk draft") as unknown as Draft | null;
+  return must(await db.from(DRAFTS).select(DESK_DRAFT_COLUMNS).eq("batch", DESK_BATCH).eq("variant", DESK_VARIANT).eq("person", personId).maybeSingle(), "desk draft") as unknown as Draft | null;
 }
 
 const fields = (row: DossierRow, e: DeskEdit) => ({
@@ -201,7 +204,7 @@ export async function saveDesk(db: SupabaseClient, personId: string, edit: DeskE
     // A warm stream's LinkedIn note is final once it is sent (the client's invite stays editable, as before).
     if (isWarmTrack(row.track) && (existing.linkedin_status === "sent" || existing.linkedin_status === "connected")) throw new Error("This note was already sent, so it can't change any more.");
     const rows = must(await db.from(DRAFTS).update({ ...fields(row, edit), edited_by: actor, edited_at: now() })
-      .eq("id", existing.id).eq("email_status", "none").select(DRAFT_COLUMNS), "save") as unknown as Draft[];
+      .eq("id", existing.id).eq("email_status", "none").select(DESK_DRAFT_COLUMNS), "save") as unknown as Draft[];
     if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
     return rows[0];
   }
@@ -213,7 +216,7 @@ export async function saveDesk(db: SupabaseClient, personId: string, edit: DeskE
     trigger: draftTrigger(row.dossier), strategy: draftStrategy(row.dossier),
     // The empty composer is the "original", so a diff shows what John wrote.
     original_subject: start.subject, original_body: start.body, edited_by: actor, edited_at: now(),
-  }).select(DRAFT_COLUMNS);
+  }).select(DESK_DRAFT_COLUMNS);
   if (error?.code === "23505") return saveDesk(db, personId, edit, actor, profile, track); // a second tab created it first
   if (error) throw new Error(`save: ${error.message}`);
   return (data as unknown as Draft[])[0];
@@ -233,7 +236,7 @@ export async function markDeskEmailSent(db: SupabaseClient, personId: string, ed
   const problems = sendProblems(edit);
   if (problems.length) throw new Error(problems.join(" "));
   const d = await readyDesk(db, personId, edit, actor, profile, track);
-  const rows = must(await db.from(DRAFTS).update({ email_status: "sent", email_sent_by: actor }).eq("id", d.id).eq("status", "accepted").in("email_status", ["none", "queued"]).select(DRAFT_COLUMNS), "mark sent") as unknown as Draft[];
+  const rows = must(await db.from(DRAFTS).update({ email_status: "sent", email_sent_by: actor }).eq("id", d.id).eq("status", "accepted").in("email_status", ["none", "queued"]).select(DESK_DRAFT_COLUMNS), "mark sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This email was already marked sent.");
   return rows[0];
 }
@@ -243,7 +246,7 @@ export async function unmarkDeskEmailSent(db: SupabaseClient, personId: string, 
   await dossierRow(db, personId, track);
   const d = await deskDraft(db, personId);
   if (!d || d.email_status !== "sent") throw new Error("This email is not marked sent.");
-  const rows = must(await db.from(DRAFTS).update({ email_status: "none", email_sent_at: null, email_sent_by: null }).eq("id", d.id).eq("email_status", "sent").select(DRAFT_COLUMNS), "undo sent") as unknown as Draft[];
+  const rows = must(await db.from(DRAFTS).update({ email_status: "none", email_sent_at: null, email_sent_by: null }).eq("id", d.id).eq("email_status", "sent").select(DESK_DRAFT_COLUMNS), "undo sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
   return rows[0];
 }
@@ -257,7 +260,7 @@ export async function markDeskLinkedinSent(db: SupabaseClient, personId: string,
   if ((await dossierRow(db, personId, track)).track !== "client") throw new Error("Mark invite sent is for the client stream; a guest or network contact is marked sent by its route.");
   const d = await readyDesk(db, personId, edit, actor, profile, track);
   if (d.linkedin_status === "sent" || d.linkedin_status === "connected") return d;
-  const rows = must(await db.from(DRAFTS).update({ linkedin_status: "sent", linkedin_sent_by: actor }).eq("id", d.id).eq("status", "accepted").select(DRAFT_COLUMNS), "mark invite sent") as unknown as Draft[];
+  const rows = must(await db.from(DRAFTS).update({ linkedin_status: "sent", linkedin_sent_by: actor }).eq("id", d.id).eq("status", "accepted").select(DESK_DRAFT_COLUMNS), "mark invite sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
   return rows[0];
 }
@@ -276,7 +279,7 @@ export async function markDeskSent(db: SupabaseClient, personId: string, edit: D
   // Who marked it: the team page counts desk sends per person (gtm_team_performance migration).
   const patch = route === "linkedin" ? { linkedin_status: "sent", linkedin_sent_by: actor } : { email_status: "sent", email_sent_by: actor };
   const rows = must(await db.from(DRAFTS).update({ ...patch, route }).eq("id", d.id).eq("status", "accepted")
-    .in(route === "linkedin" ? "linkedin_status" : "email_status", ["none", "queued"]).select(DRAFT_COLUMNS), "mark sent") as unknown as Draft[];
+    .in(route === "linkedin" ? "linkedin_status" : "email_status", ["none", "queued"]).select(DESK_DRAFT_COLUMNS), "mark sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This was already marked sent.");
   return rows[0];
 }
@@ -290,8 +293,9 @@ export async function unmarkDeskSent(db: SupabaseClient, personId: string, track
   if (d.follow_up_status === "sent") throw new Error("Mark the follow-up not sent first.");
   const linkedin = (d.route ?? guestRoute(row.dossier)) === "linkedin";
   if ((linkedin ? d.linkedin_status : d.email_status) !== "sent") throw new Error("This is not marked sent.");
-  const patch = linkedin ? { linkedin_status: "none", linkedin_sent_at: null, linkedin_sent_by: null } : { email_status: "none", email_sent_at: null, email_sent_by: null };
-  const rows = must(await db.from(DRAFTS).update(patch).eq("id", d.id).eq(linkedin ? "linkedin_status" : "email_status", "sent").select(DRAFT_COLUMNS), "undo sent") as unknown as Draft[];
+  // A LinkedIn reply marked on a note that was never sent goes with it (the table requires a sent note for a reply).
+  const patch = linkedin ? { linkedin_status: "none", linkedin_sent_at: null, linkedin_sent_by: null, linkedin_replied_at: null } : { email_status: "none", email_sent_at: null, email_sent_by: null };
+  const rows = must(await db.from(DRAFTS).update(patch).eq("id", d.id).eq(linkedin ? "linkedin_status" : "email_status", "sent").select(DESK_DRAFT_COLUMNS), "undo sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
   return rows[0];
 }
@@ -302,7 +306,7 @@ export async function markDeskFollowUpSent(db: SupabaseClient, personId: string,
   const d = await deskDraft(db, personId);
   if (!d || !(d.email_status === "sent" || d.email_status === "replied" || d.linkedin_status === "sent" || d.linkedin_status === "connected")) throw new Error("Mark the first message sent before its follow-up.");
   if (d.follow_up_status === "sent") return d;
-  const rows = must(await db.from(DRAFTS).update({ follow_up_status: "sent" }).eq("id", d.id).eq("follow_up_status", "none").select(DRAFT_COLUMNS), "mark follow-up sent") as unknown as Draft[];
+  const rows = must(await db.from(DRAFTS).update({ follow_up_status: "sent" }).eq("id", d.id).eq("follow_up_status", "none").select(DESK_DRAFT_COLUMNS), "mark follow-up sent") as unknown as Draft[];
   if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
   return rows[0];
 }
@@ -312,7 +316,44 @@ export async function unmarkDeskFollowUpSent(db: SupabaseClient, personId: strin
   if (!isWarmTrack((await dossierRow(db, personId, track)).track)) throw new Error("Follow-ups are for the guest and network streams.");
   const d = await deskDraft(db, personId);
   if (!d || d.follow_up_status !== "sent") throw new Error("No follow-up is marked sent.");
-  const rows = must(await db.from(DRAFTS).update({ follow_up_status: "none" }).eq("id", d.id).eq("follow_up_status", "sent").select(DRAFT_COLUMNS), "undo follow-up") as unknown as Draft[];
+  const rows = must(await db.from(DRAFTS).update({ follow_up_status: "none" }).eq("id", d.id).eq("follow_up_status", "sent").select(DESK_DRAFT_COLUMNS), "undo follow-up") as unknown as Draft[];
+  if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
+  return rows[0];
+}
+
+/**
+ * "Mark replied" on a warm stream (guests and the network): they answered the first message. A LinkedIn note has no API, so this
+ * is the only way its reply is recorded (linkedin_replied_at). An email reply sets email_status 'replied' and email_replied_at,
+ * as the mailbox sync does where it can read the sending mailbox; a time already there (an earlier sync) is kept. Either way the
+ * follow-up stops being due. Marking twice keeps the first time.
+ */
+export async function markDeskReplied(db: SupabaseClient, personId: string, track?: Track): Promise<Draft> {
+  const row = await dossierRow(db, personId, track);
+  if (!isWarmTrack(row.track)) throw new Error("Mark replied is for the guest and network streams; client replies come from the HQ inbox.");
+  const d = await deskDraft(db, personId);
+  const linkedin = !!d && (d.route ?? guestRoute(row.dossier)) === "linkedin";
+  if (!d || !(linkedin ? d.linkedin_status === "sent" || d.linkedin_status === "connected" : d.email_status === "sent" || d.email_status === "replied")) throw new Error("Mark the first message sent before its reply.");
+  if (linkedin ? d.linkedin_replied_at : d.email_status === "replied" && d.email_replied_at) return d;
+  const at = now();
+  const q = linkedin
+    ? db.from(DRAFTS).update({ linkedin_replied_at: at }).eq("id", d.id).is("linkedin_replied_at", null).in("linkedin_status", ["sent", "connected"])
+    : db.from(DRAFTS).update({ email_status: "replied", email_replied_at: d.email_replied_at ?? at }).eq("id", d.id).in("email_status", ["sent", "replied"]);
+  const rows = must(await q.select(DESK_DRAFT_COLUMNS), "mark replied") as unknown as Draft[];
+  if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
+  return rows[0];
+}
+
+/** Undo a mistaken "Mark replied". An email goes back to sent; a reply the mailbox sync finds again is recorded again. */
+export async function unmarkDeskReplied(db: SupabaseClient, personId: string, track?: Track): Promise<Draft> {
+  const row = await dossierRow(db, personId, track);
+  if (!isWarmTrack(row.track)) throw new Error("Mark replied is for the guest and network streams.");
+  const d = await deskDraft(db, personId);
+  const linkedin = !!d && (d.route ?? guestRoute(row.dossier)) === "linkedin";
+  if (!d || !(linkedin ? d.linkedin_replied_at : d.email_status === "replied")) throw new Error("No reply is marked.");
+  const q = linkedin
+    ? db.from(DRAFTS).update({ linkedin_replied_at: null }).eq("id", d.id)
+    : db.from(DRAFTS).update({ email_status: "sent", email_replied_at: null }).eq("id", d.id).eq("email_status", "replied");
+  const rows = must(await q.select(DESK_DRAFT_COLUMNS), "undo replied") as unknown as Draft[];
   if (!rows.length) throw new Error("This draft changed meanwhile; reload the page.");
   return rows[0];
 }

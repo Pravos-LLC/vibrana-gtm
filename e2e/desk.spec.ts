@@ -304,7 +304,7 @@ test("drafting endpoint preserves owner, origin, stream and client-exclusion gat
   expect(await network.json()).toMatchObject({ ok: false, error: expect.stringContaining("Network notes are yours to write") });
 });
 
-test("Writing desk, the network stream: its own tab, meter and sender, no AI angles, the relationship block, email and LinkedIn sends, the follow-up", async ({ page }) => {
+test("Writing desk, the network stream: its own tab, meter and sender, no AI angles, the relationship block and its history, email and LinkedIn sends, Mark replied, the follow-up", async ({ page }) => {
   const db = admin();
   const eightDays = new Date(Date.now() - 8 * 86_400_000).toISOString();
   // Noa was written to 8 days ago and has not replied: her follow-up is due.
@@ -329,7 +329,15 @@ test("Writing desk, the network stream: its own tab, meter and sender, no AI ang
     const dossier = page.getByTestId("desk-dossier");
     await expect(dossier.getByTestId("desk-network")).toContainText("T1, prior conversation");
     await expect(dossier.getByTestId("desk-network-origins")).toHaveText("LinkedIn, Gmail");
-    await expect(dossier.getByTestId("desk-network-exchanged")).toContainText("email");
+    await expect(dossier.getByTestId("desk-network-exchanged")).toHaveText("4 Mar 2026 on Gmail"); // a bare date is the calendar day, in any time zone
+    const thread = dossier.getByTestId("desk-network-thread");
+    await expect(thread).toHaveText("Open thread");
+    await expect(thread).toHaveAttribute("href", "https://mail.google.com/mail/?authuser=jo@fixture.example#all/18c2f0a1b2c3d4e5");
+    await expect(thread).toHaveAttribute("target", "_blank");
+    await expect(thread).toHaveAttribute("rel", "noreferrer");
+    await expect(dossier.getByTestId("desk-network-messages")).toHaveText("12 messages: you 7, them 5");
+    await expect(dossier.getByTestId("desk-network-connected")).toHaveText("Connected on LinkedIn 2 May 2019");
+    await expect(dossier.getByTestId("desk-network-warm")).toHaveText("#1 · warm score 85: relationship 30, recency 25, role 15, reach 10, connector 5");
     await expect(dossier.getByTestId("desk-network-context")).toHaveText("Fixture: met Nia at a fixture meetup");
 
     // Nia by email: the network meter moves, the others do not.
@@ -348,14 +356,29 @@ test("Writing desk, the network stream: its own tab, meter and sender, no AI ang
     await expect(page.getByTestId("desk-route")).toHaveText("LinkedIn");
     await expect(page.getByLabel("Email body")).toHaveCount(0);
     await expect(dossier.getByTestId("desk-network-exchanged")).toHaveText("No two-way exchange on record");
+    // An older row without the history keys renders as before: none of the new lines, no thread link.
+    for (const id of ["desk-network-thread", "desk-network-messages", "desk-network-connected", "desk-network-warm"]) await expect(dossier.getByTestId(id)).toHaveCount(0);
     await page.getByLabel("LinkedIn note").fill("Hi Ned, good to see your news.");
     await page.getByRole("button", { name: "Mark sent" }).click();
     await expect(network).toContainText("Network 2/15");
     await expect.poll(async () => (await db.from("gtm_outreach_drafts").select("linkedin_status,email_status,route").eq("person", NETWORK_IDS.linkedin).single()).data).toEqual({ linkedin_status: "sent", email_status: "none", route: "linkedin" });
+    // LinkedIn has no API: he marks Ned's reply here, one click. It is not a send.
+    await page.getByTestId("desk-mark-replied").click();
+    await expect(page.getByTestId("desk-replied")).toBeVisible();
+    await expect.poll(async () => !!(await db.from("gtm_outreach_drafts").select("linkedin_replied_at").eq("person", NETWORK_IDS.linkedin).single()).data?.linkedin_replied_at).toBe(true);
+    await expect(network).toContainText("Network 2/15");
 
     // The follow-up due chip: Noa, 8 days, no reply. Marking it counts nothing.
     await page.getByRole("button", { name: /^Follow-up due/ }).click();
     await queue.getByRole("button", { name: /Noa Fixture/ }).click();
+    await expect(page.getByTestId("desk-followup-due")).toBeVisible();
+    // She replied after all: Mark replied ends the follow-up (it is not due, and the button goes); Not replied brings it back.
+    await page.getByTestId("desk-mark-replied").click();
+    await expect(page.getByTestId("desk-replied")).toBeVisible();
+    await expect(page.getByTestId("desk-followup-due")).toHaveCount(0);
+    await expect(page.getByTestId("desk-followup")).toHaveCount(0);
+    await expect.poll(async () => (await db.from("gtm_outreach_drafts").select("email_status").eq("person", NETWORK_IDS.followup).single()).data?.email_status).toBe("replied");
+    await page.getByTestId("desk-unreply").click();
     await expect(page.getByTestId("desk-followup-due")).toBeVisible();
     await page.getByTestId("desk-followup").click();
     await expect(page.getByTestId("desk-followup-sent")).toBeVisible();

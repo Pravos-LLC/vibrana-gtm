@@ -34,8 +34,12 @@ export type Draft = {
   /** The writing desk's stream (default 'client'), how a guest or network contact is reached, and the single follow-up (never counts toward the target). */
   track?: "client" | "guest" | "network"; route?: "email" | "linkedin" | "intermediary";
   follow_up_status?: "none" | "sent"; follow_up_sent_at?: string | null;
+  /** Desk reads only (DESK_DRAFT_COLUMNS): when they answered by email (the mailbox sync or Mark replied) or on LinkedIn (Mark replied). */
+  email_replied_at?: string | null; linkedin_replied_at?: string | null;
 };
 export const DRAFT_COLUMNS = "id,created_at,updated_at,batch,domain,variant,person,prospect,trigger,strategy,subject,body,original_subject,original_body,linkedin_note,followups,claims,findings,model,version,status,note,decided_by,decided_at,edited_by,edited_at,linkedin_status,email_status,email_sent_at,linkedin_sent_at,track,route,follow_up_status,follow_up_sent_at";
+/** The writing desk's draft columns: every draft column and the two reply times (linkedin_replied_at: brand.example.com migration 20261111010000). */
+export const DESK_DRAFT_COLUMNS = `${DRAFT_COLUMNS},email_replied_at,linkedin_replied_at`;
 
 export type DraftVersion = {
   id: string; created_at: string; draft_id: string; version: number; reason: "edited" | "regenerated" | "reimported";
