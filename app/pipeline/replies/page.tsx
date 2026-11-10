@@ -36,11 +36,11 @@ export default async function Replies({ searchParams }: { searchParams: Promise<
   const isOwner = (claims?.claims?.app_metadata as { gtm_owner?: boolean } | undefined)?.gtm_owner === true;
   const owner = parseOwner(sp.owner), period = parsePeriod(sp.period);
   if (!isOwner) {
-    return <Shell title="Replies" active="/pipeline"><SalesNav active="/pipeline/replies" owner={owner} period={period} /><SourceNote tone="bad">Replies are for the cockpit owners.</SourceNote></Shell>;
+    return <Shell title="Replies" active="/pipeline"><SalesNav active="/pipeline/replies" owner={owner} period={period} showPeriod={false} /><SourceNote tone="bad">Replies are for the cockpit owners.</SourceNote></Shell>;
   }
   const data = await loadReview(adminDb(), new Date()).catch((e: Error) => ({ error: e.message.split(":")[0] }));
   if ("error" in data) {
-    return <Shell title="Replies" active="/pipeline"><SalesNav active="/pipeline/replies" owner={owner} period={period} /><SourceNote tone="bad">Replies could not be read ({data.error}).</SourceNote></Shell>;
+    return <Shell title="Replies" active="/pipeline"><SalesNav active="/pipeline/replies" owner={owner} period={period} showPeriod={false} /><SourceNote tone="bad">Replies could not be read ({data.error}).</SourceNote></Shell>;
   }
   const replies = owner ? data.replies.filter((r) => r.member === owner) : data.replies;
   const waiting = replies.filter((r) => r.needsReview).length;
@@ -50,7 +50,7 @@ export default async function Replies({ searchParams }: { searchParams: Promise<
 
   return (
     <Shell title="Replies" active="/pipeline">
-      <SalesNav active="/pipeline/replies" owner={owner} period={period} />
+      <SalesNav active="/pipeline/replies" owner={owner} period={period} showPeriod={false} />
       {data.incidents.length > 0 && (
         <Section title="Email alerts" note="open now; both of you get these by email">
           <Table head={["Since", "Alert"]} rows={data.incidents.map((i) => [day(i.opened_at), <span key="s" className={i.severity === "critical" ? "text-red-strong" : undefined}>{i.summary}</span>])} />

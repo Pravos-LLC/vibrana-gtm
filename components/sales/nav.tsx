@@ -1,4 +1,5 @@
-// The /pipeline sub-navigation: six tabs, then the owner and period filters every tab shares (kept across tabs in the URL).
+// The /pipeline sub-navigation: the tabs, then the owner and period filters (kept across tabs in the URL). A tab without a
+// period (Replies: always the last 90 days) hides the period filter.
 import Link from "next/link";
 import type { Owner } from "@/lib/sales/deals";
 import type { PeriodKey } from "@/lib/sales/metrics";
@@ -19,7 +20,7 @@ const PERIODS: { value: PeriodKey; label: string }[] = [{ value: "30", label: "3
 
 const pill = (on: boolean) => cn("rounded-md border px-3 py-1 text-sm", on ? "border-[color:var(--border-strong)] bg-[color:var(--surface-card)] text-ink" : "border-line text-ink-3 hover:text-ink-2");
 
-export function SalesNav({ active, owner, period, showOwner = true }: { active: string; owner: Owner | null; period: PeriodKey; showOwner?: boolean }) {
+export function SalesNav({ active, owner, period, showOwner = true, showPeriod = true }: { active: string; owner: Owner | null; period: PeriodKey; showOwner?: boolean; showPeriod?: boolean }) {
   const q = (o: Owner | null, p: PeriodKey) => {
     const s = new URLSearchParams();
     if (o) s.set("owner", o);
@@ -43,9 +44,11 @@ export function SalesNav({ active, owner, period, showOwner = true }: { active: 
             {OWNERS.map((o) => <Link key={o.label} href={`${active}${q(o.value, period)}`} aria-current={o.value === owner ? "page" : undefined} className={pill(o.value === owner)}>{o.label}</Link>)}
           </nav>
         )}
-        <nav aria-label="Period" className="flex gap-2">
-          {PERIODS.map((p) => <Link key={p.value} href={`${active}${q(owner, p.value)}`} aria-current={p.value === period ? "page" : undefined} className={pill(p.value === period)}>{p.label}</Link>)}
-        </nav>
+        {showPeriod && (
+          <nav aria-label="Period" className="flex gap-2">
+            {PERIODS.map((p) => <Link key={p.value} href={`${active}${q(owner, p.value)}`} aria-current={p.value === period ? "page" : undefined} className={pill(p.value === period)}>{p.label}</Link>)}
+          </nav>
+        )}
       </div>
     </div>
   );
