@@ -72,8 +72,10 @@ Origami has no global suppression: its exclusion list blocks no API enrollment a
 ```sql
 -- Replace only the operation id and operator name after inspecting the exact failed operation.
 do $$
+declare
+  holder text := 'origami-manual-recovery-' || gen_random_uuid()::text;
 begin
-  if not public.gtm_take_lease('email.suppression.apply', 'origami-manual-recovery', 600) then
+  if not public.gtm_take_lease('email.suppression.apply', holder, 600) then
     raise exception 'suppression writer is running; retry later';
   end if;
   update public.gtm_email_sync_ops
@@ -81,7 +83,7 @@ begin
     where id = OPERATION_ID and destination = 'twenty' and action = 'person_opt_out'
       and policy_version = 'origami-reply-v1' and state in ('approved', 'failed');
   if not found then raise exception 'operation was not an eligible open Origami consent write'; end if;
-  perform public.gtm_release_lease('email.suppression.apply', 'origami-manual-recovery');
+  perform public.gtm_release_lease('email.suppression.apply', holder);
 end $$;
 ```
 
