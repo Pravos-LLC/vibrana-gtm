@@ -6,6 +6,7 @@ import { resolve, dirname } from "node:path";
 import { SIZES, TEMPLATES, TOOLKIT_VERSION, type Brand, type Shape, type Template, type Theme } from "./catalog";
 import { imageProblems, sniffImage, IMAGE_TYPES, PUBLISH_IMAGE_BYTES } from "../image-loadable";
 import { checkFrameManifest, type FrameManifest, type StagedVideo } from "./frame";
+import { checkOwnerManifest, type OwnerManifest } from "./owner";
 
 export type PackagingBrief = {
   schema: 1; story: string; brand: Brand; theme: Theme; template: Template; ready: boolean;
@@ -76,7 +77,9 @@ export function inputPaths(b: PackagingBrief, briefPath: string): string[] {
 }
 export function checkPackage(path: string, expected?: { story: string; assetPath: string; sha256: string; videos?: StagedVideo[] }): string[] {
   try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as PackagingManifest | FrameManifest;
+    const raw = JSON.parse(readFileSync(path, "utf8")) as PackagingManifest | FrameManifest | OwnerManifest;
+    // An owner-supplied cover (gtm packaging owner): an image handed in as is, bound by hash to who supplied it and where it came from.
+    if ((raw as OwnerManifest).kind === "owner") return checkOwnerManifest(path, raw as OwnerManifest, expected);
     // A frame cover (gtm packaging frame) is one exact frame of the Story's own cut, bound to that video by hash.
     if ((raw as FrameManifest).kind === "frame") return checkFrameManifest(path, raw as FrameManifest, expected);
     const m = raw as PackagingManifest;
@@ -138,6 +141,8 @@ export function packagingGate(
     if (!errors.length) continue;
     const frame = !!a.packaging && (() => { try { return JSON.parse(readFileSync(a.packaging!, "utf8"))?.kind === "frame"; } catch { return false; } })();
     if (frame) throw new Error(`${a.id}: ${errors.join("; ")}. Re-run gtm packaging frame ${story} --video <the staged cut> --at <seconds> --out <directory> and point the cover at the new files.`);
+    const owner = !!a.packaging && (() => { try { return JSON.parse(readFileSync(a.packaging!, "utf8"))?.kind === "owner"; } catch { return false; } })();
+    if (owner) throw new Error(`${a.id}: ${errors.join("; ")}. Re-run gtm packaging owner ${story} --image <the cover> --by <who> --origin <where it came from> --out <directory> and point the cover at the new files.`);
     throw new Error(`${a.id}: ${errors.join("; ")}. Run gtm packaging brief ${story}, complete the brief, then gtm packaging render ${story} and gtm packaging check ${story}.`);
   }
 }
