@@ -7,7 +7,7 @@ import { emailHolds } from "@/lib/email/suppression";
 import { guestRoute, hasAngles, isTrack, senderProfile, type DeskEdit, type DossierRow, type Track } from "@/lib/outreach/desk";
 import { TwentyReader } from "@/lib/twenty";
 import {
-  deskPerson, deskSettings, markDeskFollowUpSent, markDeskLinkedinSent, markDeskSent, saveDesk, setDailyTarget, skipPerson, unmarkDeskFollowUpSent, unmarkDeskSent, unskipPerson,
+  deskPerson, deskSettings, markDeskFollowUpSent, markDeskLinkedinSent, markDeskReplied, markDeskSent, saveDesk, setDailyTarget, skipPerson, unmarkDeskFollowUpSent, unmarkDeskReplied, unmarkDeskSent, unskipPerson,
   type DeskPerson,
 } from "@/lib/outreach/desk-store";
 import type { Draft } from "@/lib/outreach/model";
@@ -160,6 +160,15 @@ async function guardEmail(personId: string, address: string | null) {
 
 export async function undoFollowUp(personId: string, track: Track): Promise<DeskResult<Draft>> {
   return run(async () => unmarkDeskFollowUpSent(adminDb(), personId, stream(track)));
+}
+
+/** "Mark replied" on a warm stream: the only record of a LinkedIn reply, and an email reply the mailbox sync cannot see yet. */
+export async function markReplied(personId: string, track: Track): Promise<DeskResult<Draft>> {
+  return run(async () => markDeskReplied(adminDb(), personId, stream(track)));
+}
+
+export async function undoReplied(personId: string, track: Track): Promise<DeskResult<Draft>> {
+  return run(async () => unmarkDeskReplied(adminDb(), personId, stream(track)));
 }
 
 export async function skipDeskPerson(personId: string, reason: string, track: Track): Promise<DeskResult<DossierRow>> {

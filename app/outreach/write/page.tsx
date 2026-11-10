@@ -4,7 +4,7 @@ import { deskPerson, deskQueue, deskTracks, type DeskPerson } from "@/lib/outrea
 import { isPersonId, isTrack, senderFor, senderProfile, TRACKS, type QueueItem, type Track } from "@/lib/outreach/desk";
 import { REPORT_TZ } from "@/lib/reports/week";
 import { sessionDb } from "@/lib/supabase/server";
-import { loadDeskPerson, markFollowUp, markInviteSent, markSent, saveDeskDraft, setDeskTarget, skipDeskPerson, undoFollowUp, undoSent, unskipDeskPerson } from "./actions";
+import { loadDeskPerson, markFollowUp, markInviteSent, markReplied, markSent, saveDeskDraft, setDeskTarget, skipDeskPerson, undoFollowUp, undoReplied, undoSent, unskipDeskPerson } from "./actions";
 
 export const dynamic = "force-dynamic";
 // The learning run after a send (next/server after) reads John's edit with one model call.
@@ -12,7 +12,7 @@ export const maxDuration = 90;
 
 const actions = {
   load: loadDeskPerson, save: saveDeskDraft, markSent, undoSent, markInvite: markInviteSent,
-  markFollowUp, undoFollowUp, skip: skipDeskPerson, unskip: unskipDeskPerson, setTarget: setDeskTarget,
+  markFollowUp, undoFollowUp, markReplied, undoReplied, skip: skipDeskPerson, unskip: unskipDeskPerson, setTarget: setDeskTarget,
 };
 
 export const metadata = { title: "Writing desk" };

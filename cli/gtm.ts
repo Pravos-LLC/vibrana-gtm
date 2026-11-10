@@ -2061,7 +2061,7 @@ const help = `gtm <command> [--json]
                            or failed, mean judge score). Same numbers as /front-doors; read-only
   sales status [--json]    the take-home goal (this month, last 3 months, next month), coverage, win rate and the action
                            list; the same numbers as /pipeline
-  sales run                do the hourly pipeline cron's work now: stage history, HQ inbox outcomes, lastContactedAt, site days
+  sales run                do the hourly pipeline cron's work now: stage history, HQ and network inbox outcomes, lastContactedAt, site days
   team replay --member CODE --since YYYY-MM-DD [--mailbox ADDRESS]   list a team mailbox's sent mail again from the
                            date and re-read its outreach threads on the next hourly run (reconciles older rows; reads only)
   suppression plan|approve|apply   email suppression (VIB-513): the dry-run report (counts only), approve pending Twenty

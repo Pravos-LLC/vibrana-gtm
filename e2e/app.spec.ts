@@ -242,6 +242,11 @@ test.describe("owner", () => {
     await expectKpi(page, "New connections", "1");
     await expectKpi(page, "Two-way with ICP", "1");
     await expect(page.getByText(/No LinkedIn export imported yet/)).toBeVisible();
+    // The network scoreboard: absolute counts by week and warm tier, both tiers always listed.
+    const board = page.getByTestId("network-scoreboard");
+    await expect(board.getByRole("columnheader", { name: "LinkedIn replies" })).toBeVisible();
+    await expect(board.getByRole("cell", { name: "T1", exact: true }).first()).toBeVisible();
+    await expect(board.getByRole("cell", { name: "T2", exact: true }).first()).toBeVisible();
     await shot(page, "pipeline-conversations");
 
     await page.goto("/front-doors");

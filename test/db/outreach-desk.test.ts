@@ -337,3 +337,130 @@ test("network: mark sent by route (email or LinkedIn note), any route counts, th
   assert.equal((await store.unmarkDeskFollowUpSent(db, NETWORK_IDS.followup, "network")).follow_up_status, "none");
   await assert.rejects(store.markDeskFollowUpSent(db, DESK_IDS.top, "client"), /Follow-ups are for the guest and network streams/);
 });
+
+// ---- the network desk's history leg (VIB-522): re-imports and replies --------------------------------------------------
+
+/** The network stream as the seed leaves it: the fixture's three people, nobody skipped, no desk drafts. */
+async function resetNetwork() {
+  const db = admin();
+  await db.from("gtm_outreach_drafts").delete().eq("batch", "desk").eq("track", "network");
+  await db.from("gtm_outreach_dossiers").delete().eq("track", "network").not("twenty_person_id", "in", `(${Object.values(NETWORK_IDS).join(",")})`);
+  await db.from("gtm_outreach_dossiers").update({ skipped_at: null, skip_reason: "", skipped_by: null }).eq("track", "network");
+  await store.importDossiers(db, JSON.stringify(NETWORK_FIXTURE), { track: "network" });
+}
+
+test("network re-import: dossiers, scores and queue order update; drafts, sends, replies, follow-ups and skips never change", async () => {
+  const db = admin();
+  await resetNetwork();
+  const { followUpDue } = await import("../../lib/outreach/desk.ts");
+  // John's work on the desk before the re-import: Nia emailed and replied, Noa emailed and followed up, Ned's note written then skipped.
+  await store.markDeskSent(db, NETWORK_IDS.email, gedit({ to: "nia@nia.example", subject: "Catching up", body: "Hey Nia,\n\nMine." }), actor, NETWORK_PROFILE, "network");
+  await store.markDeskReplied(db, NETWORK_IDS.email, "network");
+  await store.markDeskSent(db, NETWORK_IDS.followup, gedit({ to: "noa@noa.example", subject: "Long time", body: "Hey Noa,\n\nMine." }), actor, NETWORK_PROFILE, "network");
+  await store.markDeskFollowUpSent(db, NETWORK_IDS.followup, "network");
+  await store.saveDesk(db, NETWORK_IDS.linkedin, gedit({ linkedin_note: "Hi Ned, my own note." }), actor, NETWORK_PROFILE, "network");
+  await store.skipPerson(db, NETWORK_IDS.linkedin, "Fixture: not now", actor, "network");
+  const drafts = async () => (await db.from("gtm_outreach_drafts").select("*").eq("batch", "desk").eq("track", "network").order("person")).data!;
+  const skips = async () => (await db.from("gtm_outreach_dossiers").select("twenty_person_id,skipped_at,skip_reason,skipped_by").eq("track", "network").order("twenty_person_id")).data!;
+  const beforeDrafts = await drafts(), beforeSkips = await skips();
+  assert.equal(beforeDrafts.length, 3);
+
+  // The new export: every score moves (Nia from first to last), the warm and history keys arrive, and Rio is new.
+  const RIO = "00000000-0000-4000-8000-00000000ae04";
+  const warm = (score: number, rank: number) => ({ score, rank, parts: { relationship: 25, recency: 20, role: 15, reach: score - 60 > 0 ? score - 60 : 0, connector: 0 } });
+  const [nia, ned, noa] = NETWORK_FIXTURE;
+  const file = JSON.stringify([
+    { ...nia, score: 10, network: { ...nia.network, warm: warm(10, 4), last_channel: "gmail", last_exchanged_at: "2026-03-04", last_thread_url: "https://mail.google.com/mail/?authuser=jo@fixture.example#all/18c2f0a1b2c3d4e5", history: { linkedin: { sent: 0, received: 0 }, gmail: { sent: 7, received: 5 } }, connected_on: null } },
+    { ...ned, score: 99, prospect: { ...ned.prospect, title: "Managing Partner", company: "Ned Ventures" }, network: { ...ned.network, warm: warm(99, 1), last_thread_url: "https://www.linkedin.com/messaging/thread/2-Fixture==/", connected_on: "2019-05-02" } },
+    { ...noa, score: 65, network: { ...noa.network, warm: warm(65, 3) } },
+    { ...nia, twenty_person_id: RIO, domain: "rio.example", score: 80, prospect: { ...nia.prospect, first_name: "Rio", email: "rio@rio.example" }, network: { ...nia.network, warm: warm(80, 2), context: "Fixture: Rio" } },
+  ]);
+  const r = await store.importDossiers(db, file, { track: "network" });
+  assert.deepEqual([r.inserted, [...r.updated].sort()], [[RIO], [NETWORK_IDS.email, NETWORK_IDS.linkedin, NETWORK_IDS.followup].sort()]);
+
+  assert.deepEqual(await drafts(), beforeDrafts, "every desk draft is byte for byte what it was: text, sent, replied, follow-up");
+  assert.deepEqual((await skips()).filter((s) => s.twenty_person_id !== RIO), beforeSkips, "Ned stays skipped, with his reason");
+  const nedRow = (await db.from("gtm_outreach_dossiers").select("score,title,company,dossier").eq("twenty_person_id", NETWORK_IDS.linkedin).single()).data!;
+  assert.deepEqual([nedRow.score, nedRow.title, nedRow.company, nedRow.dossier.network.warm.rank, nedRow.dossier.network.connected_on], [99, "Managing Partner", "Ned Ventures", 1, "2019-05-02"], "the dossier content and its denormalized columns update");
+
+  const q = await store.deskQueue(db, "network");
+  assert.deepEqual(q.map((i) => [i.name, i.score, i.state]), [["Ned Fixture", 99, "skipped"], ["Rio Fixture", 80, "to_write"], ["Noa Fixture", 65, "sent"], ["Nia Fixture", 10, "sent"]],
+    "the queue follows the new scores, highest first, and each person keeps their state");
+  const niaItem = q.find((i) => i.twenty_person_id === NETWORK_IDS.email)!;
+  assert.ok(niaItem.email_replied_at && niaItem.email_status === "replied");
+  await db.from("gtm_outreach_drafts").update({ email_sent_at: new Date(Date.now() - 9 * 86_400_000).toISOString() }).eq("person", NETWORK_IDS.email).eq("batch", "desk");
+  assert.equal(followUpDue((await store.deskQueue(db, "network")).find((i) => i.twenty_person_id === NETWORK_IDS.email)!, "Asia/Makassar"), false, "replied: never follow-up due");
+  const person = await store.deskPerson(db, NETWORK_IDS.email, NETWORK_PROFILE, "network");
+  assert.deepEqual([person.start.subject, person.start.body], ["Catching up", "Hey Nia,\n\nMine."], "the composer still opens on what he wrote");
+  await resetNetwork();
+});
+
+test("network Mark replied: a LinkedIn note's reply (no API) and an email's; the follow-up stops; undo; never on clients", async () => {
+  const db = admin();
+  await resetNetwork();
+  const { followUpDue } = await import("../../lib/outreach/desk.ts");
+  await assert.rejects(store.markDeskReplied(db, NETWORK_IDS.linkedin, "network"), /first message sent before its reply/);
+  const li = await store.markDeskSent(db, NETWORK_IDS.linkedin, gedit({ linkedin_note: "Hi Ned, good to see your news." }), actor, NETWORK_PROFILE, "network");
+  await db.from("gtm_outreach_drafts").update({ linkedin_sent_at: new Date(Date.now() - 8 * 86_400_000).toISOString() }).eq("id", li.id);
+  const ned = async () => (await store.deskQueue(db, "network")).find((i) => i.twenty_person_id === NETWORK_IDS.linkedin)!;
+  assert.ok(followUpDue(await ned(), "Asia/Makassar"), "8 days, no reply: due");
+  const replied = await store.markDeskReplied(db, NETWORK_IDS.linkedin, "network");
+  assert.deepEqual([!!replied.linkedin_replied_at, replied.linkedin_status, replied.email_status, replied.email_sent_at ?? null], [true, "sent", "none", null], "a LinkedIn reply stamps no email");
+  assert.equal(followUpDue(await ned(), "Asia/Makassar"), false, "a replied person is never follow-up due");
+  assert.equal((await store.markDeskReplied(db, NETWORK_IDS.linkedin, "network")).linkedin_replied_at, replied.linkedin_replied_at, "marking twice keeps the first time");
+  assert.equal(sentToday(await store.deskQueue(db, "network"), "Asia/Makassar", "network"), 0, "a reply is not a send");
+  assert.equal((await store.unmarkDeskReplied(db, NETWORK_IDS.linkedin, "network")).linkedin_replied_at, null);
+  await store.markDeskReplied(db, NETWORK_IDS.linkedin, "network");
+  const unsent = await store.unmarkDeskSent(db, NETWORK_IDS.linkedin, "network");
+  assert.deepEqual([unsent.linkedin_status, unsent.linkedin_replied_at], ["none", null], "un-sending the note clears its reply");
+
+  const email = await store.markDeskSent(db, NETWORK_IDS.email, gedit({ to: "nia@nia.example", subject: "Catching up", body: "Hey Nia,\n\nMine." }), actor, NETWORK_PROFILE, "network");
+  const er = await store.markDeskReplied(db, NETWORK_IDS.email, "network");
+  assert.deepEqual([er.email_status, !!er.email_replied_at, er.email_sent_at], ["replied", true, email.email_sent_at]);
+  // A reply time the mailbox sync stored earlier is kept.
+  await db.from("gtm_outreach_drafts").update({ email_status: "sent", email_replied_at: "2026-11-01T00:00:00Z" }).eq("id", email.id);
+  assert.equal(Date.parse((await store.markDeskReplied(db, NETWORK_IDS.email, "network")).email_replied_at!), Date.parse("2026-11-01T00:00:00Z"));
+  const back = await store.unmarkDeskReplied(db, NETWORK_IDS.email, "network");
+  assert.deepEqual([back.email_status, back.email_replied_at], ["sent", null]);
+  await assert.rejects(store.unmarkDeskReplied(db, NETWORK_IDS.email, "network"), /No reply is marked/);
+  await assert.rejects(store.markDeskReplied(db, DESK_IDS.top, "client"), /client stream, not the network stream|for the guest and network streams/);
+  await assert.rejects(store.markDeskReplied(db, DESK_IDS.top), /for the guest and network streams/);
+  await resetNetwork();
+});
+
+test("network Not replied sticks: the mailbox sync never re-stamps a reply John cleared, even one read before he cleared it", async () => {
+  const db = admin();
+  await resetNetwork();
+  const { syncOutcomes } = await import("../../lib/sales/outcomes.ts");
+  const d = await store.markDeskSent(db, NETWORK_IDS.followup, gedit({ to: "noa@noa.example", subject: "Long time", body: "Hey Noa,\n\nMine." }), actor, NETWORK_PROFILE, "network");
+  // Sent an hour ago, so her reply and his clearing it are both in the past.
+  const sentAt = new Date(Date.now() - 3_600_000).toISOString();
+  await db.from("gtm_outreach_drafts").update({ email_sent_at: sentAt }).eq("id", d.id);
+  const later = (ms: number) => new Date(Date.parse(sentAt) + ms).toISOString();
+  const conv = (replyAt: string) => ({ id: "t", draftId: d.id, company: "", subject: "Long time", status: "reply" as const, unread: false, lastAt: replyAt, snippet: "", sentAt, replyAt });
+  const run = (replyAt: string, during?: () => PromiseLike<unknown>) => syncOutcomes(db, { track: "network", deadline: Date.now() + 10_000, mailbox: "user-f538cb95fc21@example.com",
+    reader: { list: async () => { await during?.(); return { conversations: [conv(replyAt)], nextPageToken: "", scanned: 1 }; } } as never });
+  const row = async () => (await db.from("gtm_outreach_drafts").select("email_status,email_replied_at,email_reply_dismissed_at").eq("id", d.id).single()).data!;
+
+  const first = later(60_000);
+  await run(first);
+  assert.deepEqual([(await row()).email_status, Date.parse((await row()).email_replied_at!)], ["replied", Date.parse(first)], "the sync records the reply");
+  const cleared = await store.unmarkDeskReplied(db, NETWORK_IDS.followup, "network");
+  assert.deepEqual([cleared.email_status, cleared.email_replied_at ?? null], ["sent", null]);
+  assert.ok((await row()).email_reply_dismissed_at, "and remembers when he cleared it");
+  await run(first);
+  assert.deepEqual([(await row()).email_status, (await row()).email_replied_at], ["sent", null], "the next hourly run leaves his call alone");
+
+  // He clears it while a run is between its read and its write: the write is refused on the database side.
+  await store.markDeskReplied(db, NETWORK_IDS.followup, "network");
+  await db.from("gtm_outreach_drafts").update({ email_replied_at: null, email_status: "sent", email_reply_dismissed_at: null }).eq("id", d.id);
+  const racing = later(120_000);
+  await run(racing, () => db.from("gtm_outreach_drafts").update({ email_reply_dismissed_at: later(180_000) }).eq("id", d.id));
+  assert.deepEqual([(await row()).email_status, (await row()).email_replied_at], ["sent", null], "a dismissal that lands mid-run wins");
+
+  // A reply that arrives after he cleared it is a new reply.
+  const fresh = new Date(Date.now() + 60_000).toISOString();
+  await run(fresh);
+  assert.deepEqual([(await row()).email_status, Date.parse((await row()).email_replied_at!)], ["replied", Date.parse(fresh)]);
+  await resetNetwork();
+});

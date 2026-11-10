@@ -163,7 +163,13 @@ const networkDossier = (id: string, first: string, domain: string, score: number
   network: { tier: "T1", relationship: "PRIOR_CONVERSATION", origins: ["LINKEDIN", "GMAIL"], last_exchanged_at: "2026-03-04T10:00:00Z", last_channel: "email", last_contacted_at: "2026-03-04T10:00:00Z", owners: ["JOHN"], context: `Fixture: met ${first} at a fixture meetup`, ...network },
 });
 export const NETWORK_FIXTURE = [
-  networkDossier(NETWORK_IDS.email, "Nia", "nia.example", 85, "email"),
+  // Nia carries the history keys (VIB-522: warm score, last thread, message counts, LinkedIn connection); Ned and Noa are older
+  // rows without them, which render as before.
+  networkDossier(NETWORK_IDS.email, "Nia", "nia.example", 85, "email", {
+    last_exchanged_at: "2026-03-04", last_channel: "gmail", last_thread_url: "https://mail.google.com/mail/?authuser=jo@fixture.example#all/18c2f0a1b2c3d4e5",
+    history: { linkedin: { sent: 4, received: 3 }, gmail: { sent: 3, received: 2 } }, connected_on: "2019-05-02",
+    warm: { score: 85, rank: 1, parts: { relationship: 30, recency: 25, role: 15, reach: 10, connector: 5 } },
+  }),
   networkDossier(NETWORK_IDS.linkedin, "Ned", "ned-fixture.network.invalid", 75, "linkedin", { tier: "T2", relationship: null, origins: ["LINKEDIN"], last_exchanged_at: null, last_channel: null, last_contacted_at: null, context: "Fixture: LinkedIn connection" }),
   networkDossier(NETWORK_IDS.followup, "Noa", "noa.example", 65, "email"),
 ];

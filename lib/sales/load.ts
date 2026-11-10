@@ -6,7 +6,7 @@ import { teamMembers } from "../team/members";
 import { salesDeals, type DealRead, type Owner } from "./deals";
 import type { Milestone } from "./economics";
 import { salesMeetings, type MeetingRead } from "./meetings";
-import type { DeskRow, LinkedInConnection, LinkedInThread, PeriodKey, WebDay } from "./metrics";
+import type { LinkedInConnection, LinkedInThread, NetworkDeskRow, PeriodKey, WebDay } from "./metrics";
 import { loadSalesSettings } from "./settings";
 import { loadStageHistory, type StageRow } from "./stages";
 
@@ -35,11 +35,16 @@ export const loadMilestones = (db: SupabaseClient): Promise<Loaded<Milestone[]>>
   settle(selectAll<Milestone>((from, to) => db.from("gtm_deal_milestones").select("*").order("id").range(from, to), "milestones")
     .then((rows) => rows.map((m) => ({ ...m, amount: Number(m.amount), paid_amount: m.paid_amount == null ? null : Number(m.paid_amount) }))));
 export const loadHistory = (db: SupabaseClient): Promise<Loaded<StageRow[]>> => settle(loadStageHistory(db));
-export const loadDesk = (db: SupabaseClient, since: Date): Promise<Loaded<DeskRow[]>> =>
-  settle(selectAll<DeskRow>((from, to) => db.from("gtm_outreach_drafts")
-    .select("track,route,email_sent_at,email_sent_by,follow_up_sent_at,email_replied_at,email_bounced_at,reply_sentiment,linkedin_sent_at,linkedin_sent_by,linkedin_status")
-    .or(`email_sent_at.gte.${since.toISOString()},linkedin_sent_at.gte.${since.toISOString()},email_replied_at.gte.${since.toISOString()},follow_up_sent_at.gte.${since.toISOString()}`)
+export const loadDesk = (db: SupabaseClient, since: Date): Promise<Loaded<NetworkDeskRow[]>> =>
+  settle(selectAll<NetworkDeskRow>((from, to) => db.from("gtm_outreach_drafts")
+    .select("track,route,person,email_sent_at,email_sent_by,follow_up_sent_at,email_replied_at,email_bounced_at,reply_sentiment,linkedin_sent_at,linkedin_sent_by,linkedin_status,linkedin_replied_at")
+    .or(["email_sent_at", "linkedin_sent_at", "email_replied_at", "follow_up_sent_at", "email_bounced_at", "linkedin_replied_at"].map((c) => `${c}.gte.${since.toISOString()}`).join(","))
     .order("id").range(from, to), "desk sends"));
+/** Each network dossier's warm tier (network.tier), by Twenty person id: the scoreboard's rows. */
+export const loadNetworkTiers = (db: SupabaseClient): Promise<Loaded<Map<string, string>>> =>
+  settle(selectAll<{ twenty_person_id: string; tier: string | null }>((from, to) => db.from("gtm_outreach_dossiers")
+    .select("twenty_person_id,tier:dossier->network->>tier").eq("track", "network").order("twenty_person_id").range(from, to), "network tiers")
+    .then((rows) => new Map(rows.filter((r) => r.tier).map((r) => [r.twenty_person_id, r.tier!]))));
 export const loadLinkedIn = (db: SupabaseClient, since: Date) => settle(Promise.all([
   selectAll<LinkedInConnection>((from, to) => db.from("gtm_linkedin_connections").select("owner,connected_on,icp,person_id").gte("connected_on", since.toISOString().slice(0, 10)).order("owner").order("profile_hash").range(from, to), "LinkedIn connections"),
   selectAll<LinkedInThread>((from, to) => db.from("gtm_linkedin_threads").select("owner,first_at,last_at,started_by_owner,two_way,icp,person_id").gte("first_at", since.toISOString()).order("owner").order("thread_hash").range(from, to), "LinkedIn threads"),

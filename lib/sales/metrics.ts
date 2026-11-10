@@ -4,6 +4,8 @@ import { averageShare, requiredFeeUsd, takeHomeShare, toUsd, type Milestone } fr
 import { OPEN_STAGES, MIN_MEASURED, type OpenStage, type SalesSettings } from "./settings";
 import { isPositive, MATURE_DAYS } from "../email/metrics";
 import type { Owner, SalesDeal, Source } from "./deals";
+import { dayIn } from "../outreach/desk";
+import { addDays, mondayOf } from "../week";
 
 const DAY = 86_400_000;
 export type Window = { start: Date; end: Date; days: number };
@@ -168,6 +170,53 @@ export function deskStats(rows: DeskRow[], w: Window, ownerOf: (by: string | nul
     linkedinNotes: notes.length, linkedinAccepted: accepted, acceptRate: notes.length >= MIN_MEASURED ? accepted / notes.length : null,
     unlabeled: replies.filter((r) => !r.reply_sentiment).length,
   };
+}
+
+/* ------------------------------------------------------------------------------------------------ the network stream */
+
+/** A network desk draft as the scoreboard reads it: the Twenty person (for the tier) and the LinkedIn reply John marked. */
+export type NetworkDeskRow = DeskRow & { person?: string | null; linkedin_replied_at?: string | null };
+export type NetworkCounts = { emailNotes: number; linkedinNotes: number; emailReplies: number; linkedinReplies: number; followUps: number; bounces: number };
+export type NetworkWeek = { monday: string; tiers: Array<{ tier: string } & NetworkCounts>; total: NetworkCounts };
+export const NETWORK_SCOREBOARD_TIERS = ["T1", "T2"] as const;
+const zero = (): NetworkCounts => ({ emailNotes: 0, linkedinNotes: 0, emailReplies: 0, linkedinReplies: 0, followUps: 0, bounces: 0 });
+const mondayIn = (iso: string, tz: string) => mondayOf(dayIn(iso, tz));
+
+/**
+ * The network stream's scoreboard (VIB-522): absolute counts per calendar week (Monday to Sunday, in `tz`) and warm tier, newest
+ * week first, `weeks` weeks ending with the current one. Each event counts in the week it happened: a note by when it was
+ * sent, a reply by when it came, a follow-up by when it went, a bounce by its failure notice. No rates. The tier is the
+ * dossier's (network.tier); a person without one is "No tier", shown only when it has counts. With an owner, an event counts
+ * only when that owner marked its channel sent.
+ */
+export function networkWeekly(rows: NetworkDeskRow[], tierOf: (person: string | null | undefined) => string | null, o: { tz: string; weeks: number; now: Date; ownerOf: (by: string | null) => Owner | null; owner: Owner | null }): NetworkWeek[] {
+  const current = mondayIn(o.now.toISOString(), o.tz);
+  const mondays = Array.from({ length: o.weeks }, (_, i) => addDays(current, -7 * i));
+  const cells = new Map<string, NetworkCounts>();
+  const add = (iso: string | null | undefined, tier: string, k: keyof NetworkCounts) => {
+    if (!iso || Number.isNaN(Date.parse(iso))) return;
+    const key = `${mondayIn(iso, o.tz)}|${tier}`;
+    const c = cells.get(key) ?? zero();
+    c[k]++; cells.set(key, c);
+  };
+  for (const r of rows) {
+    if ((r.track ?? "client") !== "network") continue;
+    const tier = tierOf(r.person) ?? "No tier";
+    const byEmail = !o.owner || o.ownerOf(r.email_sent_by) === o.owner, byLinkedin = !o.owner || o.ownerOf(r.linkedin_sent_by) === o.owner;
+    if (byEmail) { add(r.email_sent_at, tier, "emailNotes"); add(r.email_replied_at, tier, "emailReplies"); add(r.email_bounced_at, tier, "bounces"); }
+    if (byLinkedin) { add(r.linkedin_sent_at, tier, "linkedinNotes"); add(r.linkedin_replied_at, tier, "linkedinReplies"); }
+    // The follow-up goes the way the first message went.
+    if (r.route === "linkedin" ? byLinkedin : byEmail) add(r.follow_up_sent_at, tier, "followUps");
+  }
+  const known = new Set<string>(NETWORK_SCOREBOARD_TIERS);
+  const extra = [...new Set([...cells.keys()].map((k) => k.split("|")[1]).filter((t) => !known.has(t)))].sort();
+  return mondays.map((monday) => {
+    const tiers = [...NETWORK_SCOREBOARD_TIERS, ...extra].map((tier) => ({ tier, ...(cells.get(`${monday}|${tier}`) ?? zero()) }))
+      .filter((t) => known.has(t.tier) || Object.values(t).some((v) => typeof v === "number" && v > 0));
+    const total = zero();
+    for (const t of tiers) for (const k of Object.keys(total) as (keyof NetworkCounts)[]) total[k] += t[k];
+    return { monday, tiers, total };
+  });
 }
 
 export type LinkedInConnection = { owner: string; connected_on: string; icp: boolean; person_id: string | null };

@@ -9,14 +9,14 @@ import { OFFER_IDS, offerName, type OfferOverride } from "@/lib/outreach/offers"
 // Hints are advice only: nothing here blocks a save or a send, and a client email's dashes are his own.
 // Keyboard: J/K next and previous person, / search, G switch stream, Cmd/Ctrl+S save, Cmd/Ctrl+Enter mark sent (one step; Not sent undoes it).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Copy, ExternalLink, FileText, Link2, Mail, Search, SkipForward, Sparkles, Undo2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Copy, ExternalLink, FileText, Link2, Mail, Reply, Search, SkipForward, Sparkles, Undo2, X } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toaster";
 import { cn } from "@/lib/ui/cn";
 import {
-  applyLink, blankBody, bodyHtml, bodyLinks, bodyPlain, DESK_LABEL, DESK_LIMITS, deskEditProblems, deskState, FILTER_LABEL, FILTERS, firstName, followUpDue, gmailComposeUrl, guestRoute, hasAngles, hasLinks, hints, isWarmTrack, matchesFilter,
+  applyLink, blankBody, bodyHtml, bodyLinks, bodyPlain, DESK_LABEL, DESK_LIMITS, deskEditProblems, deskState, FILTER_LABEL, FILTERS, firstName, followUpDue, gmailComposeUrl, guestRoute, hasAngles, hasLinks, hasReplied, hints, isWarmTrack, matchesFilter,
   needsRoute, normalizeLinkUrl, removeLink, ROUTE_LABEL, routeSendProblems, safeUrl, sameDeskEdit, scaffoldFor, sentToday, SLOT, TRACK_LABEL, TRACKS, WORDS,
   type DeskEdit, type DeskFilter, type DeskSettings, type DeskState, type DossierRow, type QueueItem, type Track,
 } from "@/lib/outreach/desk";
@@ -39,6 +39,8 @@ export type DeskActions = {
   markInvite: (id: string, edit: DeskEdit, track: Track, angle?: SentAngle) => Promise<DeskResult<Draft>>;
   markFollowUp: (id: string, track: Track) => Promise<DeskResult<Draft>>;
   undoFollowUp: (id: string, track: Track) => Promise<DeskResult<Draft>>;
+  markReplied: (id: string, track: Track) => Promise<DeskResult<Draft>>;
+  undoReplied: (id: string, track: Track) => Promise<DeskResult<Draft>>;
   skip: (id: string, reason: string, track: Track) => Promise<DeskResult<DossierRow>>;
   unskip: (id: string, track: Track) => Promise<DeskResult<DossierRow>>;
   setTarget: (n: number, track: Track) => Promise<DeskResult<number>>;
@@ -280,6 +282,7 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
       if (d) Object.assign(next, {
         draft_id: d.id, status: d.status, email_status: d.email_status, linkedin_status: d.linkedin_status, email_sent_at: d.email_sent_at ?? null,
         linkedin_sent_at: d.linkedin_sent_at ?? null, follow_up_status: d.follow_up_status ?? null, follow_up_sent_at: d.follow_up_sent_at ?? null,
+        email_replied_at: d.email_replied_at ?? null, linkedin_replied_at: d.linkedin_replied_at ?? null,
       });
       return { ...next, state: deskState(next, dd, q.track) };
     });
@@ -427,6 +430,15 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
     toast(undo ? "Follow-up marked not sent." : "Follow-up marked sent. It does not count toward today.");
   };
 
+  /** They answered (warm streams): the only record of a LinkedIn reply, and an email reply the mailbox sync cannot see yet. */
+  const markReplied = async (undo = false) => {
+    if (!person) return;
+    const r = await (undo ? actions.undoReplied : actions.markReplied)(person.row.twenty_person_id, track);
+    if (!r.ok) { setError(r.error); return; }
+    setDraft(r.value); patchQueue(person.row.twenty_person_id, r.value); setError(null);
+    toast(undo ? "Marked not replied. The mailbox sync will not bring this reply back." : "Marked replied. No follow-up is due.");
+  };
+
   const skip = async () => {
     if (!person) return;
     const r = await actions.skip(person.row.twenty_person_id, skipReason, track);
@@ -500,6 +512,8 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
   const sentAt = draft?.email_sent_at ?? draft?.linkedin_sent_at ?? null;
   const stamp = (iso: string) => new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" });
   const due = !!item && warm && followUpDue(item, tz, now);
+  const replied = !!draft && hasReplied(draft);
+  const repliedAt = route === "linkedin" ? draft?.linkedin_replied_at : draft?.email_replied_at;
   const showEmailFields = route !== "linkedin";
   const showNoteBox = !warm || route === "linkedin";
   const gmailHref = edit ? gmailComposeUrl(edit, from) : "#";
@@ -560,6 +574,7 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
                   {q.client_ok === false && <AlertTriangle className="size-3 shrink-0 text-red-strong" aria-label="Client check did not pass" />}
                   {warm && needsRoute(q) && <Badge variant="warning" className="px-1.5 py-0 text-[0.65rem]">Route</Badge>}
                   {warm && followUpDue(q, tz, now) && <Badge variant="info" className="px-1.5 py-0 text-[0.65rem]">Follow up</Badge>}
+                  {warm && hasReplied(q) && <Badge variant="success" className="px-1.5 py-0 text-[0.65rem]">Replied</Badge>}
                   {query && <Badge variant={STATE_TONE[q.state]} className="ml-auto px-1.5 py-0 text-[0.65rem]">{DESK_LABEL[q.state]}</Badge>}
                 </span>
               </button>
@@ -771,10 +786,14 @@ export function WritingDesk({ initialQueues, initialTrack, initialPerson, tracks
                 ? <Button size="sm" onClick={() => void markSent()} disabled={problems.length > 0}><Check /> Mark sent</Button>
                 : <><Badge variant="success">{warm ? sentLabel : "Email sent"}{sentAt ? ` ${stamp(sentAt)}` : ""}</Badge>
                     <Button size="sm" variant="ghost" className="text-ink-3" onClick={() => void undoSent()}><Undo2 /> Not sent</Button></>}
+              {warm && emailSent && (replied
+                ? <><Badge variant="success" data-testid="desk-replied">Replied{repliedAt ? ` ${stamp(repliedAt)}` : ""}</Badge>
+                    <Button size="sm" variant="ghost" className="text-ink-3" onClick={() => void markReplied(true)} data-testid="desk-unreply"><Undo2 /> Not replied</Button></>
+                : <Button size="sm" variant="secondary" onClick={() => void markReplied()} data-testid="desk-mark-replied"><Reply /> Mark replied</Button>)}
               {warm && emailSent && (followedUp
                 ? <><Badge variant="success" data-testid="desk-followup-sent">Follow-up sent{draft?.follow_up_sent_at ? ` ${stamp(draft.follow_up_sent_at)}` : ""}</Badge>
                     <Button size="sm" variant="ghost" className="text-ink-3" onClick={() => void markFollowUp(true)}><Undo2 /> Follow-up not sent</Button></>
-                : <>{due && <Badge variant="info" data-testid="desk-followup-due">Follow-up due</Badge>}
+                : !replied && <>{due && <Badge variant="info" data-testid="desk-followup-due">Follow-up due</Badge>}
                     <Button size="sm" variant="secondary" onClick={() => void markFollowUp()} data-testid="desk-followup"><Check /> Mark follow-up sent</Button></>)}
               {!person.row.skipped_at && !emailSent && (skipping
                 ? <span className="flex items-center gap-1.5">

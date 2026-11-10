@@ -5,14 +5,15 @@
 // the dossier may be missing; a section with nothing in it is left out. A guest's dossier (track 'guest') gets its own
 // layout after "Who": pillar, template, the dated trigger, the angle and questions, the warm path, and the approach and
 // protocol notes up front. A network contact's (track 'network', VIB-522) gets a compact relationship block instead: tier,
-// relationship, where it comes from, the last two-way exchange and the one-line context. The research date shows quietly under the name; there is no stale warning (a failed client check still alerts).
+// relationship, where it comes from, the last conversation (with a link to the thread when the export has one), message counts,
+// the LinkedIn connection date, the warm score and its parts, and the one-line context. The research date shows quietly under the name; there is no stale warning (a failed client check still alerts).
 import { Fragment, useState } from "react";
 import { AlertTriangle, CheckCircle2, Copy, ExternalLink, UserRound, Mail, Globe, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toaster";
 import { cn } from "@/lib/ui/cn";
-import { DESK_VARIANT, exportAgeDays, guestReach, guestRoute, isSyntheticDomain, NETWORK_TIER_LABEL, ROUTE_LABEL, safeUrl, TEMPLATE_LABEL, type Dossier, type Profile } from "@/lib/outreach/desk";
+import { CHANNEL_LABEL, DESK_VARIANT, exportAgeDays, guestReach, guestRoute, isSyntheticDomain, messageCountsLine, NETWORK_TIER_LABEL, ROUTE_LABEL, safeUrl, TEMPLATE_LABEL, threadUrl, warmLine, type Dossier, type Profile } from "@/lib/outreach/desk";
 import type { DeskPerson } from "@/lib/outreach/desk-store";
 import type { Draft, DraftVersion } from "@/lib/outreach/model";
 
@@ -21,7 +22,8 @@ const has = (v: unknown) => (Array.isArray(v) ? v.length > 0 : typeof v === "str
 const when = (iso?: string | null) => {
   if (!iso) return null;
   const t = Date.parse(iso);
-  return Number.isNaN(t) ? iso : new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  // A bare YYYY-MM-DD is a calendar day, not midnight UTC: read it as UTC so no time zone moves it a day.
+  return Number.isNaN(t) ? iso : new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", ...(/^\d{4}-\d{2}-\d{2}$/.test(iso.trim()) ? { timeZone: "UTC" } : {}) });
 };
 const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
 
@@ -335,6 +337,12 @@ function NetworkView({ d, name, company }: { d: Dossier; name: string; company: 
   const origins = (n.origins ?? []).filter(has);
   const exchanged = when(n.last_exchanged_at);
   const contacted = when(n.last_contacted_at);
+  const channel = n.last_channel ? CHANNEL_LABEL[n.last_channel.toLowerCase()] ?? n.last_channel : null;
+  // Checked again here: only a LinkedIn messaging thread or a Gmail link is ever opened.
+  const thread = threadUrl(n.last_thread_url);
+  const messages = messageCountsLine(n.history);
+  const connected = when(n.connected_on);
+  const warm = warmLine(n.warm);
   return (
     <div className="space-y-4" data-testid="desk-network">
       <Section title="Reach them"><ReachLinks dossier={d} name={name} company={company} /></Section>
@@ -342,7 +350,12 @@ function NetworkView({ d, name, company }: { d: Dossier; name: string; company: 
         {facts.length > 0 && <div className="flex flex-wrap gap-1.5">{facts.map((f) => <Badge key={String(f)} variant="outline">{String(f)}</Badge>)}</div>}
         <dl className="space-y-1 text-sm">
           {origins.length > 0 && <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Connected via</dt><dd className="text-ink" data-testid="desk-network-origins">{origins.map(origin).join(", ")}</dd></div>}
-          <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Last exchanged</dt><dd className="text-ink" data-testid="desk-network-exchanged">{exchanged ? `${exchanged}${n.last_channel ? `, ${n.last_channel}` : ""}` : "No two-way exchange on record"}</dd></div>
+          <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Last conversation</dt>
+            <dd className="text-ink"><span data-testid="desk-network-exchanged">{exchanged ? `${exchanged}${channel ? ` on ${channel}` : ""}` : "No two-way exchange on record"}</span>
+              {thread && <> · <a href={thread} target="_blank" rel="noreferrer" className={cn(link, "text-xs")} data-testid="desk-network-thread">Open thread<ExternalLink className="ml-0.5 inline size-3" /></a></>}</dd></div>
+          {messages && <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Messages</dt><dd className="text-ink" data-testid="desk-network-messages">{messages}</dd></div>}
+          {connected && <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Connected</dt><dd className="text-ink-2" data-testid="desk-network-connected">Connected on LinkedIn {connected}</dd></div>}
+          {warm && <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Warm score</dt><dd className="text-ink-2" data-testid="desk-network-warm">{warm}</dd></div>}
           {contacted && <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Last contacted</dt><dd className="text-ink-2">{contacted}</dd></div>}
           {has(n.owners) && <div className="flex gap-2"><dt className="w-28 shrink-0 text-xs text-ink-3">Relationship of</dt><dd className="text-ink-2">{n.owners!.map(words).join(", ")}</dd></div>}
         </dl>
