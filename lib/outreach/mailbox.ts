@@ -16,7 +16,9 @@ export type OutreachMail = { id: string; subject: string; email_sent_at?: string
 export type MailStatus = "reply" | "automated" | "delivery-failure" | "awaiting-reply";
 export type Conversation = { id: string; draftId: string; company: string; subject: string; status: MailStatus; unread: boolean; lastAt: string; snippet: string; forwarded?: boolean; messageIds?: string[];
   /** When the outreach email left the mailbox (sent threads only), the first reply and the failure notice: the pipeline cron stores these. */
-  sentAt?: string; replyAt?: string; failedAt?: string };
+  sentAt?: string; replyAt?: string; failedAt?: string;
+  /** Every reply's time in the thread, oldest first (replyAt is the first): the sync takes the first one it may count. */
+  replyTimes?: string[] };
 export type MailboxConfig = { email: string; clientId: string; clientSecret: string; refreshToken: string };
 export const MAILBOX = loadRuntimeConfig().mail.mailbox;
 export const PAGE_SIZE = 25;
@@ -111,16 +113,29 @@ function matchForwarded(thread: MailThread, messages: MailMessage[], drafts: Out
   return { id: thread.id, draftId: draft.id, company: draft.prospect.company ?? "", subject: draft.subject,
     status: replies.some((m) => !automated(m)) ? "reply" : "automated", unread: replies.some((m) => m.labelIds?.includes("UNREAD")),
     lastAt: new Date(Number(latest.internalDate)).toISOString(), snippet: latest.snippet ?? "", forwarded: true, messageIds: replies.map((m) => m.id),
-    replyAt: (() => { const t = Number(replies.find((m) => !automated(m))?.internalDate); return Number.isFinite(t) && t > 0 ? new Date(t).toISOString() : undefined; })() };
+    replyAt: (() => { const t = Number(replies.find((m) => !automated(m))?.internalDate); return Number.isFinite(t) && t > 0 ? new Date(t).toISOString() : undefined; })(),
+    replyTimes: replies.filter((m) => !automated(m)).map((m) => Number(m.internalDate)).filter((t) => Number.isFinite(t) && t > 0).map((t) => new Date(t).toISOString()) };
 }
+
+/**
+ * How long before a draft was created its send may be: John sometimes writes a note in Gmail first and records it on the desk
+ * afterwards, which creates the draft. A day covers that; a contact's conversation from weeks or months back stays out.
+ */
+export const SEND_TOLERANCE_MS = 24 * 3_600_000;
+/** A send at `t` (ms) can be the send of a draft created at `createdAt` (unknown creation: any send). */
+export const sentInTime = (t: number, createdAt: string | null | undefined) => {
+  const c = createdAt ? Date.parse(createdAt) : NaN;
+  return Number.isNaN(c) || !(t < c - SEND_TOLERANCE_MS);
+};
 
 /** Prefer an actual sent thread; forwarded replies use the more conservative sent-record match above. */
 export function matchConversation(thread: MailThread, drafts: OutreachMail[], mailbox: string): Conversation | null {
   const messages = [...(thread.messages ?? [])].filter((m) => !m.labelIds?.some((l) => ["DRAFT", "TRASH", "SPAM"].includes(l)))
     .sort((a, b) => Number(a.internalDate ?? 0) - Number(b.internalDate ?? 0));
-  // The draft's send is the earliest matching SENT message at or after the draft was created (when that is known).
+  // The draft's send is the earliest matching SENT message from SEND_TOLERANCE_MS before the draft was created (when that is
+  // known): a note John wrote in Gmail and then recorded on the desk is still its draft's send.
   const sentFor = (m: MailMessage, d: OutreachMail) => !!d.prospect.email && addresses(header(m, "To")).includes(d.prospect.email.toLowerCase())
-    && subject(header(m, "Subject")) === subject(d.subject) && (!d.created_at || Number(m.internalDate ?? 0) >= Date.parse(d.created_at));
+    && subject(header(m, "Subject")) === subject(d.subject) && sentInTime(Number(m.internalDate ?? 0), d.created_at);
   const outgoing = messages.find((m) => m.labelIds?.includes("SENT") && addresses(header(m, "From")).includes(mailbox.toLowerCase()) && drafts.some((d) => sentFor(m, d)));
   if (!outgoing) return matchForwarded(thread, messages, drafts, mailbox);
   const draft = drafts.find((d) => sentFor(outgoing, d))!;
@@ -133,7 +148,8 @@ export function matchConversation(thread: MailThread, drafts: OutreachMail[], ma
   return { id: thread.id, draftId: draft.id, company: draft.prospect.company ?? "", subject: header(outgoing, "Subject"),
     status: replies.length ? "reply" : failed ? "delivery-failure" : incoming.some(automated) ? "automated" : "awaiting-reply",
     unread: incoming.some((m) => m.labelIds?.includes("UNREAD")), lastAt: Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "", snippet: latest.snippet ?? "",
-    sentAt: iso(outgoing), replyAt: iso(replies[0]), failedAt: replies.length ? undefined : iso(failed) };
+    sentAt: iso(outgoing), replyAt: iso(replies[0]), failedAt: replies.length ? undefined : iso(failed),
+    replyTimes: replies.map(iso).filter((t): t is string => !!t) };
 }
 
 /** Plain text only. HTML, remote images, attachments and their tracking pixels are never rendered or fetched. */

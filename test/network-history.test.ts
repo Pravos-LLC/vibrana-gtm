@@ -260,13 +260,44 @@ test("network outcomes: a September reply to an older same-subject thread never 
   assert.ok(calls.some((x) => x.method === "select" && String(x.args[0]).includes("created_at") && String(x.args[0]).includes("email_reply_dismissed_at")), "the sync reads the draft's creation and dismissal times");
 });
 
-test("network outcomes: a reply John cleared with Not replied is never stamped again; a later reply still is", () => {
-  const conv = (replyAt: string) => ({ id: "t", draftId: "d", company: "", subject: "S", status: "reply" as const, unread: false, lastAt: replyAt, snippet: "", sentAt: "2026-11-05T08:00:00.000Z", replyAt });
-  const d = { id: "d", created_at: "2026-11-05T07:00:00.000Z", subject: "S", prospect: {}, email_status: "sent" as const, email_sent_at: "2026-11-05T08:00:00.000Z", email_sent_by: null,
-    email_replied_at: null, email_bounced_at: null, email_reply_dismissed_at: "2026-11-07T00:00:00.000Z" };
-  assert.deepEqual(outcomes.outcomePatch(conv("2026-11-06T00:00:00.000Z"), d, "a@b.example"), {}, "the reply he cleared");
-  assert.deepEqual(outcomes.outcomePatch(conv("2026-11-07T00:00:00.000Z"), d, "a@b.example"), {}, "at the very time he cleared it");
-  assert.deepEqual(outcomes.outcomePatch(conv("2026-11-08T00:00:00.000Z"), d, "a@b.example"), { email_replied_at: "2026-11-08T00:00:00.000Z", email_status: "replied" }, "a reply after that counts");
+test("network outcomes: a reply John cleared with Not replied is never stamped again; a later reply in the same thread still is", () => {
+  const alias = "jo@alias.example";
+  const d = { id: "d", created_at: "2026-11-05T07:00:00.000Z", subject: "Long time", prospect: { email: "noa@noa.example" }, email_status: "sent" as const,
+    email_sent_at: "2026-11-05T08:00:00.000Z", email_sent_by: null, email_replied_at: null, email_bounced_at: null, email_reply_dismissed_at: "2026-11-07T00:00:00.000Z" };
+  const sent = msg("t1", "2026-11-05T08:00:00Z", ["SENT"], alias, "noa@noa.example", "Long time");
+  const cleared = msg("t2", "2026-11-06T00:00:00Z", ["INBOX"], "Noa <noa@noa.example>", alias, "Re: Long time");
+  const real = msg("t3", "2026-11-08T00:00:00Z", ["INBOX"], "Noa <noa@noa.example>", alias, "Re: Long time");
+  // Through the real matcher: both of Noa's messages are in one thread, and it reports the first as replyAt.
+  const both = mailbox.matchConversation({ id: "ab01", messages: [sent, cleared, real] }, [d], alias)!;
+  assert.deepEqual([both.replyAt, both.replyTimes], ["2026-11-06T00:00:00.000Z", ["2026-11-06T00:00:00.000Z", "2026-11-08T00:00:00.000Z"]]);
+  assert.deepEqual(outcomes.outcomePatch(both, d, alias), { email_replied_at: "2026-11-08T00:00:00.000Z", email_status: "replied" }, "the reply after he cleared one counts");
+  const onlyCleared = mailbox.matchConversation({ id: "ab02", messages: [sent, cleared] }, [d], alias)!;
+  assert.deepEqual(outcomes.outcomePatch(onlyCleared, d, alias), {}, "the reply he cleared never comes back");
+  const atClear = mailbox.matchConversation({ id: "ab03", messages: [sent, msg("t4", "2026-11-07T00:00:00Z", ["INBOX"], "noa@noa.example", alias, "Re: Long time")] }, [d], alias)!;
+  assert.deepEqual(outcomes.outcomePatch(atClear, d, alias), {}, "nor one at the very time he cleared it");
+  // Without a dismissal the first reply is the one stored, as before.
+  assert.deepEqual(outcomes.outcomePatch(both, { ...d, email_reply_dismissed_at: null }, alias), { email_replied_at: "2026-11-06T00:00:00.000Z", email_status: "replied" });
+  // An auto-reply between them is not a reply.
+  const auto = { ...msg("t5", "2026-11-07T12:00:00Z", ["INBOX"], "noa@noa.example", alias, "Out of office: Long time") };
+  assert.deepEqual(mailbox.matchConversation({ id: "ab04", messages: [sent, cleared, auto, real] }, [d], alias)!.replyTimes, ["2026-11-06T00:00:00.000Z", "2026-11-08T00:00:00.000Z"]);
+});
+
+test("network outcomes: a note sent from Gmail before its desk draft existed keeps its bounce and its reply; a month-old thread does not", () => {
+  const alias = "jo@alias.example";
+  // He wrote it in Gmail at 08:00, then pasted it on the desk and clicked Mark sent at 10:00, which created the draft.
+  const d = { id: "d", created_at: "2026-11-05T10:00:00.000Z", subject: "Long time", prospect: { email: "noa@noa.example" }, email_status: "sent" as const,
+    email_sent_at: "2026-11-05T10:00:00.000Z", email_sent_by: null, email_replied_at: null, email_bounced_at: null };
+  const sent = msg("b1", "2026-11-05T08:00:00Z", ["SENT"], alias, "noa@noa.example", "Long time");
+  const notice = { ...msg("b2", "2026-11-05T08:01:00Z", ["INBOX"], "Mail Delivery Subsystem <mailer-daemon@googlemail.com>", alias, "Delivery Status Notification (Failure)"), payload: { mimeType: "multipart/report", headers: [header("From", "mailer-daemon@googlemail.com"), header("To", alias), header("Subject", "Delivery Status Notification (Failure)")] } };
+  const bounced = mailbox.matchConversation({ id: "bb01", messages: [sent, notice] }, [d], alias)!;
+  assert.deepEqual([bounced.status, bounced.sentAt], ["delivery-failure", "2026-11-05T08:00:00.000Z"], "the Gmail send two hours before the draft is still its send");
+  assert.deepEqual(outcomes.outcomePatch(bounced, d, alias), { email_bounced_at: "2026-11-05T08:01:00.000Z" }, "and its bounce is stored");
+  const replied = mailbox.matchConversation({ id: "bb02", messages: [sent, msg("b3", "2026-11-05T09:00:00Z", ["INBOX"], "noa@noa.example", alias, "Re: Long time")] }, [d], alias)!;
+  assert.deepEqual(outcomes.outcomePatch(replied, d, alias), { email_replied_at: "2026-11-05T09:00:00.000Z", email_status: "replied" }, "a reply before he clicked Mark sent still follows the real send");
+  // A month-old send with the same subject is outside the tolerance.
+  const old = { ...sent, internalDate: String(Date.parse("2026-10-05T08:00:00Z")) };
+  assert.equal(mailbox.matchConversation({ id: "bb03", messages: [old, { ...notice, internalDate: String(Date.parse("2026-10-05T08:01:00Z")) }] }, [d], alias), null);
+  assert.ok(mailbox.sentInTime(Date.parse(d.created_at) - mailbox.SEND_TOLERANCE_MS, d.created_at) && !mailbox.sentInTime(Date.parse(d.created_at) - mailbox.SEND_TOLERANCE_MS - 1, d.created_at), "a day, to the millisecond");
 });
 
 test("a failed network mailbox login names the network mailbox, not the HQ inbox", async () => {

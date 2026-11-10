@@ -8,13 +8,14 @@
 // - A reply (not automated, from the prospect) stamps email_replied_at and moves email_status to "replied".
 // - A delivery failure with no reply stamps email_bounced_at.
 // Nothing older than the draft counts (the network mailbox holds each contact's earlier conversations, often under the same
-// subject): a send only from a message at or after the draft was created, a reply or a failure only from after the send.
+// subject): a send only from a message sent at most a day before the draft was created (SEND_TOLERANCE_MS), a reply or a
+// failure only from after the send.
 // A reply John cleared with "Not replied" (email_reply_dismissed_at) is never stamped again; a later one still is.
 // A reply date only ever moves earlier, a status only forward, and no address, subject or body is stored. Matching is lib/outreach/mailbox.ts.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
 import { readPages } from "../db-read";
-import { GmailReader, hqAddress, mailboxConfig, networkMailboxConfig, trackAddress, type Conversation, type OutreachMail } from "../outreach/mailbox";
+import { GmailReader, hqAddress, mailboxConfig, networkMailboxConfig, sentInTime, trackAddress, type Conversation, type OutreachMail } from "../outreach/mailbox";
 
 export type OutcomeDraft = OutreachMail & {
   email_status: "none" | "queued" | "sent" | "replied"; email_sent_by: string | null;
@@ -28,8 +29,8 @@ export type OutcomePatch = Partial<Pick<OutcomeDraft, "email_status" | "email_se
 export function outcomePatch(c: Conversation, d: OutcomeDraft, mailbox: string): OutcomePatch {
   const p: OutcomePatch = {};
   const at = (v: string | null | undefined) => (v ? Date.parse(v) : NaN);
-  // A thread's send counts only at or after the draft was created (an unknown time on either side is not a reason to refuse).
-  const threadSent = c.sentAt && !(at(c.sentAt) < at(d.created_at)) ? c.sentAt : undefined;
+  // A thread's send counts only from a day before the draft was created (an unknown time on either side is not a reason to refuse).
+  const threadSent = c.sentAt && (Number.isNaN(at(c.sentAt)) || sentInTime(at(c.sentAt), d.created_at)) ? c.sentAt : undefined;
   if (threadSent && !d.email_sent_at && (d.email_status === "none" || d.email_status === "queued")) {
     p.email_sent_at = threadSent; p.email_sent_by = mailbox.toLowerCase(); p.email_status = "sent";
   }
@@ -41,9 +42,12 @@ export function outcomePatch(c: Conversation, d: OutcomeDraft, mailbox: string):
   const sent = !!(threadSent || d.email_sent_at || p.email_sent_at);
   const afterSend = (v: string) => sent && !(at(v) < since);
   const dismissed = (v: string) => at(v) <= at(d.email_reply_dismissed_at);
-  if (c.status === "reply" && c.replyAt && afterSend(c.replyAt) && !dismissed(c.replyAt)) {
+  // The first reply in the thread that may count: after the send, and after any reply John cleared ("Not replied"). A later
+  // reply in the same thread still counts once an earlier one was dismissed.
+  const replyAt = c.status === "reply" ? (c.replyTimes?.length ? c.replyTimes : c.replyAt ? [c.replyAt] : []).find((t) => afterSend(t) && !dismissed(t)) : undefined;
+  if (replyAt) {
     // Gmail's reply time wins over a label-time date (John may label before the sync, or long after the reply).
-    if (!d.email_replied_at || Date.parse(c.replyAt) < Date.parse(d.email_replied_at)) p.email_replied_at = c.replyAt;
+    if (!d.email_replied_at || Date.parse(replyAt) < Date.parse(d.email_replied_at)) p.email_replied_at = replyAt;
     if (d.email_status !== "replied" && (d.email_status === "sent" || p.email_status === "sent")) p.email_status = "replied";
   }
   if (c.status === "delivery-failure" && c.failedAt && afterSend(c.failedAt) && !d.email_bounced_at && !d.email_replied_at) p.email_bounced_at = c.failedAt;
