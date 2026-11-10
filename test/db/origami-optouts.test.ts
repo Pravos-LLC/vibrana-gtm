@@ -192,6 +192,7 @@ test("with only ORIGAMI_OPTOUT_APPLY, the Twenty writer applies the Origami opt-
     emails: { primaryEmail: ANA, additionalEmails: [] }, gtmMarketingConsent: consent, gtmConsentEvidence: evidence, gtmEmailRestrictions: null } }] } } });
   mock = installFetchMock([
     { url: "https://crm.test/graphql", body: live("NONE", "site signup"), times: 1 },
+    { ...twentyPeople(P), times: 1 },
     { url: "https://crm.test/graphql", json: { data: { updatePeople: [{ id: P }] } }, times: 1 },
     { url: "https://crm.test/graphql", body: live("UNSUBSCRIBED", "site signup\n..."), times: 1 },
     DB,
@@ -560,4 +561,40 @@ test("malformed status and sequence search rows are not acknowledged", async () 
   const result = await O.processPending(admin(), c, reader(), new Date(), { campaigns: [{ id: C1, status: "active" }] });
   assert.equal(result.failed, 1);
   assert.equal((await evidence())[0].processed_at, null);
+  c.peoplePage = async () => ({ items: [], next_cursor: null });
+  assert.equal((await O.processPending(admin(), c, reader(), new Date(), { campaigns: [{ id: C1, status: "active" }] })).processed, 1, "a corrected provider page is fetched on retry");
+});
+
+test("Origami consent refuses changed identity, ambiguous identity, and later CRM changes", async () => {
+  for (const scenario of ["changed", "ambiguous", "later"] as const) {
+    await fresh();
+    process.env.ORIGAMI_OPTOUT_APPLY = "1";
+    mock?.restore();
+    mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+    await O.ingest(admin(), client(), [webhookEvidence("no")]);
+    await O.processPending(admin(), client(), reader(), new Date());
+    mock.restore();
+    const person = { data: { people: { pageInfo: { hasNextPage: false, endCursor: null }, edges: [{ node: { id: P,
+      updatedAt: scenario === "later" ? "2026-11-11T00:00:00Z" : "2026-11-01T00:00:00Z", emails: { primaryEmail: scenario === "changed" ? "new@prospect.test" : ANA, additionalEmails: [] },
+      gtmMarketingConsent: "SUBSCRIBED", gtmConsentEvidence: "later consent", gtmEmailRestrictions: null } }] } } };
+    mock = installFetchMock([{ url: "https://crm.test/graphql", json: person, times: 1 }, ...(scenario === "changed" ? [] : [twentyPeople(P, ...(scenario === "ambiguous" ? [P2] : []))]), DB]);
+    const result = await S.applyTwenty(admin(), reader(), new Date());
+    assert.ok("failed" in result && result.failed === 1);
+    const op = (await ops()).find((o) => o.destination === "twenty")!;
+    assert.match(String(op.last_error), /review required/);
+    assert.equal(mock.calls.some((c) => /updatePeople/.test(c.body ?? "")), false);
+  }
+});
+
+test("Origami consent errors never persist CRM error bodies", async () => {
+  await fresh();
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  mock = installFetchMock([...origami(), twentyPeople(P), DB]);
+  await O.ingest(admin(), client(), [webhookEvidence("no")]);
+  await O.processPending(admin(), client(), reader(), new Date());
+  mock.restore();
+  mock = installFetchMock([{ url: "https://crm.test/graphql", json: { errors: [{ message: "Private Name https://linkedin.com/in/private-person" }] } }, DB]);
+  await S.applyTwenty(admin(), reader(), new Date());
+  const op = (await ops()).find((o) => o.destination === "twenty")!;
+  assert.equal(op.last_error, "Twenty: the CRM read or write failed");
 });

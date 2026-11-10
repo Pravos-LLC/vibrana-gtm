@@ -322,6 +322,7 @@ async function scanSequences(db: SupabaseClient, client: OrigamiClient, r: Evide
     if (!state.page) {
       const page = await client.peoplePage(campaign, { search: terms[state.term] }, state.cursor);
       if (page.next_cursor && (page.next_cursor === state.cursor || state.seen?.includes(page.next_cursor))) throw new Error("Origami people: pagination cursor repeated");
+      if (page.items.some((row) => !uuid(row.sequence_id) || typeof row.status !== "string" || (row.stop_reason != null && typeof row.stop_reason !== "string"))) throw new Error("Origami people: malformed sequence; page was not acknowledged");
       // Snapshot only provider IDs and state, never search terms or identity, so a changing page cannot shift our offset.
       state.page = { rows: page.items.map((r) => ({ sequence_id: r.sequence_id, status: r.status, stop_reason: r.stop_reason })), next: page.next_cursor || null, index: 0 };
       await saveState(db, key, state, now);

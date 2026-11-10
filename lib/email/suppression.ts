@@ -16,11 +16,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
 import type { TwentyReader } from "../twenty";
-import { addressHash } from "../team/crypto";
-import { selectAll } from "../team/mailbox";
+import { addressHash, linkedinHash } from "../team/crypto";
+import { lookupPeople, selectAll } from "../team/mailbox";
 import { emailRefusals, personEmails, readRestrictions, RESTRICTIONS_FIELD, UNREADABLE } from "../team/restrictions";
 import { RULE_VERSION as ORIGAMI_RULE } from "../origami/rule";
-import { origamiApplyEnabled } from "../origami/client";
+import { linkedinSlug, origamiApplyEnabled } from "../origami/client";
 
 export const POLICY_VERSION = "suppression-v1";
 export const ORIGAMI_HELD = "Origami exclusion scope and queued-send behavior not verified yet (VIB-513, AC497-05)";
@@ -149,8 +149,38 @@ export async function approve(db: SupabaseClient, ids: number[], ref: string, no
 
 /* ------------------------------------------------------------------------------------------------ the Twenty writer */
 
-type Live = { id: string; updatedAt: string; emails: { primaryEmail: string | null; additionalEmails?: unknown } | null; gtmMarketingConsent: string | null; gtmConsentEvidence: string | null; gtmEmailRestrictions?: unknown };
-const READ = `id updatedAt emails { primaryEmail additionalEmails } gtmMarketingConsent gtmConsentEvidence ${RESTRICTIONS_FIELD}`;
+type Live = { id: string; updatedAt: string; emails: { primaryEmail: string | null; additionalEmails?: unknown } | null; linkedinLink?: { primaryLinkUrl: string | null } | null; gtmMarketingConsent: string | null; gtmConsentEvidence: string | null; gtmEmailRestrictions?: unknown };
+const READ = `id updatedAt emails { primaryEmail additionalEmails } linkedinLink { primaryLinkUrl } gtmMarketingConsent gtmConsentEvidence ${RESTRICTIONS_FIELD}`;
+
+class OrigamiSafetyError extends Error {}
+
+/** Re-resolve the privacy-preserving identity binding and reject any later CRM change before a consent write. */
+async function validateOrigamiTarget(db: SupabaseClient, reader: TwentyReader, op: StoredOp, live: Live) {
+  const label = must(await db.from("gtm_email_reply_labels").select("origami_reply_id,source,labeled_at").eq("id", op.label_id).single(), "origami decision") as { origami_reply_id: number; source: string; labeled_at: string };
+  const evidence = must(await db.from("gtm_origami_replies").select("recipient_hash,linkedin_hash").eq("id", label.origami_reply_id).single(), "origami identity") as { recipient_hash: string | null; linkedin_hash: string | null };
+  const email = evidence.recipient_hash ? personEmails(live).find((e) => addressHash(e) === evidence.recipient_hash) : undefined;
+  const slug = linkedinSlug(live.linkedinLink?.primaryLinkUrl);
+  let unique = false;
+  // If the evidence included an email that is no longer on this person, its present owner cannot be recovered from its
+  // one-way hash. Do not fall back to the profile and guess whether that email was reassigned.
+  if (evidence.recipient_hash && !email) throw new OrigamiSafetyError("Origami identity no longer uniquely matches the CRM person; review required");
+  if (email) {
+    const found = (await lookupPeople(reader, [email])).get(email);
+    unique = !!found && !("ambiguous" in found) && found.person.id === op.person_id;
+  } else if (slug && evidence.linkedin_hash === linkedinHash(slug)) {
+    type Row = { id: string; linkedinLink: { primaryLinkUrl: string | null } | null };
+    const rows = await reader.all<Row>("people", "id linkedinLink { primaryLinkUrl }", { linkedinLink: { primaryLinkUrl: { ilike: `%/in/${slug}%` } } }, "PersonFilterInput", 20, 200);
+    const hits = rows.filter((r) => linkedinSlug(r.linkedinLink?.primaryLinkUrl) === slug);
+    unique = hits.length === 1 && hits[0].id === op.person_id;
+  }
+  if (!unique) throw new OrigamiSafetyError("Origami identity no longer uniquely matches the CRM person; review required");
+  // A generic updatedAt cannot prove which field changed. Conservatively hold any later edit, except when the desired
+  // consent is already present; an explicit human confirmation supplies a newer decision time.
+  const decisionAt = label.source === "human" ? label.labeled_at : op.observed_at;
+  if (live.gtmMarketingConsent !== "UNSUBSCRIBED" && (!Number.isFinite(Date.parse(live.updatedAt)) || !Number.isFinite(Date.parse(decisionAt)) || Date.parse(live.updatedAt) > Date.parse(decisionAt))) {
+    throw new OrigamiSafetyError("CRM person changed after the opt-out decision; review required before writing consent");
+  }
+}
 
 /** The change one approved operation makes, from the live person; null when it is already in place. Pure. */
 export function changeFor(op: StoredOp, p: Live, now: Date): { data: Record<string, unknown> } | { error: string } | null {
@@ -225,6 +255,7 @@ export async function applyTwenty(db: SupabaseClient, reader: TwentyReader, now:
         }
         const live = await person(op.person_id);
         if (!live) throw new Error("the person is not in Twenty");
+        if (op.policy_version === ORIGAMI_RULE) await validateOrigamiTarget(db, reader, op, live);
         const c = changeFor(op, live, now);
         if (c && "error" in c) throw new Error(c.error);
         if (c) {
@@ -241,7 +272,8 @@ export async function applyTwenty(db: SupabaseClient, reader: TwentyReader, now:
         if (c) out.confirmed++; else out.unchanged++;
       } catch (e) {
         out.failed++;
-        await move(["queued", "applied"], { state: "failed", attempts: Math.min(op.attempts + 1, 2147483647), last_error: (e as Error).message.slice(0, 300).replace(/[^\s@]+@[^\s@]+/g, "[address]") }).catch(() => false);
+        const message = op.policy_version === ORIGAMI_RULE ? (e instanceof OrigamiSafetyError ? e.message : "Twenty: the CRM read or write failed") : (e as Error).message.slice(0, 300).replace(/[^\s@]+@[^\s@]+/g, "[address]");
+        await move(["queued", "applied"], { state: "failed", attempts: Math.min(op.attempts + 1, 2147483647), last_error: message }).catch(() => false);
       }
     }
     return out;
