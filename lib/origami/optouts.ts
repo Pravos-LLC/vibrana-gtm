@@ -23,7 +23,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
 import { TwentyError, type TwentyReader } from "../twenty";
 import { addressHash, linkedinHash, replyHash } from "../team/crypto";
-import { lookupPeople } from "../team/mailbox";
+import { emailOwners } from "./identity";
 import { normAddress } from "../team/restrictions";
 import { isDeadline, linkedinSlug, OrigamiClient, OrigamiError, origamiApplyEnabled, origamiConfigured, settled, settledRow, type Campaign, type PersonDetail, type PersonRow, type Reply } from "./client";
 import { classifyReply, exactPhrase, RULE_VERSION, unsubscribedStatus, type Classification } from "./rule";
@@ -181,9 +181,9 @@ export async function findSequences(client: OrigamiClient, id: Identity, origin:
 /** Exactly one Twenty person by address (primary or additional), else by LinkedIn slug. Never a guess. Read-only. */
 export async function matchTwenty(reader: TwentyReader, id: Identity): Promise<Match> {
   if (id.email) {
-    const m = (await lookupPeople(reader, [id.email])).get(id.email);
-    if (m && "ambiguous" in m) return { match: "ambiguous", person_id: null };
-    if (m) return { match: "matched", person_id: m.person.id, consent: m.person.gtmMarketingConsent ?? null };
+    const hits = await emailOwners(reader, id.email);
+    if (hits.length > 1) return { match: "ambiguous", person_id: null };
+    if (hits.length === 1) return { match: "matched", person_id: hits[0].id, consent: hits[0].gtmMarketingConsent ?? null };
   }
   if (id.slug) {
     type Row = { id: string; gtmMarketingConsent: string | null; linkedinLink: { primaryLinkUrl: string | null } | null };

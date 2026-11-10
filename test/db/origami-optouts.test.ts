@@ -584,8 +584,9 @@ test("Origami consent refuses changed identity, ambiguous identity, and later CR
     assert.match(String(op.last_error), /review required/);
     assert.equal(mock.calls.some((c) => /updatePeople/.test(c.body ?? "")), false);
     if (scenario === "ambiguous") {
-      const search = mock.calls.find((c) => c.body?.includes("additionalEmails") && c.body.includes("ilike"));
-      assert.ok(search, "additional addresses are queried case-insensitively");
+      const search = mock.calls.find((c) => c.body?.includes("additionalEmails") && c.body.includes("like"));
+      const filter = JSON.parse(search!.body!).variables.f.or[1].emails.additionalEmails.like as string;
+      assert.equal(filter, "%___@________.____%", "LIKE wildcards every letter so uppercase additional addresses are included");
     }
   }
 });

@@ -21,6 +21,7 @@ import { selectAll } from "../team/mailbox";
 import { emailRefusals, personEmails, readRestrictions, RESTRICTIONS_FIELD, UNREADABLE } from "../team/restrictions";
 import { RULE_VERSION as ORIGAMI_RULE } from "../origami/rule";
 import { linkedinSlug, origamiApplyEnabled } from "../origami/client";
+import { emailOwners } from "../origami/identity";
 
 export const POLICY_VERSION = "suppression-v1";
 export const ORIGAMI_HELD = "Origami exclusion scope and queued-send behavior not verified yet (VIB-513, AC497-05)";
@@ -165,13 +166,7 @@ async function validateOrigamiTarget(db: SupabaseClient, reader: TwentyReader, o
   // one-way hash. Do not fall back to the profile and guess whether that email was reassigned.
   if (evidence.recipient_hash && !email) throw new OrigamiSafetyError("Origami identity no longer uniquely matches the CRM person; review required");
   if (email) {
-    type Row = { id: string; emails: Live["emails"] };
-    // Case-insensitive predicates are required for both fields. If this Twenty version cannot filter its additional
-    // address array case-insensitively the query fails closed instead of pretending that an incomplete match is unique.
-    const rows = await reader.all<Row>("people", "id emails { primaryEmail additionalEmails }", { or: [
-      { emails: { primaryEmail: { ilike: email } } }, { emails: { additionalEmails: { ilike: `%${email}%` } } },
-    ] }, "PersonFilterInput", 100, 10000);
-    const hits = rows.filter((r) => personEmails(r).includes(email));
+    const hits = await emailOwners(reader, email);
     unique = hits.length === 1 && hits[0].id === op.person_id;
   } else if (slug && evidence.linkedin_hash === linkedinHash(slug)) {
     type Row = { id: string; linkedinLink: { primaryLinkUrl: string | null } | null };
