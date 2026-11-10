@@ -235,7 +235,8 @@ test("the pipeline cron and the network stream: HQ outcomes read client drafts o
   const run = await writeback.writeContacted(wb.db, twenty as never, new Date("2026-11-10T02:00:00Z"));
   assert.deepEqual([run.checked, run.updated], [1, 1]);
   assert.deepEqual(writes, [{ id: P, t: "2026-11-10T01:00:00Z" }], "a network email marked sent sets lastContactedAt like any desk email");
-  assert.ok(!wb.calls.some((c) => c.table === "gtm_outreach_drafts" && c.args.includes("track")), "the write-back is not filtered by track");
+  const trackFilters = wb.calls.filter((c) => c.table === "gtm_outreach_drafts" && c.args.includes("track")).map((c) => [c.method, ...c.args]);
+  assert.deepEqual(trackFilters, [["eq", "track", "network"]], "emails are read on every track; only the extra LinkedIn-note read is network-only");
 });
 
 test("LinkedIn, meetings and site days roll up per window and owner", () => {
@@ -348,6 +349,19 @@ test("write-back: the latest send per Twenty person since the cursor, ignoring m
     { email_sent_at: "2026-10-01T00:00:00Z", prospect: { twenty_person_id: "00000000-0000-4000-8000-000000000002" } },
   ], "2026-11-01T00:00:00Z");
   assert.deepEqual([...m], [[P, "2026-11-04T00:00:00Z"]]);
+});
+
+test("write-back: a network LinkedIn note is contact, a client or guest LinkedIn note and a bounced email are not (VIB-522)", () => {
+  const [A, B, C, D] = ["1", "2", "3", "4"].map((n) => `00000000-0000-4000-8000-00000000000${n}`);
+  const m = writeback.latestSends([
+    { email_sent_at: null, track: "network", linkedin_sent_at: "2026-11-05T00:00:00Z", prospect: { twenty_person_id: A } },
+    { email_sent_at: "2026-11-03T00:00:00Z", track: "network", linkedin_sent_at: "2026-11-06T00:00:00Z", prospect: { twenty_person_id: B } },
+    { email_sent_at: null, track: "guest", linkedin_sent_at: "2026-11-05T00:00:00Z", prospect: { twenty_person_id: C } },
+    { email_sent_at: null, track: "client", linkedin_sent_at: "2026-11-05T00:00:00Z", prospect: { twenty_person_id: C } },
+    { email_sent_at: "2026-11-05T00:00:00Z", email_bounced_at: "2026-11-05T01:00:00Z", track: "network", prospect: { twenty_person_id: D } },
+    { email_sent_at: null, track: "network", linkedin_sent_at: "2026-10-01T00:00:00Z", prospect: { twenty_person_id: D } },
+  ], "2026-11-01T00:00:00Z");
+  assert.deepEqual([...m].sort(), [[A, "2026-11-05T00:00:00Z"], [B, "2026-11-06T00:00:00Z"]]);
 });
 
 test("stage history: a new deal is dated at its close or creation (never its last edit), a move at now, a known stage not again", () => {

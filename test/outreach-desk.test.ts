@@ -473,7 +473,9 @@ test("dossierProblems for a network file: the block is an object, the tier T1 or
   assert.match(wrongWay([networkDossier({ network: { origins: "LINKEDIN" } })], "network"), /network\.origins must be an array of strings/);
   assert.match(wrongWay([networkDossier({ network: { origins: ["LINKEDIN", 4] } })], "network"), /network\.origins must be an array of strings/);
   assert.match(wrongWay([networkDossier({ network: { owners: [{ code: "JOHN" }] } })], "network"), /network\.owners must be an array of strings/);
-  assert.match(wrongWay([networkDossier({ route: "pigeon" })], "network"), /route "pigeon" is not email, linkedin or intermediary/);
+  assert.match(wrongWay([networkDossier({ route: "pigeon" })], "network"), /route "pigeon" is not email or linkedin/);
+  // A network person is reached directly, never through an intermediary (that route skips the email-hold check on Mark sent).
+  assert.match(wrongWay([networkDossier({ route: "intermediary" })], "network"), /route "intermediary" is not email or linkedin/);
   assert.match(wrongWay([networkDossier({ signal: "x" })], "network"), /signal must be an object or null/);
   assert.match(wrongWay([networkDossier()], "guest"), /is a network, but this is a guest import \(--track guest\)/);
   assert.match(wrongWay([networkDossier()], "client"), /is a network, but this is a client import/);

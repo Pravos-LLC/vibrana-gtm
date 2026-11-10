@@ -220,7 +220,9 @@ export function dossierProblems(d: DossierImport, raw: Record<string, unknown>):
   // track out: it is the old contract).
   const rowTrack = raw.track == null || raw.track === "" ? (d.track === "client" ? "client" : null) : str(raw.track);
   if (rowTrack !== d.track) out.push(`is a ${rowTrack ?? "row with no track"}, but this is a ${d.track} import (--track ${d.track})`);
-  if (isWarmTrack(d.track) && raw.route != null && !(ROUTES as readonly string[]).includes(str(raw.route))) out.push(`route "${str(raw.route)}" is not email, linkedin or intermediary`);
+  if (d.track === "guest" && raw.route != null && !(ROUTES as readonly string[]).includes(str(raw.route))) out.push(`route "${str(raw.route)}" is not email, linkedin or intermediary`);
+  // A network person is reached directly: their own email or a LinkedIn note, never an intermediary (the exporter emits only these).
+  if (d.track === "network" && raw.route != null && str(raw.route) !== "email" && str(raw.route) !== "linkedin") out.push(`route "${str(raw.route)}" is not email or linkedin`);
   if (d.track === "guest") {
     if (raw.guest != null && !isObject(raw.guest)) out.push("guest must be an object or null");
     if (isObject(raw.guest)) {
