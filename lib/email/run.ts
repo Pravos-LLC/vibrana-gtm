@@ -52,7 +52,12 @@ export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], 
   if (origamiApplyEnabled()) {
     const ev = must(await db.from("gtm_origami_replies").select("match,processed_at,last_error,created_at").neq("classification", "none").is("reviewed_at", null).in("match", ["pending", "ambiguous", "unmatched"]), "origami opt-outs") as { match: string; processed_at: string | null; last_error: string | null; created_at: string }[];
     const unmatched = ev.filter((r) => r.processed_at && r.match !== "pending").length;
-    const stuck = ev.filter((r) => !r.processed_at && now.getTime() - Date.parse(r.created_at) > 2 * 3_600_000).length;
+    // Stuck counts every match state: a matched row is processed only once its sequences were all found and stopped, and
+    // the step's progress check no longer stands in for that (runs that read new replies count as progress).
+    const unprocessed = await db.from("gtm_origami_replies").select("id", { count: "exact", head: true }).neq("classification", "none").is("reviewed_at", null).is("processed_at", null)
+      .lt("created_at", new Date(now.getTime() - 2 * 3_600_000).toISOString());
+    must(unprocessed, "origami unprocessed");
+    const stuck = unprocessed.count ?? 0;
     if (unmatched) observed.push({ key: "suppression:origami_unmatched", kind: "suppression", severity: "warning", summary: `${unmatched} Origami opt-out${unmatched === 1 ? "" : "s"} matched no single Twenty person; their Origami sequences are stopped, the CRM is not (gtm suppression origami-reviewed --handled)`, detail: { unmatched } });
     if (stuck) observed.push({ key: "suppression:origami_stuck", kind: "suppression", severity: "critical", summary: `${stuck} Origami opt-out${stuck === 1 ? "" : "s"} not processed after two hours`, detail: { stuck } });
     // The step itself (lib/origami/optouts.ts runOrigamiOptouts): replies may not be read at all, which no evidence row can show.
