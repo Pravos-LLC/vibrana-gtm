@@ -34,6 +34,7 @@ export const APPROVAL_REF = "auto: origami-reply-v1 (standing decision 2026-11-1
 export const CURSOR_KEY = "origami.replies";
 export const RUN_KEY = "origami.optouts.run";
 const STATUS_FULL_KEY = "origami.status.full";
+export const STATUS_PAGES_PER_RUN = 12;
 // The poll re-reads the last 72 hours every run. `since` is the reply's received time, not when Origami stored it, so a
 // reply that a slow LinkedIn or mailbox sync brings in late is still read; evidence already recorded is skipped by its key
 // before anything is judged, so the overlap costs one listing.
@@ -565,7 +566,12 @@ export async function resolveOrigamiReviews(db: SupabaseClient, ids: number[], d
 
 /* ------------------------------------------------------------------------------------------------ the hourly step */
 
-type RunState = { at: string; ok: boolean; error: string | null; lastOkAt: string | null; deferred?: boolean };
+/**
+ * `lastOkAt`: the last run that finished every stage with nothing left over (a full pass). `lastProgressAt`: the last run
+ * with no error that read and recorded the newest replies, while older scans may still be carried to the next run.
+ * `firstAt`: when this state was first written, the reference for a full pass that has never happened.
+ */
+export type RunState = { at: string; ok: boolean; error: string | null; lastOkAt: string | null; deferred?: boolean; lastProgressAt?: string | null; firstAt?: string };
 type ReplyCursor = { since?: string; scanSince?: string | null; nextCursor?: string | null; newest?: string | null; seen?: string[] };
 const readState = async <T>(db: SupabaseClient, key: string) => (must(await db.from("gtm_sync_state").select("value").eq("key", key).maybeSingle(), `read ${key}`) as { value: T } | null)?.value ?? null;
 const saveState = async (db: SupabaseClient, key: string, value: unknown, now: Date) =>
@@ -624,7 +630,9 @@ async function scanStatusPages(db: SupabaseClient, client: OrigamiClient, campai
   const full = await readState<{ at?: string }>(db, STATUS_FULL_KEY);
   const state: StatusScan = prior ?? { campaigns: campaigns.map((c) => c.id.toLowerCase()), full: !full?.at || now.getTime() - Date.parse(full.at) > 20 * 3_600_000, campaign: 0, filter: 0, cursor: null };
   let recorded = 0;
-  for (let pages = 0; pages < 3 && state.campaign < state.campaigns.length; pages++) {
+  // Up to STATUS_PAGES_PER_RUN pages, still bounded by the stage's time slice; each page is checkpointed. At 3 pages a
+  // pass over 8 campaigns (two filters each) took about 10 hourly runs.
+  for (let pages = 0; pages < STATUS_PAGES_PER_RUN && state.campaign < state.campaigns.length; pages++) {
     const campaign = state.campaigns[state.campaign];
     const filter = state.full ? {} : { status: ["replied", "unsubscribed"][state.filter] };
     const page = await client.peoplePage(campaign, filter, state.cursor);
@@ -680,7 +688,7 @@ export async function runOrigamiOptouts(db: SupabaseClient, reader: TwentyReader
   };
   await phase("stopsFirst", () => applyOrigamiStops(db, client, now));
   // Always inspect the newest page, even while either checkpointed scan is working through an older backlog.
-  await phase("freshHead", async () => {
+  const fresh = await phase("freshHead", async () => {
     const page = await client.repliesPage(new Date(now.getTime() - LOOKBACK_MS).toISOString());
     const parsed = replyEvidence(page.items ?? []);
     const saved = await ingest(db, client, parsed.evidence);
@@ -700,7 +708,10 @@ export async function runOrigamiOptouts(db: SupabaseClient, reader: TwentyReader
   client.setDeadline(opts.deadline); reader.setDeadline(opts.deadline);
   const error = errors.length ? errors.join("; ").slice(0, 280) : null;
   const prev = await readState<RunState>(db, RUN_KEY).catch(() => null);
-  const state: RunState = { at: now.toISOString(), ok: !error && !deferred, error, lastOkAt: error || deferred ? prev?.lastOkAt ?? null : now.toISOString(), deferred };
+  // Progress: no stage failed and the newest replies were read and recorded. Deferred backlog alone is not a failure.
+  const progressed = !error && !!fresh && !fresh.deferred;
+  const state: RunState = { at: now.toISOString(), ok: !error && !deferred, error, lastOkAt: error || deferred ? prev?.lastOkAt ?? null : now.toISOString(), deferred,
+    lastProgressAt: progressed ? now.toISOString() : prev?.lastProgressAt ?? null, firstAt: prev?.firstAt ?? prev?.at ?? now.toISOString() };
   await saveState(db, RUN_KEY, state, now).catch(() => undefined);
   return { ...out, ...(error ? { error } : {}), deferred, requests: client.requests.count };
 }

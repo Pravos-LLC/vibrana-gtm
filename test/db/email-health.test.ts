@@ -76,3 +76,50 @@ test("a notice that failed to send is still sent once after the check recovers (
   const [frozen] = (await admin().from("gtm_email_incidents").select("detail").like("incident_key", "collection:thlth:%")).data!;
   assert.deepEqual(retry, frozen.detail.envelope, "the retry repeats the request frozen before the first attempt, byte for byte");
 });
+
+test("a mailbox error that clears itself is emailed only from its second run in a row; a reconnect at once", async () => {
+  const { failureKey } = await import("../../lib/team/mailbox.ts");
+  const now = new Date();
+  const fk = failureKey("THLTH", "h@hq.test");
+  const streak = async (count: number | null) => {
+    await admin().from("gtm_sync_state").delete().eq("key", fk);
+    if (count) assert.equal((await admin().from("gtm_sync_state").insert({ key: fk, value: { count, since: now.toISOString() }, updated_at: now.toISOString() })).error, null);
+  };
+  const open = async () => (await admin().from("gtm_email_incidents").select("id").like("incident_key", "collection:thlth:%").is("resolved_at", null)).data!.length;
+  mock = installFetchMock([{ url: "https://api.resend.com/emails", json: { id: "e4" } }, DB]);
+  await reset("The sync stopped early (thread re-read); it resumes where it left off next hour.", now.toISOString());
+  await streak(1);
+  await runEmailHealth(admin(), [member], { now, mail: { to: "fallback@team.test", from: "cockpit@team.test" } });
+  assert.equal(await open(), 0, "one early stop is not an incident");
+  await streak(2);
+  await runEmailHealth(admin(), [member], { now: new Date(now.getTime() + 3_600_000), mail: { to: "fallback@team.test", from: "cockpit@team.test" } });
+  assert.equal(await open(), 1, "the second in a row is");
+  await reset("Google no longer accepts the stored connection. Reconnect the mailbox.", now.toISOString());
+  await streak(1);
+  await runEmailHealth(admin(), [member], { now, mail: { to: "fallback@team.test", from: "cockpit@team.test" } });
+  assert.equal(await open(), 1, "a reconnect needs a person: reported on the first failure");
+  await streak(null);
+});
+
+test("a matched Origami opt-out still not processed after two hours is a critical incident (review of #46, M1)", async () => {
+  const now = new Date();
+  await reset(null, now.toISOString());
+  const db = admin();
+  const seq = "00000000-0000-4000-8000-00000000f0b2";
+  await db.from("gtm_origami_replies").delete().eq("sequence_id", seq);
+  await db.from("gtm_email_incidents").delete().eq("incident_key", "suppression:origami_stuck");
+  assert.equal((await db.from("gtm_origami_replies").insert({ evidence_key: `status:${seq}`, kind: "unsubscribed_status", source: "status_scan", sequence_id: seq, received_at: now.toISOString(),
+    rule_version: "origami-reply-v1", classification: "confirmed", reason: "origami_unsubscribed", match: "matched", person_id: P, created_at: new Date(now.getTime() - 3 * 3_600_000).toISOString() })).error, null);
+  process.env.ORIGAMI_OPTOUT_APPLY = "1";
+  try {
+    mock = installFetchMock([{ url: "https://api.resend.com/emails", json: { id: "e5" } }, DB]);
+    await runEmailHealth(db, [member], { now, mail: { to: "fallback@team.test", from: "cockpit@team.test" } });
+    const [inc] = (await db.from("gtm_email_incidents").select("severity,summary").eq("incident_key", "suppression:origami_stuck").is("resolved_at", null)).data!;
+    assert.equal(inc?.severity, "critical");
+    assert.match(inc.summary, /^1 Origami opt-out not processed after two hours/);
+  } finally {
+    delete process.env.ORIGAMI_OPTOUT_APPLY;
+    await db.from("gtm_origami_replies").delete().eq("sequence_id", seq);
+    await db.from("gtm_email_incidents").delete().like("incident_key", "suppression:origami%");
+  }
+});

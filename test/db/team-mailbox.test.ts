@@ -10,7 +10,7 @@ import { installFetchMock, type Route } from "../support/fetch-mock.ts";
 
 const l = local();
 Object.assign(process.env, { NEXT_PUBLIC_SUPABASE_URL: l.url, SUPABASE_SECRET_KEY: l.secretKey, TEAM_MAILBOX_KEY: randomBytes(32).toString("base64"), TWENTY_API_KEY: "twenty_test", TWENTY_BASE: "https://crm.test" });
-const { syncMailbox, mailboxAad, stateKey } = await import("../../lib/team/mailbox.ts");
+const { syncMailbox, mailboxAad, stateKey, failureKey } = await import("../../lib/team/mailbox.ts");
 const { sealToken, addressHash, messageKey } = await import("../../lib/team/crypto.ts");
 const { parseMembers } = await import("../../lib/team/members.ts");
 const { TwentyReader } = await import("../../lib/twenty.ts");
@@ -42,13 +42,14 @@ async function fresh(row: Partial<{ history_id: string | null; backfill_done: bo
   const { data: old } = await db.from("gtm_team_mail_events").select("id").eq("member", "TSYNC");
   if (old?.length) await db.from("gtm_email_attempts").delete().in("event_id", old.map((e) => e.id));
   await db.from("gtm_team_mail_events").delete().eq("member", "TSYNC");
-  await db.from("gtm_sync_state").delete().eq("key", stateKey("TSYNC", BOX));
+  await db.from("gtm_sync_state").delete().in("key", [stateKey("TSYNC", BOX), failureKey("TSYNC", BOX)]);
   await db.from("gtm_team_mailboxes").delete().eq("member", "TSYNC");
   const r = { member: "TSYNC", address: BOX, token_ciphertext: sealToken("refresh", mailboxAad("TSYNC", BOX)), history_id: null as string | null, backfill_done: false, ...row };
   assert.equal((await db.from("gtm_team_mailboxes").insert(r)).error, null);
   return { ...r, last_sync_at: null as string | null };
 }
 const state = async () => (await admin().from("gtm_sync_state").select("value").eq("key", stateKey("TSYNC", BOX)).maybeSingle()).data?.value as Record<string, unknown> | undefined;
+const streak = async () => (await admin().from("gtm_sync_state").select("value").eq("key", failureKey("TSYNC", BOX)).maybeSingle()).data?.value as Record<string, unknown> | undefined;
 const box = async () => (await admin().from("gtm_team_mailboxes").select("history_id,backfill_done,last_error").eq("member", "TSYNC").single()).data!;
 const events = async () => (await admin().from("gtm_team_mail_events").select("*").eq("member", "TSYNC").order("gmail_message_id")).data ?? [];
 
@@ -92,6 +93,32 @@ test("a CRM failure saves no events and moves no cursor; the owner-readable erro
   assert.equal(await state(), undefined, "no cursor was saved");
   const b = await box();
   assert.equal(b.backfill_done, false); assert.doesNotMatch(b.last_error!, /@/);
+});
+
+test("failed runs in a row are counted for the health check; the next successful run clears the count", async () => {
+  const row = await fresh();
+  const failing = () => base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
+    { url: "https://crm.test/graphql", status: 200, json: { errors: [{ message: "rejected" }] } },
+  ]);
+  for (const [i, at] of ["2026-11-04T00:00:00Z", "2026-11-04T01:00:00Z"].entries()) {
+    mock = installFetchMock(failing());
+    const r = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0, retries: 0 }), { cfg, now: new Date(at) });
+    assert.match(r.error!, /retries next hour\.$/);
+    mock.restore(); mock = null;
+    assert.deepEqual(await streak(), { count: i + 1, since: "2026-11-04T00:00:00.000Z" });
+  }
+  mock = installFetchMock(base([
+    { url: `${GM}messages?labelIds=SENT`, json: { messages: [{ id: "a1" }] } },
+    { url: `${GM}messages/a1`, json: sent("a1", T0, "ana@prospect.test") },
+    { url: "https://crm.test/graphql", body: page("people", [ana]), times: 1 },
+    { url: "https://crm.test/graphql", body: page("companies", []), times: 1 },
+    { url: `${GM}threads/`, json: { id: "t", messages: [] } },
+  ]));
+  const ok = await syncMailbox(admin(), member, row, new TwentyReader({ pauseMs: 0 }), { cfg, now: new Date("2026-11-04T02:00:00Z") });
+  assert.equal(ok.error, undefined, ok.error ?? "");
+  assert.equal(await streak(), undefined);
 });
 
 test("a deadline mid-run keeps the unread ids pending, and the next run finishes them", async () => {

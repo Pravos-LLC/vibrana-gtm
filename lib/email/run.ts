@@ -9,10 +9,32 @@ import { bounceCheck } from "./metrics";
 import { alertRecipients, checkDomain, healthDomains, notifyIncidents, reconcileIncidents, type DomainCheck, type Incident } from "./health";
 import { loadMirrorState, mirrorProblems } from "../crm/mirror";
 import { origamiApplyEnabled } from "../origami/client";
-import { RUN_KEY as ORIGAMI_RUN_KEY } from "../origami/optouts";
+import { RUN_KEY as ORIGAMI_RUN_KEY, type RunState as OrigamiRunState } from "../origami/optouts";
+import { failureKey, selfHealing, type FailureStreak } from "../team/mailbox";
 
 const DNS_KEY = "email.health.dns";
 const STALE_SYNC_MS = 3 * 3_600_000;
+const HOUR = 3_600_000;
+
+/**
+ * The Origami step's incidents. Critical: a stage failed, or for three hours no run read the newest replies (runs that
+ * only carry older scans to the next hour still count as progress). Warning: no full pass, including Origami's own
+ * unsubscribes, for 24 hours, so those may be found late. A state written before `lastProgressAt` existed falls back to
+ * `lastOkAt`.
+ */
+export function origamiStepProblems(run: OrigamiRunState | null, now: number): Incident[] {
+  if (!run) return [{ key: "suppression:origami_step", kind: "suppression", severity: "critical", summary: "The Origami opt-out step has not run yet", detail: { lastOkAt: null } }];
+  const age = (at: string | null | undefined) => (at ? now - Date.parse(at) : Infinity);
+  const progressAt = run.lastProgressAt ?? run.lastOkAt;
+  if (run.error || age(progressAt) > 3 * HOUR) return [{ key: "suppression:origami_step", kind: "suppression", severity: "critical",
+    summary: `The Origami opt-out step ${run.error ? `failed: ${run.error}` : "has not read new Origami replies for over three hours"}`.slice(0, 300), detail: { lastOkAt: run.lastOkAt, lastProgressAt: progressAt ?? null } }];
+  if (age(run.lastOkAt ?? run.firstAt) > 24 * HOUR) return [{ key: "suppression:origami_backlog", kind: "suppression", severity: "warning",
+    summary: "The Origami opt-out step has not finished a full pass for over 24 hours; new replies are still read hourly, but Origami's own unsubscribes may be found late", detail: { lastOkAt: run.lastOkAt } }];
+  return [];
+}
+
+/** A mailbox's `last_error` as an incident: one that clears itself is reported only from its second run in a row. */
+export const collectionFailing = (lastError: string, streak: FailureStreak | null) => !selfHealing(lastError) || !streak || streak.count >= 2;
 
 export type HealthRun = { incidents: number; notified: boolean; dns?: DomainCheck[] | string; error?: string };
 
@@ -30,15 +52,17 @@ export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], 
   if (origamiApplyEnabled()) {
     const ev = must(await db.from("gtm_origami_replies").select("match,processed_at,last_error,created_at").neq("classification", "none").is("reviewed_at", null).in("match", ["pending", "ambiguous", "unmatched"]), "origami opt-outs") as { match: string; processed_at: string | null; last_error: string | null; created_at: string }[];
     const unmatched = ev.filter((r) => r.processed_at && r.match !== "pending").length;
-    const stuck = ev.filter((r) => !r.processed_at && now.getTime() - Date.parse(r.created_at) > 2 * 3_600_000).length;
+    // Stuck counts every match state: a matched row is processed only once its sequences were all found and stopped, and
+    // the step's progress check no longer stands in for that (runs that read new replies count as progress).
+    const unprocessed = await db.from("gtm_origami_replies").select("id", { count: "exact", head: true }).neq("classification", "none").is("reviewed_at", null).is("processed_at", null)
+      .lt("created_at", new Date(now.getTime() - 2 * 3_600_000).toISOString());
+    must(unprocessed, "origami unprocessed");
+    const stuck = unprocessed.count ?? 0;
     if (unmatched) observed.push({ key: "suppression:origami_unmatched", kind: "suppression", severity: "warning", summary: `${unmatched} Origami opt-out${unmatched === 1 ? "" : "s"} matched no single Twenty person; their Origami sequences are stopped, the CRM is not (gtm suppression origami-reviewed --handled)`, detail: { unmatched } });
     if (stuck) observed.push({ key: "suppression:origami_stuck", kind: "suppression", severity: "critical", summary: `${stuck} Origami opt-out${stuck === 1 ? "" : "s"} not processed after two hours`, detail: { stuck } });
-    // The step itself (lib/origami/optouts.ts runOrigamiOptouts): a failed run, or no successful run for three hours, means
-    // replies may not be read at all, which no evidence row can show.
-    const run = (must(await db.from("gtm_sync_state").select("value").eq("key", ORIGAMI_RUN_KEY).maybeSingle(), "origami step") as { value: { at?: string; error?: string | null; lastOkAt?: string | null } } | null)?.value ?? null;
-    const okAge = run?.lastOkAt ? now.getTime() - Date.parse(run.lastOkAt) : Infinity;
-    if (run?.error || okAge > 3 * 3_600_000) observed.push({ key: "suppression:origami_step", kind: "suppression", severity: "critical",
-      summary: `The Origami opt-out step ${run?.error ? `failed: ${run.error}` : run ? "has not succeeded for over three hours" : "has not run yet"}`.slice(0, 300), detail: { lastOkAt: run?.lastOkAt ?? null } });
+    // The step itself (lib/origami/optouts.ts runOrigamiOptouts): replies may not be read at all, which no evidence row can show.
+    const run = (must(await db.from("gtm_sync_state").select("value").eq("key", ORIGAMI_RUN_KEY).maybeSingle(), "origami step") as { value: OrigamiRunState } | null)?.value ?? null;
+    observed.push(...origamiStepProblems(run, now.getTime()));
   }
   for (const m of members) {
     const read = await db.from("gtm_team_mailboxes").select("address,last_sync_at,last_error,backfill_done").eq("member", m.code);
@@ -52,7 +76,11 @@ export async function runEmailHealth(db: SupabaseClient, members: TeamMember[], 
     const boxes = (read.data ?? []) as { address: string; last_sync_at: string | null; last_error: string | null; backfill_done: boolean }[];
     for (const b of boxes) {
       const k = `collection:${m.code.toLowerCase()}:${Buffer.from(b.address).toString("hex").slice(0, 24)}`;
-      if (b.last_error) observed.push({ key: k, kind: "collection", severity: "warning", summary: `${m.label}'s mailbox sync is failing: ${b.last_error}`.slice(0, 300) });
+      if (b.last_error) {
+        // A streak that cannot be read counts as unknown: alert (collectionFailing with null).
+        const streak = (await db.from("gtm_sync_state").select("value").eq("key", failureKey(m.code, b.address)).maybeSingle()).data?.value as FailureStreak | undefined;
+        if (collectionFailing(b.last_error, streak ?? null)) observed.push({ key: k, kind: "collection", severity: "warning", summary: `${m.label}'s mailbox sync is failing: ${b.last_error}`.slice(0, 300) });
+      }
       else if (!b.last_sync_at || now.getTime() - Date.parse(b.last_sync_at) > STALE_SYNC_MS) observed.push({ key: k, kind: "collection", severity: "warning", summary: `${m.label}'s mailbox has not synced for over 3 hours` });
     }
     if (!boxes.length) continue;

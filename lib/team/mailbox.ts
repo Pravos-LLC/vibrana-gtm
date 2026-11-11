@@ -298,6 +298,16 @@ export type SyncState = { pageToken?: string; startHistory?: string; since?: str
 export const stateKey = (member: string, address: string) =>
   `team.mailbox.${member.toLowerCase()}.h${createHash("sha256").update(address.toLowerCase()).digest("hex").slice(0, 16)}`;
 
+/** Consecutive failed runs of one mailbox (`{ count, since }`), cleared by the next successful run. Read by the email health check. */
+export const failureKey = (member: string, address: string) => `${stateKey(member, address)}.failures`;
+export type FailureStreak = { count: number; since: string };
+
+/**
+ * A failure the next run is expected to clear by itself: the message says it retries or resumes next hour. Anything else
+ * (a reconnect, the wrong account) needs a person and is reported at once.
+ */
+export const selfHealing = (lastError: string) => /\b(retries|resumes where it left off) next hour\.$/.test(lastError);
+
 /** Fixed, address-free messages for last_error, which owners read. Raw provider errors never reach it. */
 export class SyncStepError extends Error {}
 const failure = (e: unknown): string => {
@@ -776,10 +786,16 @@ export async function syncMailbox(db: SupabaseClient, member: TeamMember, row: M
     if (caughtUp) await saveState({ pending: [], okAt: now.toISOString(), threads: remainingThreads, ...replayState });
     else await saveState({ ...(lastSaved ?? {}), threads: remainingThreads, ...replayState });
     must(await db.from("gtm_team_mailboxes").update({ last_sync_at: now.toISOString(), last_error: null }).eq("member", row.member).eq("address", row.address), "save mailbox status");
+    await db.from("gtm_sync_state").delete().eq("key", failureKey(row.member, row.address));
   } catch (e) {
     result.error = failure(e);
     result.complete = false;
     await db.from("gtm_team_mailboxes").update({ last_error: result.error, last_sync_at: now.toISOString() }).eq("member", row.member).eq("address", row.address);
+    // Best effort, like the status write above: a streak that could not be saved makes the health check alert at once.
+    const fk = failureKey(row.member, row.address);
+    const prev = (await db.from("gtm_sync_state").select("value").eq("key", fk).maybeSingle()).data?.value as FailureStreak | undefined;
+    const streak: FailureStreak = { count: (prev?.count ?? 0) + 1, since: prev?.since ?? now.toISOString() };
+    await db.from("gtm_sync_state").upsert({ key: fk, value: streak, updated_at: now.toISOString() }, { onConflict: "key" });
   }
   return result;
 }

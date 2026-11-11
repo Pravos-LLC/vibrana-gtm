@@ -377,6 +377,9 @@ test("a multi-run reply backfill persists each page and eventually advances the 
     else assert.equal(cursor.since, "2026-11-07T12:00:00.000Z");
     const state = (await admin().from("gtm_sync_state").select("value").eq("key", O.RUN_KEY).single()).data!.value;
     assert.equal(state.lastOkAt, i < 2 ? null : "2026-11-10T12:00:00.000Z");
+    // The newest replies were read on every run, so each one is progress even while the backlog is carried forward.
+    assert.equal(state.lastProgressAt, `2026-11-10T1${i}:00:00.000Z`);
+    assert.equal(state.firstAt, "2026-11-10T10:00:00.000Z");
   }
   assert.deepEqual(seen, [null, "1", "2", "3", "4", "5", "6"]);
 });
@@ -447,12 +450,14 @@ test("a large unsubscribe status scan records pages across runs", async () => {
   c.person = async () => { throw new Error("synthetic unavailable person"); };
   c.peoplePage = async (_campaign, _filter, cursor) => {
     const page = cursor ? Number(cursor) : 0;
-    return { items: [{ sequence_id: `00000000-0000-4000-8000-${String(800 + page).padStart(12, "0")}`, status: "replied", stop_reason: "unsubscribed" }], next_cursor: page < 6 ? String(page + 1) : null };
+    return { items: [{ sequence_id: `00000000-0000-4000-8000-${String(800 + page).padStart(12, "0")}`, status: "replied", stop_reason: "unsubscribed" }], next_cursor: page < pages - 1 ? String(page + 1) : null };
   };
+  // More pages than two runs read, so the scan spans three runs at STATUS_PAGES_PER_RUN pages each.
+  const per = O.STATUS_PAGES_PER_RUN, pages = 2 * per + 1;
   for (let i = 0; i < 3; i++) {
     await O.runOrigamiOptouts(admin(), reader(), new Date(), { deadline: Date.now() + 60_000, client: c });
     const rows = await admin().from("gtm_origami_replies").select("id").eq("source", "status_scan");
-    assert.equal(rows.data!.length, Math.min((i + 1) * 3, 7));
+    assert.equal(rows.data!.length, Math.min((i + 1) * per, pages));
   }
 });
 
