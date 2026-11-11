@@ -450,12 +450,14 @@ test("a large unsubscribe status scan records pages across runs", async () => {
   c.person = async () => { throw new Error("synthetic unavailable person"); };
   c.peoplePage = async (_campaign, _filter, cursor) => {
     const page = cursor ? Number(cursor) : 0;
-    return { items: [{ sequence_id: `00000000-0000-4000-8000-${String(800 + page).padStart(12, "0")}`, status: "replied", stop_reason: "unsubscribed" }], next_cursor: page < 6 ? String(page + 1) : null };
+    return { items: [{ sequence_id: `00000000-0000-4000-8000-${String(800 + page).padStart(12, "0")}`, status: "replied", stop_reason: "unsubscribed" }], next_cursor: page < pages - 1 ? String(page + 1) : null };
   };
+  // More pages than two runs read, so the scan spans three runs at STATUS_PAGES_PER_RUN pages each.
+  const per = O.STATUS_PAGES_PER_RUN, pages = 2 * per + 1;
   for (let i = 0; i < 3; i++) {
     await O.runOrigamiOptouts(admin(), reader(), new Date(), { deadline: Date.now() + 60_000, client: c });
     const rows = await admin().from("gtm_origami_replies").select("id").eq("source", "status_scan");
-    assert.equal(rows.data!.length, Math.min((i + 1) * 3, 7));
+    assert.equal(rows.data!.length, Math.min((i + 1) * per, pages));
   }
 });
 
