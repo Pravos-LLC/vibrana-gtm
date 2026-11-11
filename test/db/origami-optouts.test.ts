@@ -377,6 +377,9 @@ test("a multi-run reply backfill persists each page and eventually advances the 
     else assert.equal(cursor.since, "2026-11-07T12:00:00.000Z");
     const state = (await admin().from("gtm_sync_state").select("value").eq("key", O.RUN_KEY).single()).data!.value;
     assert.equal(state.lastOkAt, i < 2 ? null : "2026-11-10T12:00:00.000Z");
+    // The newest replies were read on every run, so each one is progress even while the backlog is carried forward.
+    assert.equal(state.lastProgressAt, `2026-11-10T1${i}:00:00.000Z`);
+    assert.equal(state.firstAt, "2026-11-10T10:00:00.000Z");
   }
   assert.deepEqual(seen, [null, "1", "2", "3", "4", "5", "6"]);
 });

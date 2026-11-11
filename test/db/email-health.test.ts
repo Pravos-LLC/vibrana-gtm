@@ -76,3 +76,27 @@ test("a notice that failed to send is still sent once after the check recovers (
   const [frozen] = (await admin().from("gtm_email_incidents").select("detail").like("incident_key", "collection:thlth:%")).data!;
   assert.deepEqual(retry, frozen.detail.envelope, "the retry repeats the request frozen before the first attempt, byte for byte");
 });
+
+test("a mailbox error that clears itself is emailed only from its second run in a row; a reconnect at once", async () => {
+  const { failureKey } = await import("../../lib/team/mailbox.ts");
+  const now = new Date();
+  const fk = failureKey("THLTH", "h@hq.test");
+  const streak = async (count: number | null) => {
+    await admin().from("gtm_sync_state").delete().eq("key", fk);
+    if (count) assert.equal((await admin().from("gtm_sync_state").insert({ key: fk, value: { count, since: now.toISOString() }, updated_at: now.toISOString() })).error, null);
+  };
+  const open = async () => (await admin().from("gtm_email_incidents").select("id").like("incident_key", "collection:thlth:%").is("resolved_at", null)).data!.length;
+  mock = installFetchMock([{ url: "https://api.resend.com/emails", json: { id: "e4" } }, DB]);
+  await reset("The sync stopped early (thread re-read); it resumes where it left off next hour.", now.toISOString());
+  await streak(1);
+  await runEmailHealth(admin(), [member], { now, mail: { to: "fallback@team.test", from: "cockpit@team.test" } });
+  assert.equal(await open(), 0, "one early stop is not an incident");
+  await streak(2);
+  await runEmailHealth(admin(), [member], { now: new Date(now.getTime() + 3_600_000), mail: { to: "fallback@team.test", from: "cockpit@team.test" } });
+  assert.equal(await open(), 1, "the second in a row is");
+  await reset("Google no longer accepts the stored connection. Reconnect the mailbox.", now.toISOString());
+  await streak(1);
+  await runEmailHealth(admin(), [member], { now, mail: { to: "fallback@team.test", from: "cockpit@team.test" } });
+  assert.equal(await open(), 1, "a reconnect needs a person: reported on the first failure");
+  await streak(null);
+});
