@@ -12,7 +12,7 @@ The weekly YouTube entry (impressions, click-through rate) and the Substack subs
 | Studio export zips | daily views per video, traffic source and country, video metadata. A fallback and a backfill that only fills days and videos the API has not already written (existing rows are skipped); impressions are period totals in the export, so they are not imported | `gtm youtube import <zip>...` |
 | Substack exports | subscribers at week end, new subscribers and unique visitors per week. Substack has no API; opens and post views are in neither export and stay manual | `gtm substack import` |
 
-Tables: `gtm_yt_videos`, `gtm_yt_video_daily`, `gtm_yt_channel_daily`, `gtm_yt_dim_daily`, `gtm_yt_report_files` (schema owned by the website repository). Each finished week's impressions and CTR are written to `gtm_manual_metrics` (`entered_by = youtube-api`), so the existing YouTube row completes itself. A week John typed by hand is never overwritten.
+Tables: `gtm_yt_videos`, `gtm_yt_video_daily`, `gtm_yt_channel_daily`, `gtm_yt_dim_daily`, `gtm_yt_report_files` (schema owned by the website repository). Each finished week's impressions and CTR are written to `gtm_manual_metrics` (`entered_by = youtube-api`), so the existing YouTube row completes itself. A week John typed by hand is never overwritten. A week is rolled up only once all seven of its days have impressions: reach reports lag views by three or four days, and a week summed early would stay an undercount. Until then the sync leaves the row as it is and lists the week under `partialWeeks` (CLI: "not rolled up yet"). When Google reissues a day's reach report, the newest file replaces that day's reach: a video the new file no longer names has its impressions and CTR cleared, its views and other figures untouched.
 
 ## One-time setup (the channel owner)
 
@@ -24,7 +24,7 @@ Tables: `gtm_yt_videos`, `gtm_yt_video_daily`, `gtm_yt_channel_daily`, `gtm_yt_d
 
 ## Check the first sync against Studio
 
-The reach report returns CTR as a fraction; `parseReach` converts it to percent. Confirm once: for 7 Oct to 3 Nov 2026 the Studio table showed 1,925 impressions at 2.44% CTR. After a sync, the weighted total on /performance for the same window should match. The parser refuses a file whose CTR is above 1 (it expects a fraction) or whose columns changed. The sync skips that file, reports it as `reach file skipped`, keeps going, and retries it on the next run; fix `parseReach` once you know the real scale.
+The reach report returns CTR as a fraction; `parseReach` converts it to percent. Confirm once: for 7 Oct to 3 Nov 2026 the Studio table showed 1,925 impressions at 2.44% CTR. After a sync, the weighted total on /performance for the same window should match. The parser refuses a file whose CTR is above 1 (it expects a fraction), whose columns changed (even with no data rows), that is empty, or that has any row whose date, video id or impressions it cannot read. A file with the expected header and no rows is a real day with no impressions: it records 0 for the day and clears that day's video reach. The sync skips that file, reports it as `reach file skipped`, keeps going, and retries it on the next run; fix `parseReach` once you know the real scale.
 
 ## Substack
 
