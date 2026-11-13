@@ -4,15 +4,18 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { addDays } from "../week";
 
-export type DayRow = { date: string; video_id: string; views: number | null; watch_minutes: number | null; avg_view_pct: number | null; subs_gained: number | null; impressions: number | null; ctr: number | null };
+export type DayRow = { date: string; video_id: string; views: number | null; watch_minutes: number | null; avg_view_pct: number | null; subs_gained: number | null; subs_lost: number | null; impressions: number | null; ctr: number | null };
 export type VideoRow = { video_id: string; title: string; published_at: string | null; duration_s: number | null; is_short: boolean | null };
 export type DimRow = { date: string; dimension: string; key: string; views: number | null; watch_minutes: number | null };
 
-export type YtVideo = { video_id: string; title: string; short: boolean | null; published: string | null; views: number; watchHours: number | null; impressions: number | null; ctr: number | null; avgPctViewed: number | null; subs: number | null; viewsDay1Share: number | null };
-export type YtView = { from: string; to: string; views: number; watchHours: number | null; impressions: number | null; ctr: number | null; subs: number | null; videos: YtVideo[]; traffic: { key: string; views: number; share: number }[]; sources: string[] };
+export type YtVideo = { video_id: string; title: string; short: boolean | null; published: string | null; views: number; watchHours: number | null; impressions: number | null; ctr: number | null; avgPctViewed: number | null; netSubs: number | null; viewsDay1Share: number | null };
+export type YtView = { from: string; to: string; views: number; watchHours: number | null; impressions: number | null; ctr: number | null; netSubs: number | null; videos: YtVideo[]; traffic: { key: string; views: number; share: number }[]; sources: string[] };
 
 const sum = (xs: (number | null)[]): number | null => { const v = xs.filter((x): x is number => x != null); return v.length ? v.reduce((a, b) => a + b, 0) : null; };
 const r1 = (n: number) => Math.round(n * 10) / 10;
+// Net subscribers for a day: gained minus lost. YouTube reports both net of removals, so a day can be negative; a day
+// missing either side is unknown (null), never counted as zero.
+const netSubs = (d: DayRow): number | null => (d.subs_gained != null && d.subs_lost != null ? d.subs_gained - d.subs_lost : null);
 
 export function buildYouTubeView(videos: VideoRow[], days: DayRow[], dims: DimRow[], from: string, to: string, sources: string[] = []): YtView {
   const meta = new Map(videos.map((v) => [v.video_id, v]));
@@ -23,13 +26,13 @@ export function buildYouTubeView(videos: VideoRow[], days: DayRow[], dims: DimRo
     const imp = sum(ds.map((d) => d.impressions));
     // CTR over the window is weighted by impressions, never an average of daily rates.
     const clicks = imp ? sum(ds.map((d) => (d.impressions != null && d.ctr != null ? d.impressions * d.ctr / 100 : null))) : null;
-    // Average % viewed, weighted by views.
+    // Average % viewed, weighted by views. Shorts loop, so it can pass 100.
     const pv = ds.filter((d) => d.avg_view_pct != null && d.views);
     const pvViews = sum(pv.map((d) => d.views));
     const day1 = m?.published_at?.slice(0, 10);
     const first = day1 ? sum(ds.filter((d) => d.date <= addDays(day1, 1)).map((d) => d.views)) : null;
     const mins = sum(ds.map((d) => d.watch_minutes));
-    return { video_id: id, title: m?.title ?? id, short: m?.is_short ?? null, published: m?.published_at?.slice(0, 10) ?? null, views, watchHours: mins == null ? null : r1(mins / 60), impressions: imp, ctr: imp && clicks != null ? Math.round((clicks / imp) * 1000) / 10 : null, avgPctViewed: pvViews ? r1(pv.reduce((a, d) => a + d.avg_view_pct! * d.views!, 0) / pvViews) : null, subs: sum(ds.map((d) => d.subs_gained)), viewsDay1Share: first != null && views ? Math.round((first / views) * 100) : null };
+    return { video_id: id, title: m?.title ?? id, short: m?.is_short ?? null, published: m?.published_at?.slice(0, 10) ?? null, views, watchHours: mins == null ? null : r1(mins / 60), impressions: imp, ctr: imp && clicks != null ? Math.round((clicks / imp) * 1000) / 10 : null, avgPctViewed: pvViews ? r1(pv.reduce((a, d) => a + d.avg_view_pct! * d.views!, 0) / pvViews) : null, netSubs: sum(ds.map(netSubs)), viewsDay1Share: first != null && views ? Math.round((first / views) * 100) : null };
   }).filter((v) => v.views > 0 || (v.impressions ?? 0) > 0).sort((a, b) => b.views - a.views);
   const traffic = new Map<string, number>();
   for (const d of dims) if (d.dimension === "traffic_source" && d.date >= from && d.date <= to) traffic.set(d.key, (traffic.get(d.key) ?? 0) + (d.views ?? 0));
@@ -37,7 +40,7 @@ export function buildYouTubeView(videos: VideoRow[], days: DayRow[], dims: DimRo
   const views = rows.reduce((a, v) => a + v.views, 0);
   const imp = sum(rows.map((v) => v.impressions));
   const clicks = sum(rows.map((v) => (v.impressions != null && v.ctr != null ? v.impressions * v.ctr / 100 : null)));
-  return { from, to, views, watchHours: sum(rows.map((v) => v.watchHours)), impressions: imp, ctr: imp && clicks != null ? Math.round((clicks / imp) * 1000) / 10 : null, subs: sum(rows.map((v) => v.subs)), videos: rows, traffic: [...traffic].map(([key, v]) => ({ key, views: v, share: tv ? Math.round((v / tv) * 100) : 0 })).sort((a, b) => b.views - a.views), sources };
+  return { from, to, views, watchHours: sum(rows.map((v) => v.watchHours)), impressions: imp, ctr: imp && clicks != null ? Math.round((clicks / imp) * 1000) / 10 : null, netSubs: sum(rows.map((v) => v.netSubs)), videos: rows, traffic: [...traffic].map(([key, v]) => ({ key, views: v, share: tv ? Math.round((v / tv) * 100) : 0 })).sort((a, b) => b.views - a.views), sources };
 }
 
 /** Reads the 28 days ending at `to` for the owner's session; null when the tables are absent or empty. */
@@ -56,7 +59,7 @@ export async function loadYouTube(db: SupabaseClient, to: string): Promise<YtVie
   };
   const [v, d, x] = await Promise.all([
     all((a, b) => db.from("gtm_yt_videos").select("video_id,title,published_at,duration_s,is_short").order("video_id").range(a, b)),
-    all((a, b) => db.from("gtm_yt_video_daily").select("date,video_id,views,watch_minutes,avg_view_pct,subs_gained,impressions,ctr,source").gte("date", from).lte("date", to).order("date").order("video_id").range(a, b)),
+    all((a, b) => db.from("gtm_yt_video_daily").select("date,video_id,views,watch_minutes,avg_view_pct,subs_gained,subs_lost,impressions,ctr,source").gte("date", from).lte("date", to).order("date").order("video_id").range(a, b)),
     all((a, b) => db.from("gtm_yt_dim_daily").select("date,dimension,key,views,watch_minutes").eq("dimension", "traffic_source").gte("date", from).lte("date", to).order("date").order("key").range(a, b)),
   ]);
   if (v.error || d.error || x.error || !(d.data ?? []).length) return null;
