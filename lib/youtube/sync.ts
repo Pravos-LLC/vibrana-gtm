@@ -135,7 +135,12 @@ export async function syncYouTube(db: SupabaseClient, opts: { today: string; day
   // Video ids each ingested file reports, by the day it covers; read below to clear reach a reissue no longer carries.
   const inFile = new Map<string, Set<string>>();
   for (const f of fresh) {
-    try { const rows = parseReach(await downloadReport(token, f.downloadUrl)); perFile.set(f.id, rows.length); reach.push(...rows); inFile.set(f.startTime.slice(0, 10), new Set(rows.map((r) => r.video_id))); }
+    try {
+      const rows = parseReach(await downloadReport(token, f.downloadUrl)), day = f.startTime.slice(0, 10);
+      perFile.set(f.id, rows.length); reach.push(...rows);
+      // Only the file's own day is replaced (cleared or zeroed); a row dated otherwise is added but proves nothing there.
+      inFile.set(day, new Set(rows.filter((r) => r.date === day).map((r) => r.video_id)));
+    }
     catch (e) { bad.add(f.id); reachErrors.push(`${f.startTime.slice(0, 10)}: ${(e as Error).message}`); console.error(`youtube sync: reach file ${f.id}: ${(e as Error).message}`); }
   }
   for (const r of reach) ids.add(r.video_id);

@@ -148,3 +148,103 @@ test("sync: a reissued day report clears reach for videos it no longer names, le
   const ch = t.gtm_yt_channel_daily.find((x) => x.date === "2026-10-27")!;
   assert.deepEqual([ch.impressions, ch.ctr, ch.views], [80, 5, 16]); // the day total follows the newest file
 });
+
+const REACH_HEAD = "date,channel_id,video_id,video_thumbnail_impressions,video_thumbnail_impressions_ctr\n";
+const ENV = { YOUTUBE_CLIENT_ID: "i", YOUTUBE_CLIENT_SECRET: "s", YOUTUBE_REFRESH_TOKEN: "r" };
+
+test("reach CSV: only a header-only file with the expected columns is an empty day; every other short file throws", async () => {
+  const { parseReach } = await import("../lib/youtube/api.ts");
+  assert.deepEqual(parseReach(REACH_HEAD), []);                                                   // a genuine empty day
+  assert.throws(() => parseReach(""), /empty file/);                                             // empty 200 body
+  assert.throws(() => parseReach("\r\n"), /empty file/);
+  assert.throws(() => parseReach("date,video_id,impressions\n"), /unexpected columns/);         // renamed header, no rows
+  assert.throws(() => parseReach(REACH_HEAD + "2026-10-10,UC1,vid,45,0.02\n"), /row 2 cannot be read/); // date format changed
+  assert.throws(() => parseReach(REACH_HEAD + '20261010,UC1,vid,"1,234",0.02\n'), /cannot be read/);    // thousands separator
+  assert.throws(() => parseReach(REACH_HEAD + "20261010,UC1,vid,,0.02\n"), /cannot be read/);           // blank impressions is not 0
+  assert.throws(() => parseReach(REACH_HEAD + "20261010,UC1,,45,0.02\n"), /cannot be read/);            // no video id
+  assert.throws(() => parseReach(REACH_HEAD + "20261010,UC1,a,45,0.02\n20261010,UC1,b,x,0.01\n"), /row 3/); // one bad row fails the file
+});
+
+/** Fetch routes for a sync whose analytics are empty and whose reach job lists `reports`, with `bodies` per file id. */
+function reachRoutes(reports: { id: string; day: string; created: string }[], bodies: Record<string, string>) {
+  return [
+    { method: "POST", url: "https://oauth2.googleapis.com/token", json: { access_token: "at" } },
+    { url: "https://www.googleapis.com/youtube/v3/channels", json: { items: [{}] } },
+    { url: "https://youtubereporting.googleapis.com/v1/jobs/job1/reports", json: { reports: reports.map((r) => ({ id: r.id, startTime: `${r.day}T00:00:00Z`, endTime: `${addDays(r.day, 1)}T00:00:00Z`, createTime: r.created, downloadUrl: `https://youtubereporting.googleapis.com/dl/${r.id}` })) } },
+    { url: "https://youtubereporting.googleapis.com/v1/jobs", json: { jobs: [{ id: "job1", reportTypeId: "channel_reach_basic_a1" }] } },
+    ...Object.entries(bodies).map(([id, body]) => ({ url: `https://youtubereporting.googleapis.com/dl/${id}`, body })),
+    { url: "https://youtubeanalytics.googleapis.com/v2/reports", json: { columnHeaders: [{ name: "day" }, { name: "views" }], rows: [] } },
+  ];
+}
+
+// A complete week (Mon 2026-10-26 to Sun 11-01, 100 impressions a day) already rolled up, plus one video's reach on 10-27
+// and 10-28 from earlier good files.
+const settledWeek = () => ({
+  gtm_yt_videos: [{ video_id: "video_aaaaa", title: "A", published_at: null, duration_s: 30 }],
+  gtm_yt_channel_daily: reachDays("2026-10-26", 7).map((d) => ({ ...d, source: "api" })),
+  gtm_yt_video_daily: ["2026-10-27", "2026-10-28"].map((date) => ({ date, video_id: "video_aaaaa", views: 5, impressions: 100, ctr: 2, source: "api" })),
+  gtm_manual_metrics: [{ week_start: "2026-10-26", channel: "youtube", metrics: { impressions: 700, ctr: 2 }, note: "", entered_by: "youtube-api" }],
+});
+
+test("sync: an empty or wrong-header reach file is refused, reported, not marked read, and leaves reach and the week intact", async () => {
+  const m = installFetchMock(reachRoutes(
+    [{ id: "empty", day: "2026-10-27", created: "2026-11-01T00:00:00Z" }, { id: "renamed", day: "2026-10-28", created: "2026-11-01T00:00:00Z" }],
+    { empty: "", renamed: "date,video_id,impressions\n" },
+  ));
+  restore = m.restore;
+  const { db, t } = fakeDb(settledWeek());
+  const r = await syncYouTube(db, { today: "2026-11-03", days: 7, env: ENV });
+  assert.equal(r.reachErrors.length, 2);
+  assert.ok(r.reachErrors.some((e) => e.startsWith("2026-10-27") && /empty file/.test(e)));
+  assert.ok(r.reachErrors.some((e) => e.startsWith("2026-10-28") && /unexpected columns/.test(e)));
+  assert.equal((t.gtm_yt_report_files ?? []).length, 0);                                  // retried next run
+  for (const date of ["2026-10-27", "2026-10-28"]) {
+    assert.equal(t.gtm_yt_channel_daily.find((d) => d.date === date)!.impressions, 100); // not zeroed
+    assert.equal(t.gtm_yt_video_daily.find((d) => d.date === date)!.impressions, 100);   // not cleared
+  }
+  assert.deepEqual(t.gtm_manual_metrics[0].metrics, { impressions: 700, ctr: 2 });       // no undercount
+  assert.deepEqual(r.partialWeeks, []);
+});
+
+test("sync: a header-only file with the right columns is a real zero day", async () => {
+  const m = installFetchMock(reachRoutes([{ id: "none", day: "2026-10-27", created: "2026-11-01T00:00:00Z" }], { none: REACH_HEAD }));
+  restore = m.restore;
+  const { db, t } = fakeDb(settledWeek());
+  const r = await syncYouTube(db, { today: "2026-11-03", days: 7, env: ENV });
+  assert.deepEqual(r.reachErrors, []);
+  assert.equal(t.gtm_yt_report_files.length, 1);
+  const ch = t.gtm_yt_channel_daily.find((d) => d.date === "2026-10-27")!;
+  assert.deepEqual([ch.impressions, ch.ctr], [0, null]);
+  const vd = t.gtm_yt_video_daily.find((d) => d.date === "2026-10-27")!;
+  assert.deepEqual([vd.impressions, vd.ctr, vd.views], [null, null, 5]);
+  assert.equal(t.gtm_yt_video_daily.find((d) => d.date === "2026-10-28")!.impressions, 100); // the next day is not this file's
+  assert.deepEqual(t.gtm_manual_metrics[0].metrics, { impressions: 600, ctr: 2 });
+});
+
+test("sync: a bad reissue leaves the earlier good file's reach in place", async () => {
+  // r1 was read on an earlier run; its reissue r2 has a row in a new date format, so it must not replace r1.
+  const m = installFetchMock(reachRoutes(
+    [{ id: "r1", day: "2026-10-27", created: "2026-10-29T00:00:00Z" }, { id: "r2", day: "2026-10-27", created: "2026-11-01T00:00:00Z" }],
+    { r2: REACH_HEAD + "2026-10-27,UC1,video_aaaaa,40,0.02\n" },
+  ));
+  restore = m.restore;
+  const seed = settledWeek();
+  const { db, t } = fakeDb({ ...seed, gtm_yt_report_files: [{ report_id: "r1", report_type: "channel_reach_basic_a1", start_date: "2026-10-27", end_date: "2026-10-28", rows_ingested: 1 }] });
+  const r = await syncYouTube(db, { today: "2026-11-03", days: 7, env: ENV });
+  assert.equal(r.reachErrors.length, 1);
+  assert.match(r.reachErrors[0], /cannot be read/);
+  assert.deepEqual(t.gtm_yt_report_files.map((f) => f.report_id), ["r1"]);              // r2 retried next run
+  assert.equal(t.gtm_yt_video_daily.find((d) => d.date === "2026-10-27")!.impressions, 100);
+  assert.equal(t.gtm_yt_channel_daily.find((d) => d.date === "2026-10-27")!.impressions, 100);
+  assert.deepEqual(t.gtm_manual_metrics[0].metrics, { impressions: 700, ctr: 2 });
+});
+
+test("sync: a row dated outside its file's day is not taken as that day's list of videos", async () => {
+  // The 10-27 file carries only a 10-28 row: it says nothing about 10-27, so video a's 10-27 reach is cleared and the day is 0.
+  const m = installFetchMock(reachRoutes([{ id: "x", day: "2026-10-27", created: "2026-11-01T00:00:00Z" }], { x: REACH_HEAD + "20261028,UC1,video_aaaaa,100,0.02\n" }));
+  restore = m.restore;
+  const { db, t } = fakeDb(settledWeek());
+  await syncYouTube(db, { today: "2026-11-03", days: 7, env: ENV });
+  assert.equal(t.gtm_yt_video_daily.find((d) => d.date === "2026-10-27")!.impressions, null);
+  assert.equal(t.gtm_yt_channel_daily.find((d) => d.date === "2026-10-27")!.impressions, 0);
+});

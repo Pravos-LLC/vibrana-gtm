@@ -24,7 +24,7 @@ Tables: `gtm_yt_videos`, `gtm_yt_video_daily`, `gtm_yt_channel_daily`, `gtm_yt_d
 
 ## Check the first sync against Studio
 
-The reach report returns CTR as a fraction; `parseReach` converts it to percent. Confirm once: for 7 Oct to 3 Nov 2026 the Studio table showed 1,925 impressions at 2.44% CTR. After a sync, the weighted total on /performance for the same window should match. The parser refuses a file whose CTR is above 1 (it expects a fraction) or whose columns changed. The sync skips that file, reports it as `reach file skipped`, keeps going, and retries it on the next run; fix `parseReach` once you know the real scale.
+The reach report returns CTR as a fraction; `parseReach` converts it to percent. Confirm once: for 7 Oct to 3 Nov 2026 the Studio table showed 1,925 impressions at 2.44% CTR. After a sync, the weighted total on /performance for the same window should match. The parser refuses a file whose CTR is above 1 (it expects a fraction), whose columns changed (even with no data rows), that is empty, or that has any row whose date, video id or impressions it cannot read. A file with the expected header and no rows is a real day with no impressions: it records 0 for the day and clears that day's video reach. The sync skips that file, reports it as `reach file skipped`, keeps going, and retries it on the next run; fix `parseReach` once you know the real scale.
 
 ## Substack
 

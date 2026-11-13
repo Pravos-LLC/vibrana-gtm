@@ -1,7 +1,7 @@
 // YouTube clients for the channel owner's data, over plain fetch (no SDK). Access comes from a long-lived refresh
 // token minted once by `gtm youtube auth` and held as server env: YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET,
 // YOUTUBE_REFRESH_TOKEN. Nothing here prints or returns a credential.
-import { parseCsvObjects } from "./csv";
+import { parseCsv, parseCsvObjects } from "./csv";
 
 export const SCOPES = ["https://www.googleapis.com/auth/yt-analytics.readonly", "https://www.googleapis.com/auth/youtube.readonly"];
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -143,14 +143,22 @@ const REACH_COLUMNS = ["date", "video_id", "video_thumbnail_impressions", "video
  * Reach CSV rows. The API reports CTR as a fraction, so 0.0244 becomes 2.44 percent. Anything above 1 means the scale
  * is not what we assumed, and the file is refused rather than capped: a silent 100% would be worse than no number.
  * A missing CTR stays null. An unrecognized header throws, so a renamed column cannot turn into silent data loss.
+ * The sync treats a parsed file as the whole truth for its day (an empty one is a day with no impressions), so every
+ * other way of ending up with fewer rows throws instead: an empty body, a header without the expected columns (even
+ * with no data rows), and any data row whose date, video id or impressions cannot be read. Only a header-only file
+ * with the expected columns is a genuine empty day.
  */
 export function parseReach(csv: string): ReachRow[] {
+  const [head] = parseCsv(csv);
+  if (!head) throw new Error("YouTube reach report: empty file (no header row)");
+  const cols = head.map((h) => h.trim());
+  if (!REACH_COLUMNS.every((c) => cols.includes(c))) throw new Error(`YouTube reach report: unexpected columns (${cols.join(", ")})`);
   const rows = parseCsvObjects(csv);
-  if (rows.length && !REACH_COLUMNS.every((c) => c in rows[0])) throw new Error(`YouTube reach report: unexpected columns (${Object.keys(rows[0]).join(", ")})`);
   const out: ReachRow[] = [];
-  for (const r of rows) {
-    const d = r["date"], imp = Number(r["video_thumbnail_impressions"]);
-    if (!/^\d{8}$/.test(d ?? "") || !r["video_id"] || !Number.isFinite(imp)) continue;
+  for (const [i, r] of rows.entries()) {
+    const d = r["date"], rawImp = r["video_thumbnail_impressions"] ?? "";
+    if (!/^\d{8}$/.test(d ?? "") || !r["video_id"] || !/^\d+(\.\d+)?$/.test(rawImp)) throw new Error(`YouTube reach report: row ${i + 2} cannot be read (date "${d}", impressions "${rawImp}"); check the format before importing`);
+    const imp = Number(rawImp);
     const raw = r["video_thumbnail_impressions_ctr"];
     const ctr = raw === "" || raw == null ? null : Number(raw);
     if (ctr != null && (!Number.isFinite(ctr) || ctr < 0 || ctr > 1)) throw new Error(`YouTube reach report: CTR ${raw} is not a fraction between 0 and 1; check the scale before importing`);
