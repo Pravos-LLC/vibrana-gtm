@@ -102,8 +102,8 @@ test("YouTube view: CTR is weighted by impressions, absent stays null, traffic s
   const { buildYouTubeView } = await import("../lib/youtube/view.ts");
   const videos = [{ video_id: "aaaaaaaaaaa", title: "A", published_at: "2026-10-20T12:00:00Z", duration_s: 30, is_short: true }];
   const days = [
-    { date: "2026-10-20", video_id: "aaaaaaaaaaa", views: 90, watch_minutes: 60, avg_view_pct: 40, subs_gained: 1, impressions: 100, ctr: 10 },
-    { date: "2026-10-27", video_id: "aaaaaaaaaaa", views: 10, watch_minutes: 6, avg_view_pct: 20, subs_gained: 0, impressions: 300, ctr: 2 },
+    { date: "2026-10-20", video_id: "aaaaaaaaaaa", views: 90, watch_minutes: 60, avg_view_pct: 40, subs_gained: 1, subs_lost: 0, impressions: 100, ctr: 10 },
+    { date: "2026-10-27", video_id: "aaaaaaaaaaa", views: 10, watch_minutes: 6, avg_view_pct: 20, subs_gained: 0, subs_lost: 0, impressions: 300, ctr: 2 },
   ];
   const dims = [{ date: "2026-10-20", dimension: "traffic_source", key: "Shorts feed", views: 75, watch_minutes: null }, { date: "2026-10-20", dimension: "traffic_source", key: "YouTube search", views: 25, watch_minutes: null }];
   const v = buildYouTubeView(videos, days, dims, "2026-10-07", "2026-11-03", ["api"]);
@@ -114,6 +114,34 @@ test("YouTube view: CTR is weighted by impressions, absent stays null, traffic s
   const none = buildYouTubeView(videos, [{ ...days[0], impressions: null, ctr: null }], [], "2026-10-07", "2026-11-03");
   assert.equal(none.videos[0].ctr, null);
   assert.equal(none.impressions, null);
+});
+
+test("YouTube view: subscribers are net (gained minus lost), a day missing either side stays null, and a looping Short can pass 100% viewed", async () => {
+  const { buildYouTubeView } = await import("../lib/youtube/view.ts");
+  const videos = [
+    { video_id: "sssssssssss", title: "Short", published_at: "2026-10-20T12:00:00Z", duration_s: 20, is_short: true },
+    { video_id: "lllllllllll", title: "Long", published_at: "2026-10-01T12:00:00Z", duration_s: 900, is_short: false },
+    { video_id: "nnnnnnnnnnn", title: "No subs data", published_at: null, duration_s: 600, is_short: false },
+  ];
+  const day = { watch_minutes: null, impressions: null, ctr: null };
+  const days = [
+    { ...day, date: "2026-10-20", video_id: "sssssssssss", views: 100, avg_view_pct: 150, subs_gained: 5, subs_lost: 2 },
+    { ...day, date: "2026-10-21", video_id: "sssssssssss", views: 100, avg_view_pct: 130, subs_gained: -1, subs_lost: 1 }, // YouTube nets removals, so a day can be negative
+    { ...day, date: "2026-10-22", video_id: "sssssssssss", views: 50, avg_view_pct: 120, subs_gained: 4, subs_lost: null }, // half a day is unknown, not 4
+    { ...day, date: "2026-10-20", video_id: "lllllllllll", views: 40, avg_view_pct: 45, subs_gained: 0, subs_lost: 3 },
+    { ...day, date: "2026-10-20", video_id: "nnnnnnnnnnn", views: 10, avg_view_pct: 30, subs_gained: null, subs_lost: null },
+  ];
+  const v = buildYouTubeView(videos, days, [], "2026-10-07", "2026-11-03");
+  const by = (id: string) => v.videos.find((x) => x.video_id === id)!;
+  assert.equal(by("sssssssssss").netSubs, 1);           // (5 - 2) + (-1 - 1); the day without subs_lost is left out
+  assert.equal(by("lllllllllll").netSubs, -3);
+  assert.equal(by("nnnnnnnnnnn").netSubs, null);         // never reported: a dash, not 0
+  assert.equal(v.netSubs, -2);                           // channel total is net too, and ignores the unknown video
+  assert.equal(by("sssssssssss").avgPctViewed, 136);     // (150*100 + 130*100 + 120*50) / 250, not capped at 100
+  assert.equal(by("sssssssssss").short, true);
+  assert.equal(by("lllllllllll").short, false);
+  const unknown = buildYouTubeView(videos, days.filter((d) => d.video_id === "nnnnnnnnnnn"), [], "2026-10-07", "2026-11-03");
+  assert.equal(unknown.netSubs, null);
 });
 
 test("rows with different column sets are upserted in separate batches, so a reach-only row cannot null out stored views", async () => {

@@ -126,20 +126,20 @@ export default async function Performance({ searchParams }: { searchParams: Prom
           <p className="text-sm text-ink-2" data-testid="yt-summary">
             <b className="font-semibold text-ink">{num(yt.views)}</b> views{yt.watchHours != null ? <>, <b className="font-semibold text-ink">{yt.watchHours}</b> watch hours</> : null}
             {yt.impressions != null ? <>, <b className="font-semibold text-ink">{num(yt.impressions)}</b> thumbnail impressions{yt.ctr != null ? <> at <b className="font-semibold text-ink">{yt.ctr}%</b> click-through</> : null}</> : <span className="text-ink-3"> (impressions arrive with the API reach report)</span>}
-            {yt.subs != null ? <>, <b className="font-semibold text-ink">{yt.subs}</b> subscribers gained</> : null}
+            {yt.netSubs != null ? <>, <b className="font-semibold text-ink">{yt.netSubs}</b> net subs (gained minus lost)</> : null}
           </p>
           <div className="mt-4 overflow-x-auto">
             <table className="w-full text-left text-sm" data-testid="yt-videos">
-              <thead className="text-xs text-ink-3"><tr><th className="py-1 pr-4 font-medium">Video</th><th className="px-2 font-medium">Views</th><th className="px-2 font-medium">Impressions</th><th className="px-2 font-medium">CTR</th><th className="px-2 font-medium">Avg % viewed</th><th className="px-2 font-medium">Subs</th><th className="px-2 font-medium">Day 1 share</th></tr></thead>
+              <thead className="text-xs text-ink-3"><tr><th className="py-1 pr-4 font-medium">Video</th><th className="px-2 font-medium">Views</th><th className="px-2 font-medium">Impressions</th><th className="px-2 font-medium">CTR</th><th className="px-2 font-medium" title="Shorts loop, so this can pass 100%">Avg % viewed</th><th className="px-2 font-medium" title="Subscribers gained minus lost; can be negative">Net subs</th><th className="px-2 font-medium">Day 1 share</th></tr></thead>
               <tbody>
                 {yt.videos.slice(0, 12).map((v) => (
                   <tr key={v.video_id} className="border-t border-line">
-                    <td className="max-w-[22rem] truncate py-1.5 pr-4 text-ink">{v.title}{v.short ? <span className="ml-2 text-xs text-ink-3">Short</span> : null}</td>
+                    <td className="max-w-[22rem] truncate py-1.5 pr-4 text-ink">{v.short ? <span className="mr-2 text-xs text-ink-3" data-testid="yt-short">Short</span> : null}{v.title}</td>
                     <td className="px-2 tabular-nums">{num(v.views)}</td>
                     <td className="px-2 tabular-nums">{v.impressions == null ? "—" : num(v.impressions)}</td>
                     <td className="px-2 tabular-nums">{v.ctr == null ? "—" : `${v.ctr}%`}</td>
                     <td className="px-2 tabular-nums">{v.avgPctViewed == null ? "—" : `${v.avgPctViewed}%`}</td>
-                    <td className="px-2 tabular-nums">{v.subs == null ? "—" : v.subs}</td>
+                    <td className="px-2 tabular-nums">{v.netSubs == null ? "—" : v.netSubs}</td>
                     <td className="px-2 tabular-nums">{v.viewsDay1Share == null ? "—" : `${v.viewsDay1Share}%`}</td>
                   </tr>
                 ))}
@@ -147,7 +147,7 @@ export default async function Performance({ searchParams }: { searchParams: Prom
             </table>
           </div>
           {yt.traffic.length > 0 && <p className="mt-4 text-sm text-ink-2" data-testid="yt-traffic">Views by source: {yt.traffic.slice(0, 6).map((t) => `${t.key} ${t.share}%`).join(", ")}</p>}
-          <p className="mt-2 text-xs text-ink-3">Rates are per video over the window; CTR is weighted by impressions. A dash means the source did not report it, not zero. Under about 100 impressions a rate is noise.</p>
+          <p className="mt-2 text-xs text-ink-3">Rates are per video over the window; CTR is weighted by impressions. A dash means the source did not report it, not zero. Under about 100 impressions a rate is noise.{yt.videos.slice(0, 12).some((v) => v.short) ? " Shorts loop, so their Avg % viewed can pass 100%: compare Shorts with Shorts, not with long-form." : ""}</p>
         </Section>
       )}
 
