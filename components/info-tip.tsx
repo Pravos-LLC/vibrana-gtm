@@ -18,8 +18,9 @@ export function InfoTip({ children, label = "What this means", align = "start", 
         <Info aria-hidden className="size-3.5" />
       </button>
       <span role="tooltip" id={id}
-        className={cn("pointer-events-none invisible absolute top-full z-30 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface-raised p-3 text-left text-xs font-normal normal-case leading-relaxed tracking-normal text-ink-2 opacity-0 shadow-lg transition-opacity",
-          "group-hover/tip:visible group-hover/tip:opacity-100 group-focus-within/tip:visible group-focus-within/tip:opacity-100",
+        className={cn("pointer-events-none absolute top-full z-30 mt-2 hidden w-56 max-w-[calc(100vw-2rem)] rounded-lg border border-line bg-surface-raised p-3 text-left text-xs font-normal normal-case leading-relaxed tracking-normal text-ink-2 shadow-lg sm:w-72",
+          // display:none at rest, not visibility: a hidden box that still takes layout space widens the page on a phone.
+          "group-hover/tip:block group-focus-within/tip:block",
           align === "end" ? "right-0" : "left-0")}>
         {children}
       </span>

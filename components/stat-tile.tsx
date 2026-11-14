@@ -43,7 +43,7 @@ export function Sparkline({ points, className, label }: { points: (number | null
 export function StatTile({ label, value, missing, note, delta, spark, href, tone, info, className }: {
   label: string; value: string | null; missing?: React.ReactNode; note?: React.ReactNode; delta?: TileDelta | null;
   spark?: (number | null)[]; href?: string; tone?: "warn" | "bad";
-  /** The definition and caveats, behind an "i" next to the label instead of a paragraph on the tile. */
+  /** The definition and caveats, behind an "i" next to the label instead of a paragraph on the tile. Ignored with `href`. */
   info?: React.ReactNode; className?: string;
 }) {
   const id = useId();
@@ -54,10 +54,11 @@ export function StatTile({ label, value, missing, note, delta, spark, href, tone
   const ToneIcon = tone === "bad" ? CircleAlert : AlertTriangle;
   const vals = (spark ?? []).filter((v): v is number => v != null);
   const body = (
-    <Card glow={false} className={cn("flex h-full flex-col p-5", info && "relative hover:z-20 focus-within:z-20", href && "transition-colors group-hover:border-[color:var(--border-strong)]", className)}>
+    <Card glow={false} className={cn("flex h-full flex-col p-5", info && !href && "relative hover:z-20 focus-within:z-20", href && "transition-colors group-hover:border-[color:var(--border-strong)]", className)}>
       <div className="flex items-center gap-1.5">
         <p id={`${id}-label`} className="text-sm text-ink-2">{label}</p>
-        {info ? <InfoTip label={`About ${label}`}>{info}</InfoTip> : null}
+        {/* No tooltip button inside a linked tile: a button nested in a link is invalid. */}
+        {info && !href ? <InfoTip label={`About ${label}`}>{info}</InfoTip> : null}
       </div>
       <div className="mt-2 flex items-end justify-between gap-3" aria-labelledby={`${id}-label`}>
         <span className="inline-flex min-w-0 items-center gap-2">

@@ -83,6 +83,8 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
   const rateMissing = (have: number) => !c.reply ? mailMissing : withheldWhy ? "Withheld while email data is incomplete"
     : <Pending have={have} need={REPLY_MIN_N} readyAt={e?.replyRateReadyAt ?? null} hint={days <= REPLY_MATURE_DAYS ? `Pick 30 or 90 days: a first touch counts after ${REPLY_MATURE_DAYS} days` : undefined} />;
   const bounceRate = e?.bounce.rate ?? null;
+  // Observed failures alert even while the rate is withheld (lib/email/metrics.ts bounceCheck).
+  const bounceAlert = !!e && e.bounce.n > 0 && e.bounce.num / e.bounce.n > BOUNCE_ALERT;
   const crmErrors = activity ? Object.keys(activity.errors) : [];
   const coverageRows: [string, number, string][] = e ? [
     ["Cold recipients", e.attempts, "Counted"],
@@ -136,7 +138,7 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
           note={e ? `${plural(e.newEfforts, "first touch", "first touches")} to ${plural(e.people, "person", "people")}`
             : c.newThreads != null ? plural(c.newThreads, "first touch", "first touches") + ", " + plural((c.emailsSent ?? 0) - c.newThreads, "follow-up", "follow-ups") : undefined} />
         <StatTile label="Reply rate" value={c.reply ? pct(c.reply.rate) : null} missing={rateMissing(c.reply?.n ?? 0)}
-          info={<>Share of first touches that got any reply. Counts first touches in this period that are at least {REPLY_MATURE_DAYS} days old, so late replies have time to arrive, and shows once there are {REPLY_MIN_N}. Bounced first touches are left out.{c.reply ? ` So far: ${c.reply.replied} replied of ${c.reply.n} old enough.` : ""}{withheldWhy ? ` ${withheldWhy}` : ""}</>}
+          info={<>Share of first touches that got any reply. Counts first touches in this period that are at least {REPLY_MATURE_DAYS} days old, so late replies have time to arrive, and shows once there are {REPLY_MIN_N}. Bounced first touches are left out.{c.reply && !withheldWhy ? ` So far: ${c.reply.replied} replied of ${c.reply.n} old enough.` : ""}{withheldWhy ? ` ${withheldWhy}` : ""}</>}
           note={c.reply?.rate != null ? `${c.reply.replied} of ${c.reply.n} first touches` : undefined} />
         <StatTile label="Meetings" value={c.meetings == null ? null : fmt(c.meetings)} missing={crmMissing} delta={delta(c.meetings, p.meetings, days)} spark={spark("meetings")}
           info="Meeting capture proposals tagged to them in this period." />
@@ -154,9 +156,10 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
               note={e.positiveRate.rate != null ? `${e.positiveRate.num} interested of ${e.positiveRate.n}` : undefined} />
           )}
           {e && (
-            <StatTile label="Bounce rate" value={pct(bounceRate)} missing={withheldWhy ? "Withheld while email data is incomplete" : e.bounce.n ? undefined : "No cold email sent this period"}
-              tone={bounceRate != null && bounceRate > BOUNCE_ALERT ? "bad" : undefined}
-              info={`Failed deliveries over cold recipients sent in this period. Above ${Math.round(BOUNCE_ALERT * 100)}% is a sender-health alert: check the list before sending more.`}
+            <StatTile label="Bounce rate" value={bounceRate != null ? `${(bounceRate * 100).toFixed(1)}%` : withheldWhy && e.bounce.num ? plural(e.bounce.num, "bounce", "bounces") : null}
+              missing={withheldWhy ? "Withheld while email data is incomplete" : "No cold email sent this period"}
+              tone={bounceAlert ? "bad" : undefined}
+              info={`Failed deliveries over cold recipients sent in this period. Above ${Math.round(BOUNCE_ALERT * 100)}% is a sender-health alert: check the list before sending more. While email data is incomplete the rate is withheld, but observed bounces still show and still alert.`}
               note={e.bounce.n ? `${e.bounce.num} of ${e.bounce.n} recipients` : undefined} />
           )}
           <StatTile label="Replies received" value={c.replies == null ? null : fmt(c.replies)} missing={mailMissing} delta={delta(c.replies, p.replies, days)}
