@@ -156,11 +156,11 @@ export default async function TeamPage({ searchParams }: { searchParams: Promise
               note={e.positiveRate.rate != null ? `${e.positiveRate.num} interested of ${e.positiveRate.n}` : undefined} />
           )}
           {e && (
-            <StatTile label="Bounce rate" value={bounceRate != null ? `${(bounceRate * 100).toFixed(1)}%` : withheldWhy && e.bounce.num ? plural(e.bounce.num, "bounce", "bounces") : null}
+            <StatTile label="Bounce rate" value={bounceRate != null ? `${(bounceRate * 100).toFixed(1)}%` : withheldWhy && e.bounce.num ? fmt(e.bounce.num) : null}
               missing={withheldWhy ? "Withheld while email data is incomplete" : "No cold email sent this period"}
               tone={bounceAlert ? "bad" : undefined}
               info={`Failed deliveries over cold recipients sent in this period. Above ${Math.round(BOUNCE_ALERT * 100)}% is a sender-health alert: check the list before sending more. While email data is incomplete the rate is withheld, but observed bounces still show and still alert.`}
-              note={e.bounce.n ? `${e.bounce.num} of ${e.bounce.n} recipients` : undefined} />
+              note={!e.bounce.n ? undefined : bounceRate == null ? `bounced of ${e.bounce.n} recipients; rate withheld` : `${e.bounce.num} of ${e.bounce.n} recipients`} />
           )}
           <StatTile label="Replies received" value={c.replies == null ? null : fmt(c.replies)} missing={mailMissing} delta={delta(c.replies, p.replies, days)}
             info="Replies that arrived in this period, whenever the email they answer was sent." />
