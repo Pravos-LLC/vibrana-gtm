@@ -103,6 +103,9 @@ export type EmailStats = {
    *  collection itself is incomplete (a team mailbox backfilling, failing or stale): rates are then withheld (null) rather
    *  than shown as measured; observed failures still count toward the alert (B6, R2). */
   complete: boolean;
+  /** While the reply rate is hidden for want of mature first touches: the earliest time a window of the same length would
+   *  hold MIN_N of them from the sends already made (no new sends assumed), else null. */
+  replyRateReadyAt: number | null;
   coverage: { ambiguous: number; unmatched: number; noEpisode: number; legacyRows: number; withoutAttempts: number; policyFlagged: number; unverified: number };
 };
 
@@ -139,6 +142,7 @@ export function emailStats(events: EmailEvent[], attempts: EmailAttempt[], decis
     positiveRate: withheld(rate(mature.filter((e) => e.positive).length, mature.length)),
     bounce: withheld(rate(failed, cold.length, 1)),
     complete,
+    replyRateReadyAt: mature.length >= MIN_N ? null : replyRateReadyAt(all.filter((e) => (!opts.member || e.firstMember === opts.member) && !(e.firstConfirmedFailure && !e.replied)).map((e) => e.first), to - from, now),
     coverage: {
       ambiguous: att.filter((a) => a.match === "ambiguous").length, unmatched: att.filter((a) => a.match === "unmatched").length,
       noEpisode: cold.filter((a) => !a.episode_id).length, legacyRows, withoutAttempts,
@@ -147,7 +151,19 @@ export function emailStats(events: EmailEvent[], attempts: EmailAttempt[], decis
   };
 }
 
-/** The rolling 7-day bounce check: failed over attempts sent in the last 7 days, alerting above 2% at any n. */
+/**
+ * The earliest time after `now` at which a trailing window of `span` ms holds MIN_N first touches at least 7 days old,
+ * from these first-touch times alone. Only a first touch maturing can raise the count, so the candidates are those
+ * moments. Null when the window is too short to ever hold a mature first touch, or the sends made so far never get there.
+ */
+export function replyRateReadyAt(firsts: number[], span: number, now: number): number | null {
+  const mature = MATURE_DAYS * DAY;
+  if (span <= mature) return null;
+  const candidates = firsts.map((f) => f + mature).filter((t) => t > now).sort((a, b) => a - b);
+  for (const t of candidates) if (firsts.filter((f) => f >= t - span && f <= t - mature).length >= MIN_N) return t;
+  return null;
+}
+
 /** The rolling 7-day bounce check: failed over attempts sent in the last 7 days, alerting above 2% at any n. With partial
  *  coverage the rate is withheld but observed failures still alert (over the attempts that are covered). */
 export function bounceCheck(events: EmailEvent[], attempts: EmailAttempt[], now: number, member?: string, collectionComplete?: boolean): Rate & { alert: boolean; complete: boolean } {

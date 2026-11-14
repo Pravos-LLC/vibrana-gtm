@@ -36,6 +36,19 @@ test("reply rate: efforts at least 7 days old in the window, hidden below 10; re
   const e = send(12, "t10", ["p10"]); ev.push(e); at.push(att(e, "p10", "e10"));
   s = emailStats(ev, at, [], NOW - 30 * DAY, NOW, NOW);
   assert.deepEqual(s.replyRate, { rate: 0.1, num: 1, n: 10 });
+  assert.equal(s.replyRateReadyAt, null, "shown: nothing to wait for");
+});
+
+test("reply rate ready date: the first moment the window holds 10 mature first touches from the sends made so far", () => {
+  const ev: EmailEvent[] = [], at: EmailAttempt[] = [];
+  // 5 mature (8 to 12 days old) and 5 more sent 4 days ago: the tenth matures in 3 days.
+  for (const [i, d] of [8, 9, 10, 11, 12, 4, 4, 4, 4, 4].entries()) { const e = send(d, `r${i}`, [`q${i}`]); ev.push(e); at.push(att(e, `q${i}`, `f${i}`)); }
+  const s = emailStats(ev, at, [], NOW - 30 * DAY, NOW, NOW);
+  assert.equal(s.replyRate.n, 5);
+  assert.equal(s.replyRateReadyAt, NOW + 3 * DAY);
+  assert.equal(emailStats(ev, at, [], NOW - 7 * DAY, NOW, NOW).replyRateReadyAt, null, "a 7-day window never holds a mature first touch");
+  // A 14-day window loses the oldest sends before the young ones mature: 9 by day 3, still 9 after; never ready.
+  assert.equal(emailStats(ev, at, [], NOW - 14 * DAY, NOW, NOW).replyRateReadyAt, null);
 });
 
 test("only a confirmed first-touch failure leaves the denominator; a later failed follow-up never removes an earlier exchange", () => {

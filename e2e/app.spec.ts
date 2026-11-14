@@ -167,11 +167,11 @@ test.describe("owner", () => {
     await expect(page.getByRole("link", { name: "Team" })).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("heading", { level: 1, name: "Team: Sample teammate" })).toBeVisible();
     // No CRM read yet in the fixture: CRM tiles say so instead of showing 0.
-    await expect(page.getByText("not measured: no CRM read yet (the team cron runs hourly)").first()).toBeVisible();
+    await expect(page.getByText("Not measured: no CRM read yet (the team cron runs hourly)").first()).toBeVisible();
     // The seeded mailbox is connected and its one outreach send is counted.
     await expect(page.getByText(/teammate@example\.com: synced/)).toBeVisible();
     await expect(page.getByText("1 first touch, 0 follow-ups")).toBeVisible();
-    for (const h of ["From added to opportunity", "Weekly activity", "Discipline", "Hygiene", "What was counted"]) await expect(page.getByRole("heading", { name: h, exact: true })).toBeVisible();
+    for (const h of ["Cold email", "CRM work", "From added to opportunity", "Weekly activity", "Hygiene", "What was counted"]) await expect(page.getByRole("heading", { name: h, exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "7 days" })).toHaveAttribute("aria-current", "page");
     await shot(page, "team-performance");
     await page.goto("/team/mailbox");
