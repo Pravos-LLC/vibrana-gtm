@@ -2,6 +2,7 @@ import Link from "next/link";
 import { useId } from "react";
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, CircleAlert, Minus } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { InfoTip } from "@/components/info-tip";
 import { cn } from "@/lib/ui/cn";
 
 export type TileDelta = {
@@ -39,9 +40,11 @@ export function Sparkline({ points, className, label }: { points: (number | null
  * delta that knows which way is good, an 8-week sparkline, and the whole tile as a link when `href` is set.
  * A missing value shows "—" with the reason, never 0. Tone (warn/bad) always carries an icon too.
  */
-export function StatTile({ label, value, missing, note, delta, spark, href, tone, className }: {
-  label: string; value: string | null; missing?: string; note?: React.ReactNode; delta?: TileDelta | null;
-  spark?: (number | null)[]; href?: string; tone?: "warn" | "bad"; className?: string;
+export function StatTile({ label, value, missing, note, delta, spark, href, tone, info, className }: {
+  label: string; value: string | null; missing?: React.ReactNode; note?: React.ReactNode; delta?: TileDelta | null;
+  spark?: (number | null)[]; href?: string; tone?: "warn" | "bad";
+  /** The definition and caveats, behind an "i" next to the label instead of a paragraph on the tile. Ignored with `href`. */
+  info?: React.ReactNode; className?: string;
 }) {
   const id = useId();
   const fmt = delta?.format ?? ((n: number) => (n > 0 ? `+${n.toLocaleString("en-US")}` : n.toLocaleString("en-US")));
@@ -51,8 +54,12 @@ export function StatTile({ label, value, missing, note, delta, spark, href, tone
   const ToneIcon = tone === "bad" ? CircleAlert : AlertTriangle;
   const vals = (spark ?? []).filter((v): v is number => v != null);
   const body = (
-    <Card glow={false} className={cn("flex h-full flex-col p-5", href && "transition-colors group-hover:border-[color:var(--border-strong)]", className)}>
-      <p id={`${id}-label`} className="text-sm text-ink-2">{label}</p>
+    <Card glow={false} className={cn("flex h-full flex-col p-5", info && !href && "relative hover:z-20 focus-within:z-20", href && "transition-colors group-hover:border-[color:var(--border-strong)]", className)}>
+      <div className="flex items-center gap-1.5">
+        <p id={`${id}-label`} className="text-sm text-ink-2">{label}</p>
+        {/* No tooltip button inside a linked tile: a button nested in a link is invalid. */}
+        {info && !href ? <InfoTip label={`About ${label}`}>{info}</InfoTip> : null}
+      </div>
       <div className="mt-2 flex items-end justify-between gap-3" aria-labelledby={`${id}-label`}>
         <span className="inline-flex min-w-0 items-center gap-2">
           {tone && value != null && <ToneIcon aria-hidden className={cn("size-5 shrink-0", tone === "bad" ? "text-red-strong" : "text-amber-strong")} />}
@@ -65,7 +72,7 @@ export function StatTile({ label, value, missing, note, delta, spark, href, tone
         )}
       </div>
       <div className="mt-auto space-y-0.5 pt-3 text-xs leading-snug text-ink-3">
-        {value == null && missing ? <p className="italic">{missing}</p> : null}
+        {value == null && missing ? <div className="italic">{missing}</div> : null}
         {value != null && delta && (
           <p className={cn("flex flex-wrap items-center gap-x-1 font-medium", good === true ? "text-emerald-strong" : good === false ? "text-red-strong" : "text-ink-2")}>
             <DeltaIcon aria-hidden className="size-3.5" />
