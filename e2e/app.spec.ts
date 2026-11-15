@@ -247,6 +247,8 @@ test.describe("owner", () => {
     await expect(board.getByRole("columnheader", { name: "LinkedIn replies" })).toBeVisible();
     await expect(board.getByRole("cell", { name: "T1", exact: true }).first()).toBeVisible();
     await expect(board.getByRole("cell", { name: "T2", exact: true }).first()).toBeVisible();
+    // The network mailbox (VIB-522): not connected in the sample, and only the network desk's owner gets the button.
+    await expect(page.getByTestId("network-mailbox")).toContainText("Network mailbox: not connected");
     await shot(page, "pipeline-conversations");
 
     await page.goto("/front-doors");

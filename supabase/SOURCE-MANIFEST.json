@@ -101,5 +101,7 @@
   "supabase/migrations/20261110020000_gtm_origami_optouts.sql": "90459168c6c72a585a7e7fc7a63d98771122ae9561fc64d8be16f7988296ffb4",
   "supabase/tests/gtm_origami_optouts.sql": "1c38f3b8c8c7b4fe41127d17f89cb91824d7e42b1a93513438686d53cf2971f6",
   "supabase/migrations/20261111010000_gtm_outreach_linkedin_replied.sql": "ed9d7a31d8b8292bbd8c667fc770113ced28d64566dbf48d25bb54ed991eafd5",
-  "supabase/tests/gtm_outreach_linkedin_replied.sql": "6f918625de1f4f615cb99ec52345686a7f5e89560d180edaa9b5ce94553ed3d6"
+  "supabase/tests/gtm_outreach_linkedin_replied.sql": "6f918625de1f4f615cb99ec52345686a7f5e89560d180edaa9b5ce94553ed3d6",
+  "supabase/migrations/20261113010000_gtm_network_mailbox.sql": "d15dff33f57275d87e5d395fa7e901499aff4df2d4f5557692d96c0f8cb5fd33",
+  "supabase/tests/gtm_network_mailbox.sql": "5393fa9957dba4090fb8ed0e83fcddfbfdf90e14945f2148f2e86e36b1dec266"
 }

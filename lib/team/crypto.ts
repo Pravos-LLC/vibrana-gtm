@@ -55,8 +55,9 @@ export const linkedinHash = (slug: string, env?: Record<string, string | undefin
 export const replyHash = (text: string, env?: Record<string, string | undefined>) =>
   createHmac("sha256", derive("origami-reply", env)).update(text).digest("base64url").slice(0, 32);
 
-/** `purpose` "calendar" routes the shared callback to the calendar connection (VIB-518); absent means the mailbox. */
-export type OAuthState = { sub: string; member: string; nonce: string; exp: number; purpose?: "calendar" };
+/** `purpose` routes the shared callback: "calendar" to the calendar connection (VIB-518), "network" to the network desk's
+ *  mailbox (VIB-522); absent means the member's team mailbox. It is inside the signed body, so it cannot be swapped. */
+export type OAuthState = { sub: string; member: string; nonce: string; exp: number; purpose?: "calendar" | "network" };
 
 export function signState(s: OAuthState, env?: Record<string, string | undefined>): string {
   const body = Buffer.from(JSON.stringify(s)).toString("base64url");

@@ -370,8 +370,11 @@ test("a reconnect never revokes the previous token: Google would revoke the new 
   const src = readFileSync(new URL("../app/api/team/mailbox/callback/route.ts", import.meta.url), "utf8");
   assert.equal((src.match(/revokeToken\(/g) ?? []).length, 3, "only the wrong-mailbox and the two failed-save paths revoke, each the token just granted");
   assert.doesNotMatch(src, /openToken/);
-  assert.match(src, /return !!error \|\| !!data\?\.length \|\| !!cal\.error \|\| !!cal\.data\?\.length/, "a failed in-use lookup keeps the grant, and a calendar on the address counts");
-  assert.match(src, /return !!a\.error \|\| !!b\.error \|\| !!a\.data\?\.length \|\| !!b\.data\?\.length/, "the calendar save checks both connections before revoking");
+  // Every in-use check is the shared one: a mailbox, a calendar or the network mailbox on the address keeps the grant, and a
+  // failed lookup counts as in use (behaviour: test/network-mailbox.test.ts).
+  assert.match(src, /const inUse = \(\) => grantInUse\(adminDb\(\), granted\.email\);/, "the mailbox save checks every connection before revoking");
+  assert.match(src, /const inUse = \(address: string\) => grantInUse\(db, address\);/, "the calendar save checks every connection before revoking");
+  assert.doesNotMatch(src, /from\("gtm_team_mailboxes"\)\.select\("member"\)/, "no hand-rolled lookup that could miss a connection");
 });
 
 test("the team cron is scheduled hourly in vercel.json", () => {

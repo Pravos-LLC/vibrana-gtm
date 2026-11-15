@@ -149,11 +149,10 @@ test("a person's word: manual kinds keep kind and links, time and name still fol
   assert.deepEqual(Object.keys(C.rowChanges({ ...row, mtgKind: "OTHER" }, want)).sort(), ["mtgAt", "mtgAutoKind", "mtgCompanyId", "mtgExternalCount", "mtgKind", "name"]);
 });
 
-test("disconnecting a calendar revokes only when no mailbox and no other member's calendar uses the account", () => {
+test("disconnecting a calendar revokes only when no mailbox, no other member's calendar and no network mailbox uses the account", () => {
   const src = readFileSync(new URL("../app/pipeline/meetings/actions.ts", import.meta.url), "utf8");
-  assert.match(src, /from\("gtm_team_mailboxes"\)\.select\("member"\)\.eq\("address", row\.address\)/);
-  assert.match(src, /from\("gtm_team_calendars"\)\.select\("member"\)\.eq\("address", row\.address\)\.neq\("member", row\.member\)/);
-  assert.match(src, /if \(!mailbox\.error && !mailbox\.data\?\.length && !other\.error && !other\.data\?\.length\) \{\s*try \{ await revokeToken/);
+  // grantInUse checks all three connections (behaviour: test/network-mailbox.test.ts), leaving out only this member's calendar.
+  assert.match(src, /if \(!\(await grantInUse\(db, row\.address, \{ table: "gtm_team_calendars", member: row\.member \}\)\)\) \{\s*try \{ await revokeToken/);
   assert.equal((src.match(/revokeToken\(/g) ?? []).length, 1);
 });
 

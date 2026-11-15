@@ -7,6 +7,7 @@ import { adminDb } from "@/lib/db";
 import { authUrl, gmailConfig, mailboxAad, revokeToken } from "@/lib/team/mailbox";
 import { openToken, pkceChallenge, randomToken, signState } from "@/lib/team/crypto";
 import { COOKIE_PATH, NONCE_COOKIE, VERIFIER_COOKIE, redirectUri, viewer } from "@/lib/team/connect";
+import { grantInUse } from "@/lib/team/grants";
 
 /** Starts Google's consent screen for the signed-in member's own mailbox. Only the member can connect their mailbox. */
 export async function connectMailbox(): Promise<void> {
@@ -31,10 +32,9 @@ export async function disconnectMailbox(): Promise<void> {
   const { data, error } = await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext").eq("member", v.member.code);
   if (error) redirect("/team/mailbox?status=disconnect-failed");
   for (const row of (data ?? []) as { member: string; address: string; token_ciphertext: string }[]) {
-    // One Google client serves the mailbox and the calendar (VIB-518), and Google revokes the whole grant for an account:
-    // with a calendar connected on this address, the mailbox token is deleted below but not revoked.
-    const cal = await db.from("gtm_team_calendars").select("member").eq("address", row.address).limit(1);
-    if (cal.error || cal.data?.length) continue;
+    // One Google client serves the mailbox, the calendar (VIB-518) and the network mailbox (VIB-522), and Google revokes the
+    // whole grant for an account: with another connection on this address, the mailbox token is deleted below but not revoked.
+    if (await grantInUse(db, row.address, { table: "gtm_team_mailboxes", member: row.member })) continue;
     try { await revokeToken(openToken(row.token_ciphertext, mailboxAad(row.member, row.address))); } catch { /* deleted below either way */ }
   }
   // Events first: if a later step fails, a retry still finds the mailbox row and finishes the job.

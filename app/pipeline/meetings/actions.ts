@@ -10,6 +10,7 @@ import { calendarAad, calendarScopes, heldKey, releaseKey } from "@/lib/team/cal
 import { authUrl, gmailConfig, revokeToken } from "@/lib/team/mailbox";
 import { openToken, pkceChallenge, randomToken, signState } from "@/lib/team/crypto";
 import { COOKIE_PATH, NONCE_COOKIE, VERIFIER_COOKIE, redirectUri, viewer } from "@/lib/team/connect";
+import { grantInUse } from "@/lib/team/grants";
 
 const PAGE = "/pipeline/meetings?calendar=";
 
@@ -36,12 +37,10 @@ export async function disconnectCalendar(form: FormData): Promise<void> {
   const { data, error } = await db.from("gtm_team_calendars").select("member,address,token_ciphertext").eq("member", v.member.code).eq("address", address);
   if (error || !data?.length) redirect(`${PAGE}disconnect-failed`);
   const row = data[0] as { member: string; address: string; token_ciphertext: string };
-  // One Google client serves the mailbox and the calendar, and Google revokes the whole grant for an account: revoke only
-  // when no mailbox connection uses this address, else the token is just deleted.
-  const mailbox = await db.from("gtm_team_mailboxes").select("member").eq("address", row.address).limit(1);
-  // ...nor when another member's calendar connection uses the same Google account.
-  const other = await db.from("gtm_team_calendars").select("member").eq("address", row.address).neq("member", row.member).limit(1);
-  if (!mailbox.error && !mailbox.data?.length && !other.error && !other.data?.length) {
+  // One Google client serves the mailbox, the calendar and the network mailbox, and Google revokes the whole grant for an
+  // account: revoke only when no mailbox, no other member's calendar and no network mailbox uses this address, else the
+  // token is just deleted.
+  if (!(await grantInUse(db, row.address, { table: "gtm_team_calendars", member: row.member }))) {
     try { await revokeToken(openToken(row.token_ciphertext, calendarAad(row.member, row.address))); } catch { /* deleted below either way */ }
   }
   const del = await db.from("gtm_team_calendars").delete().eq("member", row.member).eq("address", row.address);
