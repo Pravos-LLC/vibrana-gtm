@@ -48,6 +48,7 @@ const NETWORK_STATUS: Record<string, string> = {
   "not-owner": "Only the network desk's owner can connect its mailbox.",
   env: "The network mailbox is already set in the deployment settings (NETWORK_GMAIL_*), which take precedence.",
   "save-failed": "The connection could not be saved. Try again.",
+  busy: "Another Google connection change was in progress. Start again in a moment.",
   "disconnect-failed": "The network mailbox could not be disconnected. Try again.",
 };
 

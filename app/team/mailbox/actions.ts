@@ -7,7 +7,7 @@ import { adminDb } from "@/lib/db";
 import { authUrl, gmailConfig, mailboxAad, revokeToken } from "@/lib/team/mailbox";
 import { openToken, pkceChallenge, randomToken, signState } from "@/lib/team/crypto";
 import { COOKIE_PATH, NONCE_COOKIE, VERIFIER_COOKIE, redirectUri, viewer } from "@/lib/team/connect";
-import { grantInUse } from "@/lib/team/grants";
+import { grantInUse, withGrantLock } from "@/lib/team/grants";
 
 /** Starts Google's consent screen for the signed-in member's own mailbox. Only the member can connect their mailbox. */
 export async function connectMailbox(): Promise<void> {
@@ -28,22 +28,27 @@ export async function connectMailbox(): Promise<void> {
 export async function disconnectMailbox(): Promise<void> {
   const v = await viewer();
   if (!v?.member) redirect("/team/mailbox?status=not-member");
+  const code = v.member.code;
   const db = adminDb();
-  const { data, error } = await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext").eq("member", v.member.code);
-  if (error) redirect("/team/mailbox?status=disconnect-failed");
-  for (const row of (data ?? []) as { member: string; address: string; token_ciphertext: string }[]) {
-    // One Google client serves the mailbox, the calendar (VIB-518) and the network mailbox (VIB-522), and Google revokes the
-    // whole grant for an account: with another connection on this address, the mailbox token is deleted below but not revoked.
-    if (await grantInUse(db, row.address, { table: "gtm_team_mailboxes", member: row.member })) continue;
-    try { await revokeToken(openToken(row.token_ciphertext, mailboxAad(row.member, row.address))); } catch { /* deleted below either way */ }
-  }
-  // Events first: if a later step fails, a retry still finds the mailbox row and finishes the job.
-  const steps = [
-    await db.from("gtm_team_mail_events").delete().eq("member", v.member.code),
-    await db.from("gtm_sync_state").delete().like("key", `team.mailbox.${v.member.code.toLowerCase()}.%`),
-    await db.from("gtm_team_mailboxes").delete().eq("member", v.member.code),
-  ];
+  // One grant change at a time (lib/team/grants.ts): a reconnect cannot be saved between this revoke and the delete.
+  const status = await withGrantLock(db, "busy", async () => {
+    const { data, error } = await db.from("gtm_team_mailboxes").select("member,address,token_ciphertext").eq("member", code);
+    if (error) return "disconnect-failed";
+    for (const row of (data ?? []) as { member: string; address: string; token_ciphertext: string }[]) {
+      // One Google client serves the mailbox, the calendar (VIB-518) and the network mailbox (VIB-522), and Google revokes the
+      // whole grant for an account: with another connection on this address, the mailbox token is deleted below but not revoked.
+      if (await grantInUse(db, row.address, { table: "gtm_team_mailboxes", member: row.member })) continue;
+      try { await revokeToken(openToken(row.token_ciphertext, mailboxAad(row.member, row.address))); } catch { /* deleted below either way */ }
+    }
+    // Events first: if a later step fails, a retry still finds the mailbox row and finishes the job.
+    const steps = [
+      await db.from("gtm_team_mail_events").delete().eq("member", code),
+      await db.from("gtm_sync_state").delete().like("key", `team.mailbox.${code.toLowerCase()}.%`),
+      await db.from("gtm_team_mailboxes").delete().eq("member", code),
+    ];
+    return steps.some((s) => s.error) ? "disconnect-failed" : "disconnected";
+  });
   revalidatePath("/team/mailbox");
   revalidatePath("/performance/team");
-  redirect(steps.some((s) => s.error) ? "/team/mailbox?status=disconnect-failed" : "/team/mailbox?status=disconnected");
+  redirect(`/team/mailbox?status=${status}`);
 }

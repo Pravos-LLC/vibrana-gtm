@@ -20,7 +20,7 @@ const { MailboxRenewError, GmailReader } = await import("../lib/outreach/mailbox
 const ACCOUNT = "jo@fixture.example";
 const CLIENT = { clientId: "client-test", clientSecret: "secret-test" };
 const TEAM_ENV = { TEAM_GMAIL_CLIENT_ID: CLIENT.clientId, TEAM_GMAIL_CLIENT_SECRET: CLIENT.clientSecret, NETWORK_GMAIL_ACCOUNT: ACCOUNT };
-const NETWORK_KEYS = ["NETWORK_GMAIL_CLIENT_ID", "NETWORK_GMAIL_CLIENT_SECRET", "NETWORK_GMAIL_REFRESH_TOKEN", "NETWORK_GMAIL_ACCOUNT", "TEAM_GMAIL_CLIENT_ID", "TEAM_GMAIL_CLIENT_SECRET", "GTM_TEAM_MEMBERS"];
+const NETWORK_KEYS = ["OUTREACH_GMAIL_CLIENT_ID", "OUTREACH_GMAIL_CLIENT_SECRET", "OUTREACH_GMAIL_REFRESH_TOKEN", "OUTREACH_GMAIL_ACCOUNT", "NETWORK_GMAIL_CLIENT_ID", "NETWORK_GMAIL_CLIENT_SECRET", "NETWORK_GMAIL_REFRESH_TOKEN", "NETWORK_GMAIL_ACCOUNT", "TEAM_GMAIL_CLIENT_ID", "TEAM_GMAIL_CLIENT_SECRET", "GTM_TEAM_MEMBERS"];
 
 let mock: ReturnType<typeof installFetchMock> | null = null;
 afterEach(() => { mock?.restore(); mock = null; });
@@ -36,8 +36,15 @@ async function withEnv<T>(values: Record<string, string>, fn: () => Promise<T>):
 type Row = Record<string, unknown>;
 /** Just enough of the Supabase client: eq/neq filters, limit, maybeSingle, upsert by id, update, delete; every call recorded.
  *  `fail` makes reads of a table answer with an error. */
-function fakeDb(tables: Record<string, Row[]>, fail: string[] = []) {
+function fakeDb(tables: Record<string, Row[]>, fail: string[] = [], leases = new Map<string, string>()) {
   const calls: { table: string; op: string; args: unknown[] }[] = [];
+  // gtm_take_lease / gtm_release_lease: one holder per job, like the database functions.
+  const rpc = async (fn: string, a: { p_job: string; p_holder: string }) => {
+    calls.push({ table: "rpc", op: fn, args: [a] });
+    if (fn === "gtm_take_lease") { if (leases.has(a.p_job) && leases.get(a.p_job) !== a.p_holder) return { data: false, error: null }; leases.set(a.p_job, a.p_holder); return { data: true, error: null }; }
+    if (fn === "gtm_release_lease") { if (leases.get(a.p_job) === a.p_holder) leases.delete(a.p_job); return { data: null, error: null }; }
+    throw new Error(`unexpected rpc ${fn}`);
+  };
   const from = (table: string) => {
     const st: { op: string; payload: Row | null; filters: ((r: Row) => boolean)[] } = { op: "select", payload: null, filters: [] };
     const run = () => {
@@ -46,7 +53,7 @@ function fakeDb(tables: Record<string, Row[]>, fail: string[] = []) {
       const hit = (r: Row) => st.filters.every((f) => f(r));
       if (st.op === "select") return { data: rows.filter(hit).map((r) => ({ ...r })), error: null };
       if (st.op === "update") for (const r of rows.filter(hit)) Object.assign(r, st.payload);
-      if (st.op === "delete") tables[table] = rows.filter((r) => !hit(r));
+      if (st.op === "delete") { const gone = rows.filter(hit); tables[table] = rows.filter((r) => !hit(r)); return { data: gone, error: null }; }
       if (st.op === "upsert") {
         const i = rows.findIndex((r) => r.id === st.payload!.id);
         if (i >= 0) Object.assign(rows[i], st.payload); else rows.push({ ...st.payload });
@@ -54,7 +61,7 @@ function fakeDb(tables: Record<string, Row[]>, fail: string[] = []) {
       return { data: null, error: null };
     };
     const api: Record<string, unknown> = {
-      select: (...a: unknown[]) => { calls.push({ table, op: "select", args: a }); return api; },
+      select: (...a: unknown[]) => { if (st.op === "select") calls.push({ table, op: "select", args: a }); return api; },
       update: (p: Row) => { calls.push({ table, op: "update", args: [p] }); st.op = "update"; st.payload = p; return api; },
       upsert: (p: Row) => { calls.push({ table, op: "upsert", args: [p] }); st.op = "upsert"; st.payload = p; return api; },
       delete: () => { calls.push({ table, op: "delete", args: [] }); st.op = "delete"; return api; },
@@ -66,7 +73,7 @@ function fakeDb(tables: Record<string, Row[]>, fail: string[] = []) {
     };
     return api;
   };
-  return { db: { from } as never, calls, tables };
+  return { db: { from, rpc } as never, calls, tables, leases };
 }
 
 const idToken = (email: string, verified = true) => `h.${Buffer.from(JSON.stringify({ email, email_verified: verified })).toString("base64url")}.s`;
@@ -105,7 +112,7 @@ test("the OAuth state carries the network purpose inside its signature; the cons
 test("the callback routes the network purpose to its own save, for the network owner only, returning to Pipeline > Conversations", () => {
   const src = readFileSync(new URL("../app/api/team/mailbox/callback/route.ts", import.meta.url), "utf8");
   assert.match(src, /if \(purpose === "network"\) page = `\$\{NETWORK_PAGE\}\?network=`;/);
-  assert.match(src, /if \(s\.purpose === "network"\) \{\s*if \(v\.member\.code !== NETWORK_OWNER\) return back\("not-owner"\);\s*return back\(await saveNetworkGrant\(adminDb\(\), cfg, \{[^}]*expected: networkAccount\(\) \}\)\);/);
+  assert.match(src, /if \(s\.purpose === "network"\) \{\s*if \(member\.code !== NETWORK_OWNER\) return back\("not-owner"\);\s*return back\(await saveNetworkGrant\(adminDb\(\), cfg, \{[^}]*expected: networkAccount\(\) \}\)\);/);
   // The network branch returns before the team mailbox upsert: its grant never reaches gtm_team_mailboxes.
   assert.ok(src.indexOf('s.purpose === "network"') < src.indexOf('from("gtm_team_mailboxes").upsert'));
   assert.equal(N.NETWORK_PAGE, "/pipeline/conversations");
@@ -141,7 +148,7 @@ test("the expected account with gmail.readonly is sealed into gtm_network_mailbo
   assert.deepEqual(row.granted_scopes, [READONLY_SCOPE]);
   assert.equal(openToken(String(row.token_ciphertext), N.networkAad(ACCOUNT)), "refresh-new");
   assert.doesNotMatch(String(row.token_ciphertext), /refresh-new/);
-  assert.deepEqual([...new Set(calls.filter((c) => c.op !== "select").map((c) => c.table))], ["gtm_network_mailbox"], "no team mailbox or calendar row is written");
+  assert.deepEqual([...new Set(calls.filter((c) => c.op !== "select" && c.table !== "rpc").map((c) => c.table))], ["gtm_network_mailbox"], "no team mailbox or calendar row is written");
 });
 
 test("a reconnect replaces the row and clears the reconnect mark, and never revokes the previous token", async () => {
@@ -332,4 +339,73 @@ test("the team email sync reads gtm_team_mailboxes only: the network connection 
   const callback = readFileSync(new URL("../app/api/team/mailbox/callback/route.ts", import.meta.url), "utf8");
   assert.doesNotMatch(callback, /from\("gtm_network_mailbox"\)/, "the callback writes the network row only through saveNetworkGrant");
   // End to end against the local database, with a network row on a member's own address: test/db/network-mailbox.test.ts.
+});
+
+/* ------------------------------------------------------------------------------------------------ review of #50 */
+
+test("a grant in deployment settings on the same client counts as in use; one on another client does not (review of #50, 1)", async () => {
+  const hq = { OUTREACH_GMAIL_CLIENT_ID: CLIENT.clientId, OUTREACH_GMAIL_CLIENT_SECRET: "s", OUTREACH_GMAIL_REFRESH_TOKEN: "r", OUTREACH_GMAIL_ACCOUNT: ACCOUNT };
+  const team = { TEAM_GMAIL_CLIENT_ID: CLIENT.clientId, TEAM_GMAIL_CLIENT_SECRET: CLIENT.clientSecret };
+  const { envGrantInUse } = await import("../lib/team/grants.ts");
+  assert.equal(envGrantInUse(ACCOUNT, { ...team, ...hq }), true, "the HQ reader on this client and account");
+  assert.equal(envGrantInUse(ACCOUNT, { ...team, ...hq, OUTREACH_GMAIL_CLIENT_ID: "another-client" }), false, "another client is another grant");
+  assert.equal(envGrantInUse("other@fixture.example", { ...team, ...hq }), false);
+  const net = { NETWORK_GMAIL_CLIENT_ID: CLIENT.clientId, NETWORK_GMAIL_CLIENT_SECRET: "s", NETWORK_GMAIL_REFRESH_TOKEN: "r", NETWORK_GMAIL_ACCOUNT: ACCOUNT };
+  assert.equal(envGrantInUse(ACCOUNT, { ...team, ...net }), true, "the network override on this client and account");
+  // Through the real paths: disconnect and a rejected consent keep a grant the HQ reader depends on.
+  const sealed = sealToken("refresh-stored", N.networkAad(ACCOUNT));
+  await withEnv({ ...team, ...hq }, async () => {
+    const one = fakeDb({ gtm_network_mailbox: [{ id: 1, address: ACCOUNT, token_ciphertext: sealed, connected_at: "t1" }] });
+    const g = google({ email: ACCOUNT, scope: GRANTED });
+    assert.equal(await N.disconnectNetwork(one.db, g.fetcher), "disconnected");
+    assert.deepEqual(g.revoked, [], "the HQ reader's grant survives the disconnect");
+    const g2 = google({ email: ACCOUNT, scope: GRANTED });
+    assert.equal(await save(fakeDb({}).db, g2.fetcher, "someone@fixture.example"), "wrong-account");
+    assert.deepEqual(g2.revoked, [], "nor is it revoked by a rejected consent");
+  });
+  await withEnv({ ...team, ...hq, OUTREACH_GMAIL_CLIENT_ID: "another-client" }, async () => {
+    const one = fakeDb({ gtm_network_mailbox: [{ id: 1, address: ACCOUNT, token_ciphertext: sealed, connected_at: "t1" }] });
+    const g = google({ email: ACCOUNT, scope: GRANTED });
+    assert.equal(await N.disconnectNetwork(one.db, g.fetcher), "disconnected");
+    assert.deepEqual(g.revoked, ["refresh-stored"], "control: a setting on another client does not hold this grant");
+  });
+});
+
+test("one grant change at a time: while another holds the lock, a save exchanges nothing and a disconnect touches nothing (review of #50, 2)", async () => {
+  const sealed = sealToken("refresh-stored", N.networkAad(ACCOUNT));
+  const leases = new Map([["google.grants", "someone-else"]]);
+  const { db, tables } = fakeDb({ gtm_network_mailbox: [{ id: 1, address: ACCOUNT, token_ciphertext: sealed, connected_at: "t1" }] }, [], leases);
+  const g = google({ email: ACCOUNT, scope: GRANTED });
+  let exchanged = 0;
+  const counting = (async (input: string | URL, init?: RequestInit) => { exchanged++; return g.fetcher(input, init); }) as typeof fetch;
+  assert.equal(await save(db, counting), "busy");
+  assert.equal(await N.disconnectNetwork(db, counting), "busy");
+  assert.equal(exchanged, 0, "no code exchange and no revoke");
+  assert.equal(tables.gtm_network_mailbox.length, 1, "nothing deleted");
+  // Released, the same calls go through, and each releases the lock after itself.
+  leases.clear();
+  assert.equal(await save(db, g.fetcher), "connected");
+  assert.equal(leases.size, 0);
+  assert.equal(await N.disconnectNetwork(db, g.fetcher), "disconnected");
+  assert.equal(leases.size, 0);
+});
+
+test("a disconnect deletes only the connection it read: a row saved meanwhile survives (review of #50, 2)", async () => {
+  const sealed = sealToken("refresh-stored", N.networkAad(ACCOUNT));
+  const { db, tables } = fakeDb({ gtm_network_mailbox: [{ id: 1, address: ACCOUNT, token_ciphertext: sealed, connected_at: "t1" }] });
+  // A replacement lands while the revoke is in flight (the lock rules this out between requests; the delete is still exact).
+  const racing = (async () => { tables.gtm_network_mailbox[0] = { id: 1, address: ACCOUNT, token_ciphertext: sealed, connected_at: "t2" }; return new Response(null, { status: 200 }); }) as typeof fetch;
+  assert.equal(await N.disconnectNetwork(db, racing), "disconnect-failed");
+  assert.equal(tables.gtm_network_mailbox[0].connected_at, "t2", "the newer connection is kept");
+});
+
+test("every grant change in the callback and the disconnect actions holds the grant lock (review of #50, 2)", () => {
+  const route = readFileSync(new URL("../app/api/team/mailbox/callback/route.ts", import.meta.url), "utf8");
+  assert.match(route, /withGrantLock\(adminDb\(\), "busy", \(\) => saveCalendar\(/);
+  assert.match(route, /withGrantLock\(adminDb\(\), "busy", \(\) => saveMailbox\(/);
+  assert.match(route, /saveNetworkGrant\(/, "the network save locks inside saveNetworkGrant (tested above)");
+  for (const f of ["../app/team/mailbox/actions.ts", "../app/pipeline/meetings/actions.ts"]) {
+    const src = readFileSync(new URL(f, import.meta.url), "utf8");
+    assert.match(src, /const status = await withGrantLock\(db, "busy", async \(\) => \{[\s\S]*revokeToken[\s\S]*\.delete\(\)[\s\S]*\}\);/, `${f}: revoke and delete inside the lock`);
+  }
 });

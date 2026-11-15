@@ -11,13 +11,14 @@
 //   (GTM_TEAM_MEMBERS). Both are deployment settings, so no real address is in this public repository.
 // - The sealed refresh token goes to gtm_network_mailbox, never gtm_team_mailboxes: the team email sync must not count this
 //   personal mailbox as a team member's work mailbox.
-// - Google revokes per account and client: a grant is revoked only when no connection uses the address (lib/team/grants.ts).
+// - Google revokes per account and client: a grant is revoked only when nothing uses the address, stored or in deployment
+//   settings, and every grant change holds one lock (lib/team/grants.ts).
 // - NETWORK_GMAIL_* deployment settings, when all four are set, win over the stored connection.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
 import { gmailConfig, READONLY_SCOPE, revokeToken, type GmailConfig } from "../team/mailbox";
 import { openToken, sealToken } from "../team/crypto";
-import { grantInUse } from "../team/grants";
+import { grantInUse, withGrantLock } from "../team/grants";
 import { teamMembers, type TeamMember } from "../team/members";
 import { addresses, MailboxRenewError, networkMailboxConfig, type MailboxConfig } from "./mailbox";
 
@@ -68,16 +69,21 @@ export async function exchangeNetworkCode(cfg: GmailConfig, code: string, verifi
   return { refreshToken: body.refresh_token, email: claims.email.toLowerCase(), scopes: (body.scope ?? "").split(" ").filter(Boolean) };
 }
 
-export type SaveStatus = "connected" | "wrong-account" | "scope-missing" | "google-refused" | "save-failed" | "no-account";
+export type SaveStatus = "connected" | "wrong-account" | "scope-missing" | "google-refused" | "save-failed" | "no-account" | "busy";
 
 /**
  * Finishes the consent for the signed-in network owner: the grant is kept only when Google's confirmed address is the
  * expected account and gmail.readonly was granted. A refused grant is revoked only when no connection uses the address.
  * A reconnect replaces the stored row and never revokes the previous token (Google would revoke the new one with it).
+ * The whole change, from the code exchange to the stored row, holds the grant lock (lib/team/grants.ts).
  */
 export async function saveNetworkGrant(db: SupabaseClient, cfg: GmailConfig, o: { code: string; verifier: string; redirectUri: string; member: string; expected: string | null; fetcher?: typeof fetch; now?: Date }): Promise<SaveStatus> {
   const expected = oneAddress(o.expected);
   if (!expected) return "no-account";
+  return withGrantLock<SaveStatus>(db, "busy", () => saveLocked(db, cfg, o, expected));
+}
+
+async function saveLocked(db: SupabaseClient, cfg: GmailConfig, o: { code: string; verifier: string; redirectUri: string; member: string; fetcher?: typeof fetch; now?: Date }, expected: string): Promise<SaveStatus> {
   let g: Grant;
   try { g = await exchangeNetworkCode(cfg, o.code, o.verifier, o.redirectUri, o.fetcher); } catch { return "google-refused"; }
   const refuse = async (status: SaveStatus) => {
@@ -96,17 +102,24 @@ export async function saveNetworkGrant(db: SupabaseClient, cfg: GmailConfig, o: 
   return "connected";
 }
 
-/** Deletes the stored connection; revokes it at Google only when no other connection uses the address. */
-export async function disconnectNetwork(db: SupabaseClient, fetcher: typeof fetch = fetch): Promise<"disconnected" | "disconnect-failed" | "not-connected"> {
-  const { data, error } = await db.from(NETWORK_TABLE).select("address,token_ciphertext").eq("id", 1).maybeSingle();
-  if (error) return "disconnect-failed";
-  if (!data) return "not-connected";
-  const row = data as { address: string; token_ciphertext: string };
-  if (!(await grantInUse(db, row.address, { table: "gtm_network_mailbox" }))) {
-    try { await revokeToken(openToken(row.token_ciphertext, networkAad(row.address)), fetcher); } catch { /* deleted below either way */ }
-  }
-  const del = await db.from(NETWORK_TABLE).delete().eq("id", 1);
-  return del.error ? "disconnect-failed" : "disconnected";
+type DisconnectStatus = "disconnected" | "disconnect-failed" | "not-connected" | "busy";
+
+/**
+ * Deletes the stored connection; revokes it at Google only when nothing else uses the address. Holds the grant lock, so a
+ * reconnect cannot be saved between the read and the delete, and deletes only the connection it read (its connected_at).
+ */
+export async function disconnectNetwork(db: SupabaseClient, fetcher: typeof fetch = fetch): Promise<DisconnectStatus> {
+  return withGrantLock<DisconnectStatus>(db, "busy", async () => {
+    const { data, error } = await db.from(NETWORK_TABLE).select("address,token_ciphertext,connected_at").eq("id", 1).maybeSingle();
+    if (error) return "disconnect-failed";
+    if (!data) return "not-connected";
+    const row = data as { address: string; token_ciphertext: string; connected_at: string };
+    if (!(await grantInUse(db, row.address, { table: "gtm_network_mailbox" }))) {
+      try { await revokeToken(openToken(row.token_ciphertext, networkAad(row.address)), fetcher); } catch { /* deleted below either way */ }
+    }
+    const del = await db.from(NETWORK_TABLE).delete().eq("id", 1).eq("connected_at", row.connected_at).select("id");
+    return del.error || !del.data?.length ? "disconnect-failed" : "disconnected";
+  });
 }
 
 /* ------------------------------------------------------------------------------------------------ reading */

@@ -23,6 +23,7 @@ const STATUS: Record<string, string> = {
   "not-configured": "The Google connection is not set up in this deployment yet (TEAM_GMAIL_CLIENT_ID / TEAM_GMAIL_CLIENT_SECRET).",
   "not-member": "Your login is not a configured team member, so there is no mailbox to connect.",
   "save-failed": "The connection could not be saved. Try again.",
+  busy: "Another Google connection change was in progress. Start again in a moment.",
   "disconnect-failed": "Google access was revoked, but deleting the counted emails did not finish. Press Disconnect again.",
 };
 
