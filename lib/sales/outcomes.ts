@@ -1,7 +1,8 @@
 // Outreach outcomes for the pipeline dashboard: what happened to each accepted desk email in the mailbox it was sent from,
 // stored on the draft so the numbers survive (the /outreach/inbox page only ever computed them live). Two streams are read,
 // each from its own mailbox: the client stream from the HQ outreach mailbox (OUTREACH_GMAIL_*), and John's network stream
-// (VIB-522) from the Google account its sending address is an alias of (NETWORK_GMAIL_*). Guests are not read.
+// (VIB-522) from the Google account its sending address is an alias of: NETWORK_GMAIL_* when set, else the connection John
+// made with "Connect network mailbox" on Pipeline > Conversations (lib/outreach/network-mailbox.ts). Guests are not read.
 //
 // - A sent thread that matches a draft with no send recorded stamps the send (a forgotten "Mark sent" still counts),
 //   attributed to the mailbox address.
@@ -15,7 +16,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { must } from "../db";
 import { readPages } from "../db-read";
-import { GmailReader, hqAddress, mailboxConfig, networkMailboxConfig, sentInTime, trackAddress, type Conversation, type OutreachMail } from "../outreach/mailbox";
+import { GmailReader, hqAddress, mailboxConfig, sentInTime, trackAddress, type Conversation, type MailboxConfig, type OutreachMail } from "../outreach/mailbox";
+import { markNetwork, markNetworkFailure, NETWORK_NOT_CONNECTED, networkMailbox, type StoredNetwork } from "../outreach/network-mailbox";
 
 export type OutcomeDraft = OutreachMail & {
   email_status: "none" | "queued" | "sent" | "replied"; email_sent_by: string | null;
@@ -60,7 +62,7 @@ export type OutcomeRun = { scanned: number; matched: number; sent: number; repli
 export type OutcomeTrack = "client" | "network";
 export const NOT_CONNECTED: Record<OutcomeTrack, string> = {
   client: "the HQ outreach mailbox is not connected (OUTREACH_GMAIL_*)",
-  network: "the network mailbox is not connected (NETWORK_GMAIL_*)",
+  network: NETWORK_NOT_CONNECTED,
 };
 
 /**
@@ -71,8 +73,28 @@ export const NOT_CONNECTED: Record<OutcomeTrack, string> = {
 export async function syncOutcomes(db: SupabaseClient, opts: { deadline: number; maxPages?: number; reader?: GmailReader; mailbox?: string; track?: OutcomeTrack }): Promise<OutcomeRun> {
   const track = opts.track ?? "client";
   const run: OutcomeRun = { scanned: 0, matched: 0, sent: 0, replied: 0, bounced: 0, pages: 0, complete: true };
-  const cfg = opts.reader ? null : track === "network" ? networkMailboxConfig() : mailboxConfig();
-  if (!opts.reader && !cfg) return { ...run, complete: false, skipped: NOT_CONNECTED[track] };
+  if (opts.reader) return readStream(db, opts, track, null, run);
+  if (track === "client") {
+    const cfg = mailboxConfig();
+    return cfg ? readStream(db, opts, track, cfg, run) : { ...run, complete: false, skipped: NOT_CONNECTED.client };
+  }
+  const source = await networkMailbox(db);
+  if ("skipped" in source) return { ...run, complete: false, skipped: source.skipped };
+  if (!source.stored) return readStream(db, opts, track, source.cfg, run);
+  // The stored connection records how each run went: the page shows the last read, and a token Google refuses is marked for
+  // a reconnect so the page asks for one instead of the job failing quietly every hour.
+  const stored: StoredNetwork = source.stored;
+  let out: OutcomeRun;
+  try { out = await readStream(db, opts, track, source.cfg, run); } catch (e) {
+    const renew = await markNetworkFailure(db, stored, e).catch(() => false);
+    throw renew ? new Error("The network mailbox connection needs to be renewed. Reconnect it on Pipeline > Conversations.") : e;
+  }
+  // Only the status line: a failed status write never undoes the outcomes this run saved.
+  if (!out.skipped) await markNetwork(db, stored, { last_sync_at: new Date().toISOString(), last_error: null }).catch(() => undefined);
+  return out;
+}
+
+async function readStream(db: SupabaseClient, opts: { deadline: number; maxPages?: number; reader?: GmailReader; mailbox?: string }, track: OutcomeTrack, cfg: MailboxConfig | null, run: OutcomeRun): Promise<OutcomeRun> {
   // The stream's sending address, never the connected account: for clients that may be an inbox HQ mail is forwarded to,
   // and the network sends from an alias of the account it connects as.
   const mailbox = opts.mailbox ?? (track === "network" ? await trackAddress(db, "network") : await hqAddress(db));

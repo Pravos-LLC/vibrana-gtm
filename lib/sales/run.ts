@@ -19,7 +19,8 @@ export async function runPipeline(db: SupabaseClient, opts: { now?: Date; deadli
   const out: PipelineRun = {};
   try { out.stages = await recordStages(db, (await salesDeals({ timeoutMs: 20_000 })).deals, now); } catch (e) { out.stages = failed(e); }
   try { out.outcomes = await syncOutcomes(db, { deadline: opts.deadline - 120_000 }); } catch (e) { out.outcomes = failed(e); }
-  // John's network desk (VIB-522) from its own mailbox; until NETWORK_GMAIL_* is set this records "not connected" and costs nothing.
+  // John's network desk (VIB-522) from its own mailbox (NETWORK_GMAIL_* or the connection made on Pipeline > Conversations);
+  // until one exists this records "not connected" and costs nothing.
   try { out.networkOutcomes = await syncOutcomes(db, { track: "network", deadline: opts.deadline - 100_000 }); } catch (e) { out.networkOutcomes = failed(e); }
   try { out.contacted = await writeContacted(db, new TwentyReader({ deadline: opts.deadline - 60_000 }), now); } catch (e) { out.contacted = failed(e); }
   try { out.web = await syncWeb(db, (await loadSalesSettings(db)).settings, now, { deadline: opts.deadline - 10_000 }); } catch (e) { out.web = failed(e); }

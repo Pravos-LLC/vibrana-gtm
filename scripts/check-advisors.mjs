@@ -10,6 +10,7 @@ const ALLOW = [
   { key: "rls_enabled_no_policy_public_review_publication_cancellations", why: "deliberate deny-all: service_role only, append-only tombstones" },
   { key: "rls_enabled_no_policy_public_gtm_job_leases", why: "deliberate deny-all: service_role only; the team cron's overlap lease, taken through gtm_take_lease (email outcomes migration)" },
   { key: "rls_enabled_no_policy_public_gtm_origami_webhook_deliveries", why: "deliberate deny-all: service_role only; the Origami webhook's delivery ids for at-least-once dedupe (origami opt-outs migration, VIB-521)" },
+  { key: "rls_enabled_no_policy_public_gtm_network_mailbox", why: "deliberate deny-all: service_role only; the network desk's sealed mailbox token, status read server-side for the owner (network mailbox migration, VIB-522)" },
   { key: "rls_enabled_no_policy_public_client_feedback", why: "deliberate deny-all: service_role only (app/api/feedback), no grants to anon/authenticated (client_feedback migration)" },
 ];
 

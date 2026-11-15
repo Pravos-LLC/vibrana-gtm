@@ -13,6 +13,12 @@ import { deskStats, linkedinStats, networkWeekly, windowFor, type ChannelStats, 
 import { RUN_KEY, type PipelineRun } from "@/lib/sales/run";
 import { REPORT_TZ } from "@/lib/reports/week";
 import { sessionDb } from "@/lib/supabase/server";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { gmailConfig } from "@/lib/team/mailbox";
+import { viewer } from "@/lib/team/connect";
+import { NETWORK_OWNER, networkStatus, type NetworkStatus } from "@/lib/outreach/network-mailbox";
+import { connectNetworkMailbox, disconnectNetworkMailbox } from "./actions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -25,7 +31,28 @@ const NETWORK_WEEKS = 6;
 // this tile shows the period rate against the same threshold.
 const BOUNCE_ALARM = 0.02;
 
-export default async function Conversations({ searchParams }: { searchParams: Promise<{ owner?: string; period?: string }> }) {
+/** What the network mailbox connection's return (`?network=`) says. */
+const NETWORK_STATUS: Record<string, string> = {
+  connected: "Network mailbox connected. The pipeline job reads replies and bounces to network desk emails within the hour.",
+  disconnected: "Network mailbox disconnected. Network replies are again the ones you mark on the desk.",
+  "not-connected": "The network mailbox was not connected.",
+  declined: "Google consent was cancelled. Nothing was connected.",
+  expired: "The connection request expired or came from another browser. Start again.",
+  invalid: "Google sent back an incomplete answer. Start again.",
+  "wrong-user": "The signed-in account changed during the connection. Start again from your own login.",
+  "wrong-account": "That Google account is not the network desk's mailbox, so it was not connected. Pick the account the network alias belongs to.",
+  "scope-missing": "Google did not grant Gmail read access (the box may have been unticked). Start again and allow it.",
+  "google-refused": "Google did not grant offline, read-only Gmail access. Start again and accept the permission.",
+  "not-configured": "The Google connection is not set up in this deployment (TEAM_GMAIL_CLIENT_ID / TEAM_GMAIL_CLIENT_SECRET).",
+  "no-account": "The network desk's account is not configured in this deployment (NETWORK_GMAIL_ACCOUNT, or the JOHN entry in GTM_TEAM_MEMBERS).",
+  "not-owner": "Only the network desk's owner can connect its mailbox.",
+  env: "The network mailbox is already set in the deployment settings (NETWORK_GMAIL_*), which take precedence.",
+  "save-failed": "The connection could not be saved. Try again.",
+  busy: "Another Google connection change was in progress. Start again in a moment.",
+  "disconnect-failed": "The network mailbox could not be disconnected. Try again.",
+};
+
+export default async function Conversations({ searchParams }: { searchParams: Promise<{ owner?: string; period?: string; network?: string }> }) {
   const sp = await searchParams;
   const owner = parseOwner(sp.owner), period = parsePeriod(sp.period);
   const now = new Date();
@@ -37,6 +64,9 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
   const isOwner = (claims?.claims?.app_metadata as { gtm_owner?: boolean } | undefined)?.gtm_owner === true;
   // The network scoreboard reaches back NETWORK_WEEKS calendar weeks (one more day covers the time zone).
   const networkSince = new Date(now.getTime() - (NETWORK_WEEKS * 7 + 1) * 86_400_000);
+  const v = isOwner ? await viewer() : null;
+  // The connection's status is a service-role read (its table is closed to every session), so only for the signed-in owner.
+  const netStatus: NetworkStatus | null = isOwner ? await networkStatus(adminDb()).catch(() => ({ source: "error" as const, message: "The network mailbox connection could not be read." })) : null;
   const [desk, linkedin, inquiries, tiers, lastRun] = await Promise.all([
     loadDesk(db, new Date(Math.min(since.getTime(), networkSince.getTime()))), loadLinkedIn(db, since),
     isOwner && !owner ? loadInquiries(adminDb(), since) : Promise.resolve({ data: null, error: owner ? "inquiries are not attributed to a person" : "not the owner" }),
@@ -86,7 +116,7 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
         </div>
         <Table head={["Track", "First touches", "Follow-ups", "Replies", "Positive", "Reply rate", "Positive rate", "Bounces"]} align={["l", "r", "r", "r", "r", "r", "r", "r"]}
           rows={[row("Clients (HQ mailbox)", client), guestRow, networkRow]} />
-        <p className="mt-3 text-sm text-ink-3">Guest replies are not measured: those emails go from your own mailbox, which is not connected. Network replies are {networkMailbox ? "read hourly from the network mailbox, plus any you mark on the desk" : "the ones you mark replied on the desk; the network mailbox is not connected"}. Abe&apos;s own sends and replies are on <Link className="underline" href="/performance/team">Team</Link>.</p>
+        <p className="mt-3 text-sm text-ink-3">Guest replies are not measured: those emails go from your own mailbox, which is not connected. Network replies are {networkMailbox ? "read hourly from the network mailbox, plus any you mark on the desk" : "the ones you mark replied on the desk; the network mailbox is not connected (connect it under Own network below)"}. Abe&apos;s own sends and replies are on <Link className="underline" href="/performance/team">Team</Link>.</p>
         <div className="mt-6 grid gap-6 md:grid-cols-2">
           <TrendChart title="First touches a week" unit="emails" summary={`First touches per week over ${WEEKS} weeks`} data={weeks.map((x) => ({ x: x.x, value: x.s.firstTouches }))} />
           <TrendChart title="Replies a week" unit="replies" summary={`Replies per week over ${WEEKS} weeks`} data={weeks.map((x) => ({ x: x.x, value: x.s.replies }))} />
@@ -94,6 +124,8 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
       </Section>
 
       <Section title="Own network" note={`by week and warm tier · ${networkMailbox ? "email replies and bounces from the network mailbox and your marks" : "replies are the ones you mark on the desk"}`}>
+        {sp.network && NETWORK_STATUS[sp.network] && <Card glow={false} className="mb-4 p-4 text-sm text-ink-2" role="status">{NETWORK_STATUS[sp.network]}</Card>}
+        {netStatus && <NetworkMailbox status={netStatus} canConnect={v?.member?.code === NETWORK_OWNER} configured={!!gmailConfig()} />}
         {tiers.error && <SourceNote tone="bad">The network tiers could not be read ({tiers.error}); every person shows as No tier.</SourceNote>}
         <div data-testid="network-scoreboard">
           <Table head={["Week of", "Tier", "Email notes", "LinkedIn notes", "Email replies", "LinkedIn replies", "Follow-ups", "Bounces"]} align={["l", "l", "r", "r", "r", "r", "r", "r"]}
@@ -121,6 +153,38 @@ export default async function Conversations({ searchParams }: { searchParams: Pr
         </div>
       </Section>
     </Shell>
+  );
+}
+
+/** The network mailbox's connection: connected as, reconnect, or connect. Only the network desk's owner sees the buttons. */
+function NetworkMailbox({ status, canConnect, configured }: { status: NetworkStatus; canConnect: boolean; configured: boolean }) {
+  const utc = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
+  const connect = (label: string) => (canConnect && configured
+    ? <form action={connectNetworkMailbox}><Button type="submit">{label}</Button></form> : null);
+  return (
+    <Card glow={false} className="mb-4 p-4 text-sm text-ink-2" data-testid="network-mailbox">
+      {status.source === "env" && <p>Network mailbox: set in the deployment settings (NETWORK_GMAIL_*). Replies and bounces are read hourly.</p>}
+      {status.source === "error" && <p className="text-red-strong">{status.message}</p>}
+      {status.source === "none" && (
+        <div className="space-y-3">
+          <p>Network mailbox: not connected. Connect the Google account the network alias belongs to, and the pipeline job reads replies and bounces to network desk emails every hour (Gmail read-only; it never sends, changes or deletes mail, and stores no text).</p>
+          {connect("Connect network mailbox")}
+        </div>
+      )}
+      {status.source === "stored" && (
+        <div className="space-y-3">
+          <p>Network mailbox: connected as <span className="font-medium text-ink">{status.address}</span> on {status.connectedAt.slice(0, 10)}. {status.lastSyncAt ? `Last read ${utc(status.lastSyncAt)}.` : "Not read yet: the pipeline job runs hourly."}</p>
+          {status.reconnect && <p className="text-red-strong">Google no longer accepts this connection, so replies are not being read. Reconnect it.</p>}
+          {status.expectedMismatch && <p className="text-red-strong">This is not the account configured for the network desk, so it is not read. Reconnect with the right account.</p>}
+          {status.lastError && !status.reconnect && <p className="text-red-strong">Last read failed: {status.lastError}</p>}
+          <div className="flex gap-3">
+            {connect(status.reconnect || status.expectedMismatch ? "Reconnect network mailbox" : "Reconnect")}
+            {canConnect && <form action={disconnectNetworkMailbox}><Button type="submit" variant="secondary">Disconnect</Button></form>}
+          </div>
+        </div>
+      )}
+      {!configured && status.source !== "env" && <p className="mt-2 text-ink-3">{NETWORK_STATUS["not-configured"]}</p>}
+    </Card>
   );
 }
 

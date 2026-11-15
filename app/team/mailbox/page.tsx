@@ -23,6 +23,7 @@ const STATUS: Record<string, string> = {
   "not-configured": "The Google connection is not set up in this deployment yet (TEAM_GMAIL_CLIENT_ID / TEAM_GMAIL_CLIENT_SECRET).",
   "not-member": "Your login is not a configured team member, so there is no mailbox to connect.",
   "save-failed": "The connection could not be saved. Try again.",
+  busy: "Another Google connection change was in progress. Start again in a moment.",
   "disconnect-failed": "Google access was revoked, but deleting the counted emails did not finish. Press Disconnect again.",
 };
 
@@ -47,7 +48,7 @@ export default async function MailboxPage({ searchParams }: { searchParams: Prom
             <li><strong className="text-ink">What is counted:</strong> an email to someone already in the CRM as a prospect (not a client, partner or personal contact), a reply in that thread, or a bounce. Mail to anyone else is skipped and never stored.</li>
             <li><strong className="text-ink">What is stored:</strong> Gmail message and thread ids, the day and time, the CRM record ids, and a keyed hash of each recipient so a reply can be matched. No address, subject or text.</li>
             <li><strong className="text-ink">Who sees it:</strong> the cockpit owners on Analytics, Team, the same page you see, including the list of counted emails.</li>
-            <li><strong className="text-ink">Disconnecting</strong> revokes Google&apos;s access and deletes every counted email. If your calendar is connected on the same Google account (Pipeline, Meetings), the access is deleted here but not revoked, so the calendar keeps working.</li>
+            <li><strong className="text-ink">Disconnecting</strong> revokes Google&apos;s access and deletes every counted email. If your calendar (Pipeline, Meetings) or the network mailbox (Pipeline, Conversations) is connected on the same Google account, the access is deleted here but not revoked, so that connection keeps working.</li>
           </ul>
         </div>
       </Section>

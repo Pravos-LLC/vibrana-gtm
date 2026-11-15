@@ -204,7 +204,7 @@ export const TABLES = [
   "gtm_email_attempts", "gtm_email_reply_labels", "gtm_email_sync_ops", "gtm_email_incidents", "gtm_dmarc_reports", "gtm_job_leases",
   "gtm_yt_videos", "gtm_yt_video_daily", "gtm_yt_channel_daily", "gtm_yt_dim_daily", "gtm_yt_report_files",
   "gtm_deal_milestones", "gtm_deal_stage_history", "gtm_linkedin_connections", "gtm_linkedin_threads", "gtm_web_daily",
-  "gtm_team_calendars", "gtm_calendar_meetings", "gtm_origami_replies", "gtm_origami_webhook_deliveries",
+  "gtm_team_calendars", "gtm_calendar_meetings", "gtm_origami_replies", "gtm_origami_webhook_deliveries", "gtm_network_mailbox",
   "review_batches", "review_assets", "review_comments", "review_publications", "review_publication_cancellations",
 ] as const;
 

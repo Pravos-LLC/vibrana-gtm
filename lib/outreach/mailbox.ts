@@ -40,7 +40,7 @@ const oneAddress = (v: string | null | undefined) => {
 /**
  * The address one desk stream sends from (gtm_outreach_tracks.from_address), else the stream's configured sender; null when
  * neither is a single address. A desk email's replies are matched against it. The network stream's address is a send-as alias,
- * so its sent mail and replies sit in the mailbox of the Google account behind it (networkMailboxConfig), not under its own name.
+ * so its sent mail and replies sit in the mailbox of the Google account behind it (networkMailbox), not under its own name.
  */
 export async function trackAddress(db: { from: (t: string) => any }, track: "client" | "network"): Promise<string | null> {
   const { data, error } = await db.from("gtm_outreach_tracks").select("from_address").eq("track", track).maybeSingle();
@@ -75,10 +75,11 @@ export function mailboxConfig(env: Record<string, string | undefined> = process.
 }
 
 /**
- * The mailbox the network stream's outcomes read (VIB-522): the Google account whose send-as alias the network desk sends from.
+ * The network mailbox from deployment settings (VIB-522): the Google account whose send-as alias the network desk sends from.
  * NETWORK_GMAIL_CLIENT_ID, NETWORK_GMAIL_CLIENT_SECRET and NETWORK_GMAIL_REFRESH_TOKEN (an OAuth client and a refresh token
  * granted gmail.readonly by that account; a thread search needs more than gmail.metadata), and NETWORK_GMAIL_ACCOUNT, that
- * account's primary address, which the connection is checked against. Null until all four are set.
+ * account's primary address, which the connection is checked against. Null until all four are set. When they are set they
+ * win; otherwise the outcome sync uses the connection John made with "Connect network mailbox" (lib/outreach/network-mailbox.ts).
  */
 export function networkMailboxConfig(env: Record<string, string | undefined> = process.env): MailboxConfig | null {
   return gmailEnv(env, "NETWORK_GMAIL", null);
@@ -159,6 +160,9 @@ export function plainBody(part: MailPart | undefined): string {
   return (part.parts ?? []).map(plainBody).filter(Boolean).join("\n").slice(0, 20000);
 }
 
+/** Google refused the stored refresh token (invalid_grant): the mailbox must be connected again. */
+export class MailboxRenewError extends Error {}
+
 export class GmailReader {
   constructor(private token: string, private fetcher: typeof fetch = fetch) {}
   private async get<T>(path: string): Promise<T> {
@@ -175,7 +179,12 @@ export class GmailReader {
       body: new URLSearchParams({ client_id: config.clientId, client_secret: config.clientSecret, refresh_token: config.refreshToken, grant_type: "refresh_token" }),
       cache: "no-store", signal: AbortSignal.timeout(12000),
     });
-    if (!response.ok) throw new Error(`The ${label} connection needs to be renewed.`);
+    if (!response.ok) {
+      // invalid_grant: Google no longer accepts this refresh token (revoked, expired or replaced). Only a new consent fixes it,
+      // so a stored connection is marked for a reconnect. Other refusals (a client problem, an outage) are plain errors.
+      const refused = await response.json().catch(() => ({})) as { error?: string };
+      throw new (refused.error === "invalid_grant" ? MailboxRenewError : Error)(`The ${label} connection needs to be renewed.`);
+    }
     const body = await response.json() as { access_token?: string };
     if (!body.access_token) throw new Error("Gmail did not return an access token.");
     const reader = new GmailReader(body.access_token, fetcher);
