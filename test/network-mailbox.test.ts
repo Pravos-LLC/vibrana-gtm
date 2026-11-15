@@ -20,7 +20,7 @@ const { MailboxRenewError, GmailReader } = await import("../lib/outreach/mailbox
 const ACCOUNT = "jo@fixture.example";
 const CLIENT = { clientId: "client-test", clientSecret: "secret-test" };
 const TEAM_ENV = { TEAM_GMAIL_CLIENT_ID: CLIENT.clientId, TEAM_GMAIL_CLIENT_SECRET: CLIENT.clientSecret, NETWORK_GMAIL_ACCOUNT: ACCOUNT };
-const NETWORK_KEYS = ["OUTREACH_GMAIL_CLIENT_ID", "OUTREACH_GMAIL_CLIENT_SECRET", "OUTREACH_GMAIL_REFRESH_TOKEN", "OUTREACH_GMAIL_ACCOUNT", "NETWORK_GMAIL_CLIENT_ID", "NETWORK_GMAIL_CLIENT_SECRET", "NETWORK_GMAIL_REFRESH_TOKEN", "NETWORK_GMAIL_ACCOUNT", "TEAM_GMAIL_CLIENT_ID", "TEAM_GMAIL_CLIENT_SECRET", "GTM_TEAM_MEMBERS"];
+const NETWORK_KEYS = ["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN", "OUTREACH_GMAIL_CLIENT_ID", "OUTREACH_GMAIL_CLIENT_SECRET", "OUTREACH_GMAIL_REFRESH_TOKEN", "OUTREACH_GMAIL_ACCOUNT", "NETWORK_GMAIL_CLIENT_ID", "NETWORK_GMAIL_CLIENT_SECRET", "NETWORK_GMAIL_REFRESH_TOKEN", "NETWORK_GMAIL_ACCOUNT", "TEAM_GMAIL_CLIENT_ID", "TEAM_GMAIL_CLIENT_SECRET", "GTM_TEAM_MEMBERS"];
 
 let mock: ReturnType<typeof installFetchMock> | null = null;
 afterEach(() => { mock?.restore(); mock = null; });
@@ -346,31 +346,40 @@ test("the team email sync reads gtm_team_mailboxes only: the network connection 
 
 /* ------------------------------------------------------------------------------------------------ review of #50 */
 
-test("a grant in deployment settings on the same client counts as in use; one on another client does not (review of #50, 1)", async () => {
+test("a grant in deployment settings for the account counts as in use, whatever its OAuth client (review of #50, 1 and round 3)", async () => {
   const hq = { OUTREACH_GMAIL_CLIENT_ID: CLIENT.clientId, OUTREACH_GMAIL_CLIENT_SECRET: "s", OUTREACH_GMAIL_REFRESH_TOKEN: "r", OUTREACH_GMAIL_ACCOUNT: ACCOUNT };
   const team = { TEAM_GMAIL_CLIENT_ID: CLIENT.clientId, TEAM_GMAIL_CLIENT_SECRET: CLIENT.clientSecret };
   const { envGrantInUse } = await import("../lib/team/grants.ts");
   assert.equal(envGrantInUse(ACCOUNT, { ...team, ...hq }), true, "the HQ reader on this client and account");
-  assert.equal(envGrantInUse(ACCOUNT, { ...team, ...hq, OUTREACH_GMAIL_CLIENT_ID: "another-client" }), false, "another client is another grant");
-  assert.equal(envGrantInUse("other@fixture.example", { ...team, ...hq }), false);
-  const net = { NETWORK_GMAIL_CLIENT_ID: CLIENT.clientId, NETWORK_GMAIL_CLIENT_SECRET: "s", NETWORK_GMAIL_REFRESH_TOKEN: "r", NETWORK_GMAIL_ACCOUNT: ACCOUNT };
-  assert.equal(envGrantInUse(ACCOUNT, { ...team, ...net }), true, "the network override on this client and account");
-  // Through the real paths: disconnect and a rejected consent keep a grant the HQ reader depends on.
+  // Google's revocation reaches every client in the same Cloud project, and nothing proves another client is elsewhere.
+  assert.equal(envGrantInUse(ACCOUNT, { ...team, ...hq, OUTREACH_GMAIL_CLIENT_ID: "another-client" }), true, "another client is not proof of isolation");
+  assert.equal(envGrantInUse("other@fixture.example", { ...team, ...hq }), false, "control: another account is free");
+  const net = { NETWORK_GMAIL_CLIENT_ID: "override-client", NETWORK_GMAIL_CLIENT_SECRET: "s", NETWORK_GMAIL_REFRESH_TOKEN: "r", NETWORK_GMAIL_ACCOUNT: ACCOUNT };
+  assert.equal(envGrantInUse(ACCOUNT, { ...team, ...net }), true, "the network override on the account");
+  // Through the real paths: disconnect and a rejected consent keep a grant the HQ reader depends on, on either client.
   const sealed = sealToken("refresh-stored", N.networkAad(ACCOUNT));
-  await withEnv({ ...team, ...hq }, async () => {
+  for (const clientId of [CLIENT.clientId, "another-client"]) {
+    await withEnv({ ...team, ...hq, OUTREACH_GMAIL_CLIENT_ID: clientId }, async () => {
+      const one = fakeDb({ gtm_network_mailbox: [{ id: 1, address: ACCOUNT, token_ciphertext: sealed, connected_at: "t1" }] });
+      const g = google({ email: ACCOUNT, scope: GRANTED });
+      assert.equal(await N.disconnectNetwork(one.db, g.fetcher), "disconnected");
+      assert.deepEqual(g.revoked, [], `${clientId}: the HQ reader's grant survives the disconnect`);
+      const g2 = google({ email: ACCOUNT, scope: GRANTED });
+      assert.equal(await save(fakeDb({}).db, g2.fetcher, "someone@fixture.example"), "wrong-account");
+      assert.deepEqual(g2.revoked, [], `${clientId}: nor is it revoked by a rejected consent`);
+    });
+  }
+  // The YouTube grant names no account: it holds every revoke unless its client is provably in another Cloud project.
+  const yt = { YOUTUBE_CLIENT_ID: "111-yt.apps.googleusercontent.com", YOUTUBE_CLIENT_SECRET: "s", YOUTUBE_REFRESH_TOKEN: "r" };
+  assert.equal(envGrantInUse(ACCOUNT, { TEAM_GMAIL_CLIENT_ID: "111-team.apps.googleusercontent.com", ...yt }), true, "same project");
+  assert.equal(envGrantInUse(ACCOUNT, { TEAM_GMAIL_CLIENT_ID: "client-test", ...yt }), true, "a project that cannot be read counts as the same");
+  assert.equal(envGrantInUse(ACCOUNT, { TEAM_GMAIL_CLIENT_ID: "222-team.apps.googleusercontent.com", ...yt }), false, "another project");
+  // Control: with the HQ reader on another account, the disconnect does revoke.
+  await withEnv({ ...team, ...hq, OUTREACH_GMAIL_ACCOUNT: "hq@fixture.example" }, async () => {
     const one = fakeDb({ gtm_network_mailbox: [{ id: 1, address: ACCOUNT, token_ciphertext: sealed, connected_at: "t1" }] });
     const g = google({ email: ACCOUNT, scope: GRANTED });
     assert.equal(await N.disconnectNetwork(one.db, g.fetcher), "disconnected");
-    assert.deepEqual(g.revoked, [], "the HQ reader's grant survives the disconnect");
-    const g2 = google({ email: ACCOUNT, scope: GRANTED });
-    assert.equal(await save(fakeDb({}).db, g2.fetcher, "someone@fixture.example"), "wrong-account");
-    assert.deepEqual(g2.revoked, [], "nor is it revoked by a rejected consent");
-  });
-  await withEnv({ ...team, ...hq, OUTREACH_GMAIL_CLIENT_ID: "another-client" }, async () => {
-    const one = fakeDb({ gtm_network_mailbox: [{ id: 1, address: ACCOUNT, token_ciphertext: sealed, connected_at: "t1" }] });
-    const g = google({ email: ACCOUNT, scope: GRANTED });
-    assert.equal(await N.disconnectNetwork(one.db, g.fetcher), "disconnected");
-    assert.deepEqual(g.revoked, ["refresh-stored"], "control: a setting on another client does not hold this grant");
+    assert.deepEqual(g.revoked, ["refresh-stored"]);
   });
 });
 

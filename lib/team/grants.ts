@@ -1,15 +1,15 @@
-// Whether a Google grant on the shared OAuth client (TEAM_GMAIL_CLIENT_ID) is still in use, and the lock every grant
-// change takes.
+// Whether a Google grant for an account is still in use before the cockpit revokes one, and the lock every grant change
+// takes.
 //
 // One client serves three stored connections: team mailboxes (gtm_team_mailboxes), calendars (gtm_team_calendars,
 // VIB-518) and the network desk's mailbox (gtm_network_mailbox, VIB-522). Deployment settings can hold more grants on the
-// same client: the HQ reader (OUTREACH_GMAIL_*) and the network mailbox override (NETWORK_GMAIL_*). Google revokes per
-// account and client, not per token, so revoking any token of an address kills every grant made with that address on that
-// client. A grant is revoked only when nothing uses the address. A failed lookup counts as in use: when unsure, keep the
-// grant rather than risk killing a live connection.
+// account: the HQ reader (OUTREACH_GMAIL_*) and the network mailbox override (NETWORK_GMAIL_*). Google revokes per
+// account, not per token, and for every client in the same Cloud project, so revoking any token of an address can kill
+// every grant made with that address. A grant is revoked only when nothing uses the address. A failed lookup counts as
+// in use: when unsure, keep the grant rather than risk killing a live connection.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "node:crypto";
-import { gmailConfig, revokeToken } from "./mailbox";
+import { revokeToken } from "./mailbox";
 import { mailboxConfig, networkMailboxConfig } from "../outreach/mailbox";
 
 export const GRANT_TABLES = ["gtm_team_mailboxes", "gtm_team_calendars", "gtm_network_mailbox"] as const;
@@ -17,16 +17,27 @@ export type GrantTable = (typeof GRANT_TABLES)[number];
 type Env = Record<string, string | undefined>;
 
 /**
- * True when a deployment setting holds a grant for the address on the client being revoked (TEAM_GMAIL_CLIENT_ID). A
- * setting on another OAuth client is another grant, which a revoke on this client cannot touch.
+ * True when a deployment setting holds a grant for the address: the HQ reader (OUTREACH_GMAIL_*) or the network override
+ * (NETWORK_GMAIL_*). Whatever OAuth client it uses: Google's revocation invalidates the account's tokens for every client
+ * registered in the same Google Cloud project, and nothing here can prove a setting's client lives in another project, so
+ * the same account always counts as in use. A grant that names no account counts unless its client is in another project.
  */
 export function envGrantInUse(address: string, env: Env = process.env): boolean {
   const a = address.trim().toLowerCase();
-  const client = gmailConfig(env)?.clientId;
   let configs;
   try { configs = [mailboxConfig(env), networkMailboxConfig(env)]; } catch { return true; }
-  return configs.some((c) => !!c && c.email.trim().toLowerCase() === a && (!client || c.clientId.trim() === client));
+  if (configs.some((c) => !!c && c.email.trim().toLowerCase() === a)) return true;
+  // The YouTube Analytics grant (YOUTUBE_*) names no account, so it may be this one. It is safe only when its OAuth client
+  // is provably in another Cloud project than the client being revoked (TEAM_GMAIL_CLIENT_ID).
+  if (env.YOUTUBE_REFRESH_TOKEN?.trim() && env.YOUTUBE_CLIENT_ID?.trim()) {
+    const ours = cloudProject(env.TEAM_GMAIL_CLIENT_ID), theirs = cloudProject(env.YOUTUBE_CLIENT_ID);
+    if (!ours || !theirs || ours === theirs) return true;
+  }
+  return false;
 }
+
+/** The Cloud project number a Google OAuth client id carries (`<project number>-<id>.apps.googleusercontent.com`), or null. */
+export const cloudProject = (clientId: string | undefined) => /^(\d+)-[a-z0-9]+\.apps\.googleusercontent\.com$/.exec(clientId?.trim() ?? "")?.[1] ?? null;
 
 /**
  * True when any connection uses the address, or a lookup failed (an aborted one included). `except` leaves out the
