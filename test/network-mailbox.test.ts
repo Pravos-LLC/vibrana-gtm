@@ -36,7 +36,7 @@ async function withEnv<T>(values: Record<string, string>, fn: () => Promise<T>):
 type Row = Record<string, unknown>;
 /** Just enough of the Supabase client: eq/neq filters, limit, maybeSingle, upsert by id, update, delete; every call recorded.
  *  `fail` makes reads of a table answer with an error. */
-function fakeDb(tables: Record<string, Row[]>, fail: string[] = [], leases = new Map<string, string>()) {
+function fakeDb(tables: Record<string, Row[]>, fail: string[] = [], leases = new Map<string, string>(), gates: Record<string, Promise<void>> = {}) {
   const calls: { table: string; op: string; args: unknown[] }[] = [];
   // gtm_take_lease / gtm_release_lease: one holder per job, like the database functions.
   const rpc = async (fn: string, a: { p_job: string; p_holder: string }) => {
@@ -46,7 +46,9 @@ function fakeDb(tables: Record<string, Row[]>, fail: string[] = [], leases = new
     throw new Error(`unexpected rpc ${fn}`);
   };
   const from = (table: string) => {
-    const st: { op: string; payload: Row | null; filters: ((r: Row) => boolean)[] } = { op: "select", payload: null, filters: [] };
+    const st: { op: string; payload: Row | null; filters: ((r: Row) => boolean)[]; signal?: AbortSignal } = { op: "select", payload: null, filters: [] };
+    // A gated table answers reads only once its gate opens (a slow database); an aborted request answers with an error.
+    const settle = async () => { if (st.op === "select" && table in gates) await gates[table]; return st.signal?.aborted ? { data: null, error: { message: "aborted" } } : run(); };
     const run = () => {
       const rows = (tables[table] ??= []);
       if (fail.includes(table)) return { data: null, error: { message: "boom" } };
@@ -68,12 +70,13 @@ function fakeDb(tables: Record<string, Row[]>, fail: string[] = [], leases = new
       eq: (k: string, v: unknown) => { st.filters.push((r) => r[k] === v); return api; },
       neq: (k: string, v: unknown) => { st.filters.push((r) => r[k] !== v); return api; },
       limit: () => api, order: () => api, range: () => api,
-      maybeSingle: () => { const r = run(); return Promise.resolve({ data: (r.data as Row[] | null)?.[0] ?? null, error: r.error }); },
-      then: (ok: (v: unknown) => unknown, bad: (e: unknown) => unknown) => Promise.resolve(run()).then(ok, bad),
+      abortSignal: (sig: AbortSignal) => { st.signal = sig; return api; },
+      maybeSingle: () => settle().then((r) => ({ data: (r.data as Row[] | null)?.[0] ?? null, error: r.error })),
+      then: (ok: (v: unknown) => unknown, bad: (e: unknown) => unknown) => settle().then(ok, bad),
     };
     return api;
   };
-  return { db: { from, rpc } as never, calls, tables, leases };
+  return { db: { from, rpc } as never, calls, tables, leases, gates };
 }
 
 const idToken = (email: string, verified = true) => `h.${Buffer.from(JSON.stringify({ email, email_verified: verified })).toString("base64url")}.s`;
@@ -89,8 +92,8 @@ function google(answer: { email: string; scope: string; verified?: boolean }) {
   return { fetcher, revoked };
 }
 const GRANTED = `openid https://www.googleapis.com/auth/userinfo.email ${READONLY_SCOPE}`;
-const save = (db: never, fetcher: typeof fetch, expected: string | null = ACCOUNT) =>
-  N.saveNetworkGrant(db, CLIENT, { code: "code", verifier: "verifier", redirectUri: "https://cockpit.test/api/team/mailbox/callback", member: "JOHN", expected, fetcher, now: new Date("2026-11-13T01:00:00Z") });
+const save = (db: never, fetcher: typeof fetch, expected: string | null = ACCOUNT, lockMs?: number) =>
+  N.saveNetworkGrant(db, CLIENT, { code: "code", verifier: "verifier", redirectUri: "https://cockpit.test/api/team/mailbox/callback", member: "JOHN", expected, fetcher, now: new Date("2026-11-13T01:00:00Z"), lockMs });
 
 /* ------------------------------------------------------------------------------------------------ the state and the consent URL */
 
@@ -401,11 +404,53 @@ test("a disconnect deletes only the connection it read: a row saved meanwhile su
 
 test("every grant change in the callback and the disconnect actions holds the grant lock (review of #50, 2)", () => {
   const route = readFileSync(new URL("../app/api/team/mailbox/callback/route.ts", import.meta.url), "utf8");
-  assert.match(route, /withGrantLock\(adminDb\(\), "busy", \(\) => saveCalendar\(/);
-  assert.match(route, /withGrantLock\(adminDb\(\), "busy", \(\) => saveMailbox\(/);
+  assert.match(route, /withGrantLock\(adminDb\(\), "busy", \(lock\) => saveCalendar\([^)]*lock\)\)/);
+  assert.match(route, /withGrantLock\(adminDb\(\), "busy", \(lock\) => saveMailbox\([^)]*lock\)\)/);
+  assert.doesNotMatch(route, /revokeToken\(/, "every revoke goes through revokeIfUnused (in use, and the lock still live)");
   assert.match(route, /saveNetworkGrant\(/, "the network save locks inside saveNetworkGrant (tested above)");
   for (const f of ["../app/team/mailbox/actions.ts", "../app/pipeline/meetings/actions.ts"]) {
     const src = readFileSync(new URL(f, import.meta.url), "utf8");
-    assert.match(src, /const status = await withGrantLock\(db, "busy", async \(\) => \{[\s\S]*revokeToken[\s\S]*\.delete\(\)[\s\S]*\}\);/, `${f}: revoke and delete inside the lock`);
+    assert.match(src, /const status = await withGrantLock\(db, "busy", async \(lock\) => \{[\s\S]*revokeIfUnused\(db, lock,[\s\S]*if \(!lock\.live\(\)\) return "busy";[\s\S]*\.delete\(\)[\s\S]*\}\);/, `${f}: revoke and delete inside the lock, bounded by its time`);
+    assert.doesNotMatch(src, /revokeToken\(/);
   }
+});
+
+test("a lock whose time ran out never revokes after a slow lookup, even once another request has connected (review of #50, round 2)", async () => {
+  // Request A: a grant without gmail.readonly, so it checks whether the account is used, but the lookup is slow.
+  let open!: () => void;
+  const gate = new Promise<void>((r) => { open = r; });
+  const leases = new Map<string, string>();
+  const shared = fakeDb({}, [], leases, { gtm_team_calendars: gate });
+  const a = google({ email: ACCOUNT, scope: "openid email" });
+  const pendingA = save(shared.db, a.fetcher, ACCOUNT, 30);
+  await new Promise((r) => setTimeout(r, 60));
+  // A's time is up. Its lease is treated as expired: request B takes the lock and connects the same account.
+  leases.clear();
+  delete shared.gates.gtm_team_calendars;
+  const b = google({ email: ACCOUNT, scope: GRANTED });
+  assert.equal(await save(shared.db, b.fetcher), "connected");
+  // A's slow lookup finally answers "unused": A must not revoke (it would kill B's grant for this account and client).
+  open();
+  assert.equal(await pendingA, "scope-missing");
+  assert.deepEqual(a.revoked, [], "no revoke after the lock's time ran out");
+  assert.equal(shared.tables.gtm_network_mailbox[0].address, ACCOUNT, "B's connection stands");
+});
+
+test("a lock whose time ran out stores nothing, and a disconnect out of time deletes nothing", async () => {
+  // The exchange outlasts the lock: the grant is kept (it may be the account's live grant) and no row is written.
+  const slow = (async (input: string | URL, init?: RequestInit) => { await new Promise((r) => setTimeout(r, 60)); return google({ email: ACCOUNT, scope: GRANTED }).fetcher(input, init); }) as typeof fetch;
+  const one = fakeDb({});
+  assert.equal(await save(one.db, slow, ACCOUNT, 30), "busy");
+  assert.equal(one.tables.gtm_network_mailbox?.length ?? 0, 0);
+  const sealed = sealToken("refresh-stored", N.networkAad(ACCOUNT));
+  let open!: () => void;
+  const gate = new Promise<void>((r) => { open = r; });
+  const two = fakeDb({ gtm_network_mailbox: [{ id: 1, address: ACCOUNT, token_ciphertext: sealed, connected_at: "t1" }] }, [], new Map(), { gtm_team_calendars: gate });
+  const g = google({ email: ACCOUNT, scope: GRANTED });
+  const pending = N.disconnectNetwork(two.db, g.fetcher, 30);
+  await new Promise((r) => setTimeout(r, 60));
+  open();
+  assert.equal(await pending, "busy");
+  assert.deepEqual(g.revoked, []);
+  assert.equal(two.tables.gtm_network_mailbox.length, 1, "nothing deleted");
 });

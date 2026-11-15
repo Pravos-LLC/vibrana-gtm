@@ -16,9 +16,9 @@
 // - NETWORK_GMAIL_* deployment settings, when all four are set, win over the stored connection.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertLiveProvidersAllowed, providerFetch } from "../demo-safety";
-import { gmailConfig, READONLY_SCOPE, revokeToken, type GmailConfig } from "../team/mailbox";
+import { gmailConfig, READONLY_SCOPE, type GmailConfig } from "../team/mailbox";
 import { openToken, sealToken } from "../team/crypto";
-import { grantInUse, withGrantLock } from "../team/grants";
+import { revokeIfUnused, withGrantLock, type GrantLock } from "../team/grants";
 import { teamMembers, type TeamMember } from "../team/members";
 import { addresses, MailboxRenewError, networkMailboxConfig, type MailboxConfig } from "./mailbox";
 
@@ -56,10 +56,10 @@ export function networkAccount(env: Env = process.env, members?: TeamMember[]): 
 type Grant = { refreshToken: string; email: string; scopes: string[] };
 
 /** Trades the code for tokens. The address comes from the id_token on this direct TLS call; the scopes from Google's answer. */
-export async function exchangeNetworkCode(cfg: GmailConfig, code: string, verifier: string, redirectUri: string, fetcher: typeof fetch = fetch): Promise<Grant> {
+export async function exchangeNetworkCode(cfg: GmailConfig, code: string, verifier: string, redirectUri: string, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<Grant> {
   assertLiveProvidersAllowed();
   const res = await providerFetch(fetcher)("https://oauth2.googleapis.com/token", {
-    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, cache: "no-store", signal: AbortSignal.timeout(15_000),
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, cache: "no-store", signal: signal ? AbortSignal.any([AbortSignal.timeout(15_000), signal]) : AbortSignal.timeout(15_000),
     body: new URLSearchParams({ client_id: cfg.clientId, client_secret: cfg.clientSecret, code, code_verifier: verifier, redirect_uri: redirectUri, grant_type: "authorization_code" }),
   });
   const body = await res.json().catch(() => ({})) as { refresh_token?: string; id_token?: string; scope?: string };
@@ -75,29 +75,33 @@ export type SaveStatus = "connected" | "wrong-account" | "scope-missing" | "goog
  * Finishes the consent for the signed-in network owner: the grant is kept only when Google's confirmed address is the
  * expected account and gmail.readonly was granted. A refused grant is revoked only when no connection uses the address.
  * A reconnect replaces the stored row and never revokes the previous token (Google would revoke the new one with it).
- * The whole change, from the code exchange to the stored row, holds the grant lock (lib/team/grants.ts).
+ * The whole change, from the code exchange to the stored row, holds the grant lock (lib/team/grants.ts), and stops when
+ * its time is up: no write or revoke starts after that. `lockMs` shortens that time in tests.
  */
-export async function saveNetworkGrant(db: SupabaseClient, cfg: GmailConfig, o: { code: string; verifier: string; redirectUri: string; member: string; expected: string | null; fetcher?: typeof fetch; now?: Date }): Promise<SaveStatus> {
+export async function saveNetworkGrant(db: SupabaseClient, cfg: GmailConfig, o: { code: string; verifier: string; redirectUri: string; member: string; expected: string | null; fetcher?: typeof fetch; now?: Date; lockMs?: number }): Promise<SaveStatus> {
   const expected = oneAddress(o.expected);
   if (!expected) return "no-account";
-  return withGrantLock<SaveStatus>(db, "busy", () => saveLocked(db, cfg, o, expected));
+  return withGrantLock<SaveStatus>(db, "busy", (lock) => saveLocked(db, cfg, o, expected, lock), o.lockMs);
 }
 
-async function saveLocked(db: SupabaseClient, cfg: GmailConfig, o: { code: string; verifier: string; redirectUri: string; member: string; fetcher?: typeof fetch; now?: Date }, expected: string): Promise<SaveStatus> {
+async function saveLocked(db: SupabaseClient, cfg: GmailConfig, o: { code: string; verifier: string; redirectUri: string; member: string; fetcher?: typeof fetch; now?: Date }, expected: string, lock: GrantLock): Promise<SaveStatus> {
   let g: Grant;
-  try { g = await exchangeNetworkCode(cfg, o.code, o.verifier, o.redirectUri, o.fetcher); } catch { return "google-refused"; }
+  try { g = await exchangeNetworkCode(cfg, o.code, o.verifier, o.redirectUri, o.fetcher, lock.signal); } catch { return "google-refused"; }
+  // A refused grant is revoked only when nothing uses the address and the lock is still live after the lookup.
   const refuse = async (status: SaveStatus) => {
-    if (!(await grantInUse(db, g.email))) await revokeToken(g.refreshToken, o.fetcher);
+    await revokeIfUnused(db, lock, g.email, g.refreshToken, { fetcher: o.fetcher });
     return status;
   };
   if (g.email !== expected) return refuse("wrong-account");
   if (!g.scopes.includes(READONLY_SCOPE)) return refuse("scope-missing");
+  // Out of time: keep the grant (it may be the account's live grant) and store nothing.
+  if (!lock.live()) return "busy";
   const at = (o.now ?? new Date()).toISOString();
   const { error } = await db.from(NETWORK_TABLE).upsert({
     id: 1, address: g.email, token_ciphertext: sealToken(g.refreshToken, networkAad(g.email)), key_version: 1,
     granted_scopes: g.scopes.filter((s) => s.startsWith("https://www.googleapis.com/auth/gmail.")), connected_by: o.member,
     connected_at: at, last_sync_at: null, last_error: null, reconnect_needed_at: null,
-  }, { onConflict: "id" });
+  }, { onConflict: "id" }).abortSignal(lock.signal);
   if (error) return refuse("save-failed");
   return "connected";
 }
@@ -108,18 +112,19 @@ type DisconnectStatus = "disconnected" | "disconnect-failed" | "not-connected" |
  * Deletes the stored connection; revokes it at Google only when nothing else uses the address. Holds the grant lock, so a
  * reconnect cannot be saved between the read and the delete, and deletes only the connection it read (its connected_at).
  */
-export async function disconnectNetwork(db: SupabaseClient, fetcher: typeof fetch = fetch): Promise<DisconnectStatus> {
-  return withGrantLock<DisconnectStatus>(db, "busy", async () => {
-    const { data, error } = await db.from(NETWORK_TABLE).select("address,token_ciphertext,connected_at").eq("id", 1).maybeSingle();
+export async function disconnectNetwork(db: SupabaseClient, fetcher: typeof fetch = fetch, lockMs?: number): Promise<DisconnectStatus> {
+  return withGrantLock<DisconnectStatus>(db, "busy", async (lock) => {
+    const { data, error } = await db.from(NETWORK_TABLE).select("address,token_ciphertext,connected_at").eq("id", 1).abortSignal(lock.signal).maybeSingle();
     if (error) return "disconnect-failed";
     if (!data) return "not-connected";
     const row = data as { address: string; token_ciphertext: string; connected_at: string };
-    if (!(await grantInUse(db, row.address, { table: "gtm_network_mailbox" }))) {
-      try { await revokeToken(openToken(row.token_ciphertext, networkAad(row.address)), fetcher); } catch { /* deleted below either way */ }
-    }
-    const del = await db.from(NETWORK_TABLE).delete().eq("id", 1).eq("connected_at", row.connected_at).select("id");
+    let token: string | null = null;
+    try { token = openToken(row.token_ciphertext, networkAad(row.address)); } catch { /* deleted below either way */ }
+    if (token) await revokeIfUnused(db, lock, row.address, token, { except: { table: "gtm_network_mailbox" }, fetcher });
+    if (!lock.live()) return "busy";
+    const del = await db.from(NETWORK_TABLE).delete().eq("id", 1).eq("connected_at", row.connected_at).abortSignal(lock.signal).select("id");
     return del.error || !del.data?.length ? "disconnect-failed" : "disconnected";
-  });
+  }, lockMs);
 }
 
 /* ------------------------------------------------------------------------------------------------ reading */

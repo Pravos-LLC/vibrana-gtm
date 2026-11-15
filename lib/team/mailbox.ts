@@ -84,10 +84,11 @@ export async function exchangeCode(cfg: GmailConfig, code: string, verifier: str
   return { refreshToken: body.refresh_token, accessToken: body.access_token ?? null, email: claims.email.toLowerCase(), grantedScopes };
 }
 
-export async function revokeToken(token: string, fetcher: typeof fetch = fetch) {
+export async function revokeToken(token: string, fetcher: typeof fetch = fetch, signal?: AbortSignal) {
   assertLiveProvidersAllowed();
   await providerFetch(fetcher)("https://oauth2.googleapis.com/revoke", {
-    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token }), signal: AbortSignal.timeout(10_000),
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token }),
+    signal: signal ? AbortSignal.any([AbortSignal.timeout(10_000), signal]) : AbortSignal.timeout(10_000),
   }).catch(() => undefined);
 }
 

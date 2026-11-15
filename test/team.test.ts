@@ -368,12 +368,14 @@ test("the reader pages with the cursor and stops at the deadline", async () => {
 
 test("a reconnect never revokes the previous token: Google would revoke the new grant with it (review NB1)", () => {
   const src = readFileSync(new URL("../app/api/team/mailbox/callback/route.ts", import.meta.url), "utf8");
-  assert.equal((src.match(/revokeToken\(/g) ?? []).length, 3, "only the wrong-mailbox and the two failed-save paths revoke, each the token just granted");
   assert.doesNotMatch(src, /openToken/);
-  // Every in-use check is the shared one: a mailbox, a calendar or the network mailbox on the address keeps the grant, and a
-  // failed lookup counts as in use (behaviour: test/network-mailbox.test.ts).
-  assert.match(src, /const inUse = \(\) => grantInUse\(adminDb\(\), granted\.email\);/, "the mailbox save checks every connection before revoking");
-  assert.match(src, /const inUse = \(address: string\) => grantInUse\(db, address\);/, "the calendar save checks every connection before revoking");
+  // Only the wrong-mailbox and the two failed-save paths revoke, each the token just granted, and only through
+  // revokeIfUnused: a mailbox, a calendar or the network mailbox on the address keeps the grant, a failed lookup counts as
+  // in use, and nothing is revoked once the lock's time is up (behaviour: test/network-mailbox.test.ts).
+  assert.equal((src.match(/revokeIfUnused\(/g) ?? []).length, 2, "the mailbox save's shared revoke and the calendar's save-failed path");
+  assert.match(src, /const revoke = \(\) => revokeIfUnused\(db, lock, granted\.email, granted\.refreshToken\);/);
+  assert.equal((src.match(/await revoke\(\);/g) ?? []).length, 2, "wrong mailbox and failed save");
+  assert.doesNotMatch(src, /revokeToken\(/, "no revoke that skips the in-use and lock checks");
   assert.doesNotMatch(src, /from\("gtm_team_mailboxes"\)\.select\("member"\)/, "no hand-rolled lookup that could miss a connection");
 });
 

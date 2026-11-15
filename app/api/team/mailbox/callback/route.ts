@@ -1,11 +1,11 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/db";
-import { exchangeCode, gmailConfig, mailboxAad, revokeToken, stateKey } from "@/lib/team/mailbox";
+import { exchangeCode, gmailConfig, mailboxAad, stateKey } from "@/lib/team/mailbox";
 import { calendarAad, exchangeCalendarCode } from "@/lib/team/calendar";
 import { sealToken, verifyState } from "@/lib/team/crypto";
 import { NONCE_COOKIE, VERIFIER_COOKIE, clearFlowCookies, origin, redirectUri, viewer } from "@/lib/team/connect";
-import { grantInUse, withGrantLock } from "@/lib/team/grants";
+import { revokeIfUnused, withGrantLock, type GrantLock } from "@/lib/team/grants";
 import type { TeamMember } from "@/lib/team/members";
 import { NETWORK_OWNER, NETWORK_PAGE, networkAccount, saveNetworkGrant } from "@/lib/outreach/network-mailbox";
 
@@ -46,29 +46,30 @@ export async function GET(request: Request) {
   const cfg = gmailConfig();
   if (!cfg) return back("not-configured");
   // Every grant change holds one lock (lib/team/grants.ts): a revoke elsewhere can never land between this exchange and its save.
-  if (s.purpose === "calendar") return back(await withGrantLock(adminDb(), "busy", () => saveCalendar(cfg, code, verifier, member.code)));
+  if (s.purpose === "calendar") return back(await withGrantLock(adminDb(), "busy", (lock) => saveCalendar(cfg, code, verifier, member.code, lock)));
   // The network desk's mailbox: only its owner connects it, and only as the expected account (lib/outreach/network-mailbox.ts).
   if (s.purpose === "network") {
     if (member.code !== NETWORK_OWNER) return back("not-owner");
     return back(await saveNetworkGrant(adminDb(), cfg, { code, verifier, redirectUri: await redirectUri(), member: member.code, expected: networkAccount() }));
   }
-  return back(await withGrantLock(adminDb(), "busy", () => saveMailbox(cfg, code, verifier, member)));
+  return back(await withGrantLock(adminDb(), "busy", (lock) => saveMailbox(cfg, code, verifier, member, lock)));
 }
 
 /** The member's own team mailbox: Google's confirmed address must be one of the member's configured mailboxes. */
-async function saveMailbox(cfg: NonNullable<ReturnType<typeof gmailConfig>>, code: string, verifier: string, member: TeamMember): Promise<string> {
+async function saveMailbox(cfg: NonNullable<ReturnType<typeof gmailConfig>>, code: string, verifier: string, member: TeamMember, lock: GrantLock): Promise<string> {
   let granted: Awaited<ReturnType<typeof exchangeCode>>;
   try { granted = await exchangeCode(cfg, code, verifier, await redirectUri()); } catch { return "google-refused"; }
   // Google revokes per account and client, not per token: revoking would also kill a live connection of that address
   // (another member's mailbox, or this one's own reconnect). Only a grant nobody uses is revoked (review of #23, N-f).
   // A failed lookup counts as "in use". The calendar (VIB-518) and network mailbox (VIB-522) connections use the same
-  // client, so their grants for this address count too (lib/team/grants.ts).
-  const inUse = () => grantInUse(adminDb(), granted.email);
+  // client, so their grants for this address count too, and no revoke starts once the lock's time is up (lib/team/grants.ts).
+  const db = adminDb();
+  const revoke = () => revokeIfUnused(db, lock, granted.email, granted.refreshToken);
   if (!member.mailboxes.includes(granted.email)) {
-    if (!(await inUse())) await revokeToken(granted.refreshToken);
+    await revoke();
     return "wrong-mailbox";
   }
-  const db = adminDb();
+  if (!lock.live()) return "busy";
   // A reconnect simply replaces the stored token. The old one is never revoked here: Google revokes the whole grant for
   // the account and client, which would kill the token just issued (review of #23, NB1).
   const { error } = await db.from("gtm_team_mailboxes").upsert({
@@ -76,11 +77,11 @@ async function saveMailbox(cfg: NonNullable<ReturnType<typeof gmailConfig>>, cod
     key_version: 1, history_id: null, backfill_done: false, connected_at: new Date().toISOString(), last_sync_at: null, last_error: null,
     // What Google granted, read from its answer: body-dependent work checks this, never the scope the code asked for.
     granted_scopes: granted.grantedScopes, scopes_checked_at: new Date().toISOString(),
-  }, { onConflict: "member,address" });
+  }, { onConflict: "member,address" }).abortSignal(lock.signal);
   // A fresh connection starts a fresh backfill: no cursor or pending ids from an earlier connection carry over.
   if (!error) await db.from("gtm_sync_state").delete().eq("key", stateKey(member.code, granted.email));
   if (error) {
-    if (!(await inUse())) await revokeToken(granted.refreshToken);
+    await revoke();
     return "save-failed";
   }
   return "connected";
@@ -89,20 +90,20 @@ async function saveMailbox(cfg: NonNullable<ReturnType<typeof gmailConfig>>, cod
 /** The calendar connection: any Google account the signed-in member consents with (a calendar can live on another address
  *  than their mailbox). The calendar scope must be granted. One client serves the mailbox, the calendar and the
  *  network mailbox, and Google revokes per account and client, so a grant is revoked only when no connection uses that address. */
-async function saveCalendar(cfg: NonNullable<ReturnType<typeof gmailConfig>>, code: string, verifier: string, member: string): Promise<string> {
+async function saveCalendar(cfg: NonNullable<ReturnType<typeof gmailConfig>>, code: string, verifier: string, member: string, lock: GrantLock): Promise<string> {
   const db = adminDb();
-  const inUse = (address: string) => grantInUse(db, address);
   let granted: Awaited<ReturnType<typeof exchangeCalendarCode>>;
   // A grant without the calendar scope is not revoked: it may be the same account's live mailbox grant.
   try { granted = await exchangeCalendarCode(cfg, code, verifier, await redirectUri()); } catch (e) {
     return (e as { scopeMissing?: boolean }).scopeMissing ? "scope-missing" : "google-refused";
   }
+  if (!lock.live()) return "busy";
   const { error } = await db.from("gtm_team_calendars").upsert({
     member, address: granted.email, token_ciphertext: sealToken(granted.refreshToken, calendarAad(member, granted.email)), key_version: 1,
     granted_scopes: granted.grantedScopes, connected_at: new Date().toISOString(), last_sync_at: null, last_error: null, last_result: null,
-  }, { onConflict: "member,address" });
+  }, { onConflict: "member,address" }).abortSignal(lock.signal);
   if (error) {
-    if (!(await inUse(granted.email))) await revokeToken(granted.refreshToken);
+    await revokeIfUnused(db, lock, granted.email, granted.refreshToken);
     return "save-failed";
   }
   return "connected";
