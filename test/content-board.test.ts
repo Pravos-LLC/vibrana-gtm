@@ -68,7 +68,7 @@ test("a one-piece link reads and signs only that piece; the piece list still nam
   assert.equal(board.error, null);
   if (board.error !== null) return;
   assert.deepEqual(signed, ["stories/s1-01-a/a-img.png"]);
-  assert.deepEqual(reads.find((r) => r.table === "gtm_story_assets")?.ids, ["s1-01-a"]);
+  assert.deepEqual(reads.find((r) => r.table === "gtm_story_assets" && r.ids)?.ids, ["s1-01-a"], "the piece read, not the board's open-review lookup (by asset id)");
   assert.deepEqual(board.all.map((p) => p.storyId), ["s1-01-a"]);
   assert.deepEqual(board.pieceOptions.map((p) => p.id), ["s1-01-a", "s1-02-b"]);
   assert.deepEqual(filterPieces(board.directed, filters).map((p) => p.storyId), ["s1-01-a"]);

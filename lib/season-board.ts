@@ -1,6 +1,9 @@
 // Which Stories /content lists. A season piece (`s<N>-...`) or a Story a season claims is always on the board; so is any
-// Story with a calendar item still to go out. Without that last rule a Signal Desk post (`signal-...`, no season) could
-// wait for approval where John could never see it (the Ultramarine post, 2026-10-16). A killed piece (`gtm piece kill`,
+// Story with a calendar item still to go out, and any Story with a review still open (a channel pending or sent back).
+// Without those rules a Signal Desk post (`signal-...`, no season) could wait for approval where John could never see it
+// (the Ultramarine post, 2026-10-16). The calendar rule alone was not enough: approval is what puts a Story without a
+// season on the calendar (lib/auto-schedule.ts materializeItem), so a freshly staged one had no row, never showed, and
+// could never be approved (signal-pax-silica-aeta, 2026-11-17: its slot passed unseen). A killed piece (`gtm piece kill`,
 // Kill piece) leaves the board, season piece or not. Killed means a kill recorded it, never that its rows happen to be
 // skipped: a reconcile also skips placeholders, and inferring a kill from that hid pieces waiting on John (review #151
 // N3, s1-01-example-record-1 on 2026-10-17). Every read is complete and fails loudly: an empty set would silently drop
@@ -18,11 +21,12 @@ export const KILLED_KEY = "pieces.killed";
 export const KILLED_NOTE = /^Killed[:\s]/;
 
 /**
- * From calendar rows and the kill record: Stories with a post still to go (`live`), and killed Stories (`killed`): those a
- * kill recorded, while every row they have is skipped or published, or they have none (a piece staged again after a kill
- * has a live row and comes back).
+ * From calendar rows, open reviews and the kill record: Stories with a post still to go or a review still open (`live`),
+ * and killed Stories (`killed`): those a kill recorded, while every row they have is skipped or published, or they have
+ * none (a piece staged again after a kill has a live row and comes back). An open review alone never brings a killed
+ * piece back: a kill leaves the review rows it found pending.
  */
-export function boardSets(rows: { story_id: string; status: string }[], recorded: Set<string> = new Set()): BoardIds {
+export function boardSets(rows: { story_id: string; status: string }[], recorded: Set<string> = new Set(), reviewing: Set<string> = new Set()): BoardIds {
   const byStory = new Map<string, string[]>();
   for (const r of rows) byStory.set(r.story_id, [...(byStory.get(r.story_id) ?? []), r.status]);
   const live = new Set<string>(), killed = new Set<string>();
@@ -32,6 +36,7 @@ export function boardSets(rows: { story_id: string; status: string }[], recorded
   }
   // A piece killed before it was ever scheduled has no rows to loop over, and is still killed.
   for (const id of recorded) if (!live.has(id)) killed.add(id);
+  for (const id of reviewing) if (!killed.has(id)) live.add(id);
   return { live, killed };
 }
 
@@ -47,13 +52,23 @@ export async function recordedKills(db: SupabaseClient): Promise<Set<string>> {
   return out;
 }
 
-/** The live and killed Story ids, from every calendar row that belongs to a Story and the kill record. */
+/** Stories with a review still open: any asset whose channel is pending or sent back (a complete read; a failed one throws). */
+export async function reviewingStoryIds(db: SupabaseClient): Promise<Set<string>> {
+  const open = await readPages<{ asset_id: string }>((from, to) => db.from("gtm_story_asset_channels").select("asset_id,channel", { count: "exact" })
+    .in("status", ["pending", "rejected"]).order("asset_id").order("channel").range(from, to), "open reviews");
+  if (!open.length) return new Set();
+  const assets = await readChunks<{ story_id: string }>(open.map((r) => r.asset_id), (ids, from, to) => db.from("gtm_story_assets").select("id,story_id", { count: "exact" }).in("id", ids).order("id").range(from, to), "stories in review");
+  return new Set(assets.map((a) => a.story_id));
+}
+
+/** The live and killed Story ids, from every calendar row that belongs to a Story, the open reviews and the kill record. */
 export async function boardStoryIds(db: SupabaseClient): Promise<BoardIds> {
-  const [rows, recorded] = await Promise.all([
+  const [rows, recorded, reviewing] = await Promise.all([
     readPages<{ story_id: string; status: string }>((from, to) => db.from("gtm_content_items").select("id,story_id,status", { count: "exact" }).not("story_id", "is", null).order("id").range(from, to), "board calendar items"),
     recordedKills(db),
+    reviewingStoryIds(db),
   ]);
-  return boardSets(rows, recorded);
+  return boardSets(rows, recorded, reviewing);
 }
 
 /** Story ids that have a calendar item not yet published or skipped (a complete read; a failed one throws). */
