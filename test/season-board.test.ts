@@ -72,13 +72,16 @@ test("the kill record is read completely and fails loudly", async () => {
 
 test("a Story with a review still open is on the board before it has a calendar row (signal-pax-silica-aeta, 2026-11-17)", () => {
   // Approval is what makes the calendar row for a Story without a season, so the review has to be visible without one.
-  const { live, killed } = boardSets([], new Set(["s1-34-killed"]), new Set(["signal-staged", "s1-34-killed"]));
+  const rows = [{ story_id: "signal-banked", status: "banked" }, { story_id: "signal-published", status: "published" }, { story_id: "signal-skipped", status: "skipped" }];
+  const reviewing = new Set(["signal-staged", "s1-34-killed", "signal-banked", "signal-published", "signal-skipped"]);
+  const { live, killed } = boardSets(rows, new Set(["s1-34-killed"]), reviewing);
   assert.equal(onBoard({ id: "signal-staged", season_id: null }, live, killed), true);
   assert.equal(onBoard({ id: "s1-34-killed" }, live, killed), false, "an open review never brings a killed piece back");
+  for (const id of ["signal-banked", "signal-published", "signal-skipped"]) assert.equal(onBoard({ id, season_id: null }, live, killed), false, `${id}: its calendar row decides, not its leftover review`);
   assert.equal(onBoard({ id: "kb-tokenmaxxing", season_id: null }, live, killed), false, "no review, no row, no season: not listed");
 });
 
-test("open reviews are read completely, by status, and a failed read throws", async () => {
+test("open reviews are read completely, skip Stories the calendar decides, and a failed read throws", async () => {
   const { createClient } = await import("@supabase/supabase-js");
   const { installFetchMock } = await import("./support/fetch-mock.ts");
   const { boardStoryIds, reviewingStoryIds } = await import("../lib/season-board.ts");
@@ -86,15 +89,21 @@ test("open reviews are read completely, by status, and a failed read throws", as
   const ok = installFetchMock([
     { url: "http://db.test/rest/v1/gtm_sync_state", json: { value: {} } },
     { url: "http://db.test/rest/v1/gtm_story_feedback", json: [] },
-    { url: "http://db.test/rest/v1/gtm_story_asset_channels", json: [{ asset_id: "signal-staged-linkedin", channel: "linkedin" }] },
-    { url: "http://db.test/rest/v1/gtm_story_assets", json: [{ id: "signal-staged-linkedin", story_id: "signal-staged" }] },
-    { url: "http://db.test/rest/v1/gtm_content_items", json: [] },
+    { url: "http://db.test/rest/v1/gtm_content_items", json: [{ id: "x", story_id: "signal-banked", status: "banked" }] },
+    { url: "http://db.test/rest/v1/gtm_story_asset_channels", times: 1, json: [
+      { asset_id: "signal-staged-linkedin", channel: "linkedin", status: "pending", gtm_story_assets: { story_id: "signal-staged" } },
+      { asset_id: "signal-banked-linkedin", channel: "linkedin", status: "pending", gtm_story_assets: { story_id: "signal-banked" } },
+    ] },
+    { url: "http://db.test/rest/v1/gtm_story_assets", json: [{ id: "signal-staged-linkedin", story_id: "signal-staged", kind: "copy", source: "linkedin.md", body: "Hi", metadata: {} }] },
+    { url: "http://db.test/rest/v1/gtm_story_asset_channels", json: [{ asset_id: "signal-staged-linkedin", channel: "linkedin", status: "pending" }] },
   ]);
   try {
     const { live } = await boardStoryIds(db);
-    assert.deepEqual([...live], ["signal-staged"]);
-    const q = new URL(ok.calls.find((c) => c.url.includes("gtm_story_asset_channels"))!.url).searchParams;
-    assert.equal(q.get("status"), "in.(pending,rejected)");
+    assert.deepEqual([...live], ["signal-staged"], "the banked Story's leftover review does not list it");
+    const first = new URL(ok.calls.find((c) => c.url.includes("gtm_story_asset_channels"))!.url).searchParams;
+    assert.equal(first.get("status"), "in.(pending,rejected)");
+    const assetRead = new URL(ok.calls.find((c) => new URL(c.url).pathname.endsWith("/gtm_story_assets"))!.url).searchParams;
+    assert.equal(assetRead.get("story_id"), "in.(signal-staged)", "only undecided Stories are read in full");
   } finally { ok.restore(); }
   const failing = installFetchMock([{ url: "http://db.test/rest/v1/gtm_story_asset_channels", status: 500, json: { message: "reviews down" } }]);
   try { await assert.rejects(reviewingStoryIds(db), /open reviews: reviews down/); } finally { failing.restore(); }
