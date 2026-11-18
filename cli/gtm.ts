@@ -1883,6 +1883,7 @@ const commands: Record<string, () => Promise<void>> = {
       return out(r, () => {
         console.log(`synced through ${r.through}: ${r.channelDays} channel days, ${r.videoDays} video days, ${r.dims} traffic/country rows, ${r.reach.rows} reach rows from ${r.reach.files} new report files${r.reach.jobCreated ? " (reach job just created: impressions and CTR appear within about a day)" : ""}; ${r.weeks} weeks rolled into /performance; subscribers ${r.subscribers ?? "hidden"}`);
         for (const e of r.reachErrors) console.error(`reach file skipped: ${e}`);
+        if (r.partialWeeks.length) console.log(`not rolled up yet (reach missing for some days, retried next sync): ${r.partialWeeks.map((w) => `week of ${w}`).join(", ")}`);
       });
     }
     if (sub === "import") {

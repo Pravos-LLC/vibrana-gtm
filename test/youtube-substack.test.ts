@@ -183,7 +183,7 @@ function fakeDb() {
   return { db: { from } as never, t };
 }
 
-test("sync: country is queried per day, a deleted video gets a placeholder, a reissued report counts once, and the weekly row is written", async () => {
+test("sync: country is queried per day, a deleted video gets a placeholder, a reissued report counts once, and a part-reached week is held back", async () => {
   const G = "https://youtubeanalytics.googleapis.com/v2/reports";
   const csv = (imp: number) => `date,channel_id,video_id,video_thumbnail_impressions,video_thumbnail_impressions_ctr\n20261026,UC1,gone_video_1,${imp},0.1\n20261026,UC1,live_video_1,${imp * 3},0.02\n`;
   const m = installFetchMock([
@@ -208,8 +208,10 @@ test("sync: country is queried per day, a deleted video gets a placeholder, a re
   const ids = t.gtm_yt_videos.map((v) => v.video_id).sort();
   assert.deepEqual(ids, ["gone_video_1", "live_video_1"]); // the deleted video has a placeholder row
   assert.equal(t.gtm_yt_channel_daily.find((d) => d.date === "2026-10-26")!.impressions, 110 + 330); // counted once, not 210 + ...
-  const week = t.gtm_manual_metrics.find((x) => x.week_start === "2026-10-26" && x.channel === "youtube")!;
-  assert.equal((week.metrics as Record<string, number>).impressions, 440);
+  // Only Monday has reach, so the week is held back and reported rather than written as an undercount
+  // (complete weeks are covered in youtube-reach.test.ts).
+  assert.deepEqual(r.partialWeeks, ["2026-10-26"]);
+  assert.ok(!(t.gtm_manual_metrics ?? []).some((x) => x.week_start === "2026-10-26"));
   // Country was requested one day at a time (dimensions=country, never day,country).
   const country = m.calls.filter((c) => c.url.includes("dimensions=country"));
   assert.equal(country.length, 10);

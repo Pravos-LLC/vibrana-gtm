@@ -21,7 +21,12 @@ const chunk = <T,>(xs: T[], n = 500) => Array.from({ length: Math.ceil(xs.length
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const col = (t: Table, name: string) => t.columns.indexOf(name);
 
-/** Weekly roll-up of reach: impressions summed, CTR weighted by impressions (never an average of rates). */
+type ReachDay = { date: string; impressions: number | null; ctr: number | null };
+
+/**
+ * Weekly roll-up of reach: impressions summed, CTR weighted by impressions (never an average of rates). It sums
+ * whatever days are present; `completeReachWeeks` is the gate that decides whether a week may be written.
+ */
 export function weeklyReach(rows: { date: string; impressions: number | null; ctr: number | null }[], throughDate: string): { week_start: string; impressions: number; ctr: number | null }[] {
   const by = new Map<string, { imp: number; clicks: number }>();
   for (const r of rows) {
@@ -31,6 +36,27 @@ export function weeklyReach(rows: { date: string; impressions: number | null; ct
     by.set(w, a);
   }
   return [...by].filter(([w]) => addDays(w, 6) <= throughDate).map(([week_start, a]) => ({ week_start, impressions: a.imp, ctr: a.imp ? Math.round((a.clicks / a.imp) * 10000) / 100 : null }));
+}
+
+/**
+ * Splits the finished weeks into those with impressions on all seven days (safe to roll up) and the rest. Reach
+ * reports arrive three or four days after views, so a week summed before its last day lands would be an undercount
+ * that never heals once written. A finished week with any row but fewer than seven reach days is `partial`.
+ */
+export function completeReachWeeks(rows: ReachDay[], throughDate: string): { weeks: ReturnType<typeof weeklyReach>; partial: string[] } {
+  const reachDays = new Map<string, Set<string>>(), seen = new Set<string>();
+  for (const r of rows) {
+    if (r.date > throughDate) continue;
+    const w = mondayOf(r.date);
+    seen.add(w);
+    if (r.impressions != null) (reachDays.get(w) ?? reachDays.set(w, new Set()).get(w)!).add(r.date);
+  }
+  const done = (w: string) => addDays(w, 6) <= throughDate;
+  const complete = (w: string) => (reachDays.get(w)?.size ?? 0) >= 7;
+  return {
+    weeks: weeklyReach(rows, throughDate).filter((w) => complete(w.week_start)),
+    partial: [...seen].filter((w) => done(w) && !complete(w)).sort(),
+  };
 }
 
 export async function upsertVideos(db: SupabaseClient, videos: VideoMeta[], opts: { ignoreExisting?: boolean } = {}) {
@@ -50,10 +76,14 @@ export async function upsertChannelDays(db: SupabaseClient, rows: { date: string
   for (const c of byShape(rows.map((d) => ({ ...d, source, updated_at: new Date().toISOString() }))).flatMap((g) => chunk(g))) must(await db.from("gtm_yt_channel_daily").upsert(c, { onConflict: "date", ignoreDuplicates: !!opts.ignoreExisting }), "yt channel daily");
 }
 
-/** Writes each finished week's impressions and CTR into the manual row, keeping any number already typed in. */
-export async function rollUpManual(db: SupabaseClient, throughDate: string, sinceDate: string) {
-  const days = must(await db.from("gtm_yt_channel_daily").select("date,impressions,ctr").gte("date", mondayOf(sinceDate)).lte("date", throughDate), "yt channel daily read") as { date: string; impressions: number | null; ctr: number | null }[];
-  const weeks = weeklyReach(days, throughDate);
+/**
+ * Writes each finished week's impressions and CTR into the manual row, keeping any number already typed in. A week
+ * missing reach on any of its days is skipped and returned in `partialWeeks`, so whatever the row already holds
+ * (a complete roll-up or a hand-typed number) stays until the full week is in.
+ */
+export async function rollUpManual(db: SupabaseClient, throughDate: string, sinceDate: string): Promise<{ weeks: number; partialWeeks: string[] }> {
+  const days = must(await db.from("gtm_yt_channel_daily").select("date,impressions,ctr").gte("date", mondayOf(sinceDate)).lte("date", throughDate), "yt channel daily read") as ReachDay[];
+  const { weeks, partial } = completeReachWeeks(days, throughDate);
   for (const w of weeks) {
     if (w.ctr == null) continue;
     const prior = must(await db.from("gtm_manual_metrics").select("metrics,note,entered_by").eq("week_start", w.week_start).eq("channel", "youtube").maybeSingle(), "manual read") as { metrics: Record<string, number>; note: string; entered_by: string } | null;
@@ -61,10 +91,11 @@ export async function rollUpManual(db: SupabaseClient, throughDate: string, sinc
     if (prior && prior.entered_by !== "youtube-api" && (typeof prior.metrics?.impressions === "number" || typeof prior.metrics?.ctr === "number")) continue;
     must(await db.from("gtm_manual_metrics").upsert({ week_start: w.week_start, channel: "youtube", metrics: { ...(prior?.metrics ?? {}), impressions: w.impressions, ctr: w.ctr }, note: prior?.note ?? "", entered_by: "youtube-api", updated_at: new Date().toISOString() }, { onConflict: "week_start,channel" }), "manual write");
   }
-  return weeks.length;
+  return { weeks: weeks.length, partialWeeks: partial };
 }
 
-export type SyncResult = { videos: number; videoDays: number; channelDays: number; dims: number; reach: { files: number; rows: number; jobCreated: boolean }; subscribers: number | null; weeks: number; through: string; reachErrors: string[] };
+/** `partialWeeks`: finished weeks (Monday dates) left out of the roll-up because some day has no reach yet. */
+export type SyncResult = { videos: number; videoDays: number; channelDays: number; dims: number; reach: { files: number; rows: number; jobCreated: boolean }; subscribers: number | null; weeks: number; partialWeeks: string[]; through: string; reachErrors: string[] };
 
 /** `today` is the UTC date; the API settles about two days late, so the window ends two days before it. */
 export async function syncYouTube(db: SupabaseClient, opts: { today: string; days?: number; env?: Record<string, string | undefined> }): Promise<SyncResult> {
@@ -101,8 +132,15 @@ export async function syncYouTube(db: SupabaseClient, opts: { today: string; day
   // One bad file (a CTR scale or column change) must not stop the views, titles and roll-up. It is reported, not marked
   // as read, so it is retried once the parser is fixed.
   const reachErrors: string[] = [], bad = new Set<string>();
+  // Video ids each ingested file reports, by the day it covers; read below to clear reach a reissue no longer carries.
+  const inFile = new Map<string, Set<string>>();
   for (const f of fresh) {
-    try { const rows = parseReach(await downloadReport(token, f.downloadUrl)); perFile.set(f.id, rows.length); reach.push(...rows); }
+    try {
+      const rows = parseReach(await downloadReport(token, f.downloadUrl)), day = f.startTime.slice(0, 10);
+      perFile.set(f.id, rows.length); reach.push(...rows);
+      // Only the file's own day is replaced (cleared or zeroed); a row dated otherwise is added but proves nothing there.
+      inFile.set(day, new Set(rows.filter((r) => r.date === day).map((r) => r.video_id)));
+    }
     catch (e) { bad.add(f.id); reachErrors.push(`${f.startTime.slice(0, 10)}: ${(e as Error).message}`); console.error(`youtube sync: reach file ${f.id}: ${(e as Error).message}`); }
   }
   for (const r of reach) ids.add(r.video_id);
@@ -122,8 +160,18 @@ export async function syncYouTube(db: SupabaseClient, opts: { today: string; day
   for (const r of reach) { const k = `${r.date}|${r.video_id}`; merged.set(k, { ...(merged.get(k) ?? { date: r.date, video_id: r.video_id }), impressions: r.impressions, ctr: r.ctr }); }
   await upsertVideoDays(db, [...merged.values()] as never, "api");
 
+  // The newest file for a day replaces the day's reach. A video an earlier file named but this one does not keeps stale
+  // impressions unless cleared, so those rows get impressions and ctr set to null. A plain update on just those two
+  // columns: views, the other analytics and the source of a Studio-imported row are left as they are.
+  for (const [date, present] of inFile) {
+    const held = must(await db.from("gtm_yt_video_daily").select("video_id,impressions,ctr").eq("date", date), "yt video daily read") as { video_id: string; impressions: number | null; ctr: number | null }[];
+    const stale = held.filter((r) => (r.impressions != null || r.ctr != null) && !present.has(r.video_id)).map((r) => r.video_id);
+    for (const ids of chunk(stale)) must(await db.from("gtm_yt_video_daily").update({ impressions: null, ctr: null, updated_at: new Date().toISOString() }).eq("date", date).in("video_id", ids), "yt video daily clear reach");
+  }
+
   // Channel-level impressions: the sum of the per-video rows, CTR weighted by impressions (null when no row reported one).
-  const perDay = new Map<string, { imp: number; clicks: number; known: number }>();
+  // Every ingested file sets its day, so a reissue that drops videos lowers the total and an empty file records 0.
+  const perDay = new Map<string, { imp: number; clicks: number; known: number }>([...inFile.keys()].map((d) => [d, { imp: 0, clicks: 0, known: 0 }]));
   for (const r of reach) { const a = perDay.get(r.date) ?? { imp: 0, clicks: 0, known: 0 }; a.imp += r.impressions; if (r.ctr != null) { a.clicks += r.impressions * (r.ctr / 100); a.known += r.impressions; } perDay.set(r.date, a); }
   if (perDay.size) await upsertChannelDays(db, [...perDay].map(([date, a]) => ({ date, impressions: a.imp, ctr: a.known ? Math.round((a.clicks / a.known) * 10000) / 100 : null })), "api");
   for (const f of fresh.filter((x) => !bad.has(x.id))) must(await db.from("gtm_yt_report_files").upsert({ report_id: f.id, report_type: "channel_reach_basic_a1", start_date: f.startTime.slice(0, 10), end_date: f.endTime.slice(0, 10), rows_ingested: perFile.get(f.id) ?? 0 }, { onConflict: "report_id" }), "yt report file");
@@ -131,7 +179,7 @@ export async function syncYouTube(db: SupabaseClient, opts: { today: string; day
   for (const f of listed.filter((x) => !fresh.includes(x))) must(await db.from("gtm_yt_report_files").upsert({ report_id: f.id, report_type: "channel_reach_basic_a1", start_date: f.startTime.slice(0, 10), end_date: f.endTime.slice(0, 10), rows_ingested: 0 }, { onConflict: "report_id" }), "yt report file");
 
   // The weekly roll-up is the point of the sync, so it runs before the optional breakdowns and they cannot stop it.
-  const weeks = await rollUpManual(db, end, addDays(start, -7));
+  const { weeks, partialWeeks } = await rollUpManual(db, end, addDays(start, -7));
 
   const dims: DimDay[] = [];
   try {
@@ -147,5 +195,5 @@ export async function syncYouTube(db: SupabaseClient, opts: { today: string; day
   } catch (e) { console.error(`youtube sync: country: ${(e as Error).message}`); }
   await upsertDims(db, dims, "api");
 
-  return { videos: unknown.length, videoDays: merged.size, channelDays: channelRows.length, dims: dims.length, reach: { files: fresh.length, rows: reach.length, jobCreated: job.created }, subscribers: info.subscribers, weeks, through: end, reachErrors };
+  return { videos: unknown.length, videoDays: merged.size, channelDays: channelRows.length, dims: dims.length, reach: { files: fresh.length, rows: reach.length, jobCreated: job.created }, subscribers: info.subscribers, weeks, partialWeeks, through: end, reachErrors };
 }
