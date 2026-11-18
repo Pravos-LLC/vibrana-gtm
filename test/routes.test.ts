@@ -26,6 +26,7 @@ const SYNC_OK: Route[] = [
   { method: "GET", url: REST + "gtm_story_assets", json: [] },
   { method: "GET", url: REST + "gtm_stories", json: [] },
   { method: "GET", url: REST + "gtm_story_feedback", json: [] },
+  { method: "GET", url: REST + "gtm_story_asset_channels", json: [] },
   { url: `${Z}/accounts`, json: { accounts: [], hasAnalyticsAccess: false } },
   { method: "POST", url: REST + "gtm_channel_daily", status: 201 },
   { method: "GET", url: REST + "gtm_channel_daily", json: [] },

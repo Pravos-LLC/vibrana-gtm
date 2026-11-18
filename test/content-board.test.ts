@@ -68,7 +68,7 @@ test("a one-piece link reads and signs only that piece; the piece list still nam
   assert.equal(board.error, null);
   if (board.error !== null) return;
   assert.deepEqual(signed, ["stories/s1-01-a/a-img.png"]);
-  assert.deepEqual(reads.find((r) => r.table === "gtm_story_assets")?.ids, ["s1-01-a"]);
+  assert.deepEqual(reads.find((r) => r.table === "gtm_story_assets" && r.ids)?.ids, ["s1-01-a"], "the piece read, not the board's open-review lookup (by asset id)");
   assert.deepEqual(board.all.map((p) => p.storyId), ["s1-01-a"]);
   assert.deepEqual(board.pieceOptions.map((p) => p.id), ["s1-01-a", "s1-02-b"]);
   assert.deepEqual(filterPieces(board.directed, filters).map((p) => p.storyId), ["s1-01-a"]);
@@ -186,4 +186,35 @@ test("calendar publication survives missing or cleared essay metadata, without h
   const after = await loadContentBoard(fakeDb(t).db, parseFilters({}));
   assert.deepEqual(after.all[0].cards.map((c) => c.copy.id), ["other-essay"]);
   assert.equal((await contentVisibility(fakeDb(t).db)).cards.listed, 1);
+});
+
+/** A Signal Desk post just staged: no season, no calendar row (approval makes it), its LinkedIn text pending. */
+function stagedSignal(): Record<string, Row[]> {
+  const t = tables();
+  t.gtm_stories.push({ ...story("signal-staged"), title: "30 pesos a square meter" });
+  t.gtm_story_assets.push(asset("signal-staged-linkedin", "signal-staged", "copy"));
+  t.gtm_story_asset_channels.push({ ...channel("signal-staged-linkedin"), gtm_story_assets: { story_id: "signal-staged" } });
+  return t;
+}
+
+test("a staged Story with no season and no calendar row shows in /content, on home and in gtm story hidden (2026-11-17)", async () => {
+  const board = await loadContentBoard(fakeDb(stagedSignal()).db, parseFilters({ piece: "signal-staged" }));
+  if (board.error !== null) throw new Error(board.error);
+  assert.deepEqual(board.directed.map((p) => `${p.storyId}:${p.cards.map((c) => c.channel).join(",")}`), ["signal-staged:linkedin"]);
+  assert.ok(board.pieceOptions.some((p) => p.id === "signal-staged"));
+  assert.equal((await reviewSummary(fakeDb(stagedSignal()).db)).awaiting, 3, "the two season pieces and the staged post");
+  assert.ok((await contentVisibility(fakeDb(stagedSignal()).db)).cards.listed >= 3);
+});
+
+test("a banked or killed Story stays off /content even with its review still open", async () => {
+  const banked = stagedSignal();
+  banked.gtm_content_items.push({ story_id: "signal-staged", status: "banked", pillar: "perspective", date: "2026-11-23" });
+  const killed = stagedSignal();
+  killed.gtm_sync_state = [{ key: "pieces.killed", value: { "signal-staged": { at: "t" } } }];
+  for (const t of [banked, killed]) {
+    const board = await loadContentBoard(fakeDb(t).db, parseFilters({}));
+    if (board.error !== null) throw new Error(board.error);
+    assert.equal(board.pieceOptions.some((p) => p.id === "signal-staged"), false);
+    assert.equal((await reviewSummary(fakeDb(t).db)).awaiting, 2);
+  }
 });
